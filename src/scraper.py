@@ -12,6 +12,19 @@ import requests
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 
+# Selenium imports (optional, for browser mode)
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+
 
 @dataclass
 class ProductData:
@@ -32,19 +45,74 @@ class AmazonScraper:
 
     BASE_URL = "https://www.amazon.com/dp/{asin}"
 
-    def __init__(self, marketplace: str = "com", debug: bool = False):
+    def __init__(self, marketplace: str = "com", debug: bool = False, use_browser: bool = False):
         """
         Initialize the scraper.
 
         Args:
             marketplace: Amazon marketplace (com, co.uk, de, etc.)
             debug: If True, save HTML to file for inspection
+            use_browser: If True, use Selenium browser instead of requests
         """
         self.marketplace = marketplace
         self.base_url = f"https://www.amazon.{marketplace}/dp/{{asin}}"
         self.ua = UserAgent()
         self.session = requests.Session()
         self.debug = debug
+        self.use_browser = use_browser
+        self.driver = None
+
+        if use_browser:
+            if not SELENIUM_AVAILABLE:
+                raise ImportError("Selenium not installed. Run: pip install selenium webdriver-manager")
+            self._init_browser()
+
+    def _init_browser(self):
+        """Initialize Chrome browser with anti-detection options."""
+        options = Options()
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=options)
+
+        # Remove webdriver flag
+        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+    def _fetch_page_browser(self, asin: str) -> Optional[str]:
+        """Fetch page using Selenium browser."""
+        url = self.base_url.format(asin=asin)
+
+        try:
+            self.driver.get(url)
+            # Wait for page to load
+            time.sleep(3)
+
+            # Wait for product title or price to appear
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "productTitle"))
+                )
+            except:
+                pass  # Continue even if element not found
+
+            return self.driver.page_source
+        except Exception as e:
+            print(f"Browser error for ASIN {asin}: {e}")
+            return None
+
+    def close(self):
+        """Close the browser if open."""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
 
     def _get_headers(self) -> dict:
         """Generate request headers with random user agent."""
@@ -274,7 +342,12 @@ class AmazonScraper:
         url = self.base_url.format(asin=asin)
         result = ProductData(asin=asin, url=url)
 
-        html = self._fetch_page(asin)
+        # Use browser or requests based on setting
+        if self.use_browser:
+            html = self._fetch_page_browser(asin)
+        else:
+            html = self._fetch_page(asin)
+
         if not html:
             result.error = "Failed to fetch page"
             return result

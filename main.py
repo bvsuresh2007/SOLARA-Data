@@ -7,7 +7,8 @@ Usage:
     python main.py B09T9FBR6D
     python main.py B09T9FBR6D B08N5WRWNW  # Multiple ASINs
     python main.py -m in B09T9FBR6D       # Use amazon.in
-    python main.py --marketplace in B09T9FBR6D
+    python main.py --browser B09T9FBR6D   # Use browser to avoid CAPTCHA
+    python main.py -m in --browser B09T9FBR6D
 """
 
 import sys
@@ -61,30 +62,44 @@ def main():
         action="store_true",
         help="Save HTML to debug.html for inspection"
     )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Use browser (Selenium) to avoid CAPTCHA detection"
+    )
 
     args = parser.parse_args()
 
-    print(f"\nScraping {len(args.asins)} ASIN(s) from amazon.{args.marketplace}...")
+    mode = "browser" if args.browser else "requests"
+    print(f"\nScraping {len(args.asins)} ASIN(s) from amazon.{args.marketplace} using {mode}...")
 
-    scraper = AmazonScraper(marketplace=args.marketplace, debug=args.debug)
+    scraper = AmazonScraper(
+        marketplace=args.marketplace,
+        debug=args.debug,
+        use_browser=args.browser
+    )
 
-    if len(args.asins) == 1:
-        result = scraper.scrape(args.asins[0])
-        if args.debug:
-            print(f"\nDebug HTML saved to: debug_{args.asins[0]}.html")
-        print_result(result)
-
-        # Also output as JSON for programmatic use
-        print("\nJSON Output:")
-        print(json.dumps(asdict(result), indent=2))
-    else:
-        results = scraper.scrape_multiple(args.asins)
-        for result in results:
+    try:
+        if len(args.asins) == 1:
+            result = scraper.scrape(args.asins[0])
+            if args.debug:
+                print(f"\nDebug HTML saved to: debug_{args.asins[0]}.html")
             print_result(result)
 
-        # Output all as JSON
-        print("\nJSON Output:")
-        print(json.dumps([asdict(r) for r in results], indent=2))
+            # Also output as JSON for programmatic use
+            print("\nJSON Output:")
+            print(json.dumps(asdict(result), indent=2))
+        else:
+            results = scraper.scrape_multiple(args.asins)
+            for result in results:
+                print_result(result)
+
+            # Output all as JSON
+            print("\nJSON Output:")
+            print(json.dumps([asdict(r) for r in results], indent=2))
+    finally:
+        # Close browser if open
+        scraper.close()
 
 
 if __name__ == "__main__":
