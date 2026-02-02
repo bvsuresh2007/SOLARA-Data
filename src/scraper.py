@@ -93,15 +93,19 @@ class AmazonScraper:
         Returns:
             Tuple of (price_string, price_float)
         """
-        price_selectors = [
-            {"class_": "a-price-whole"},
-            {"id": "priceblock_ourprice"},
-            {"id": "priceblock_dealprice"},
-            {"id": "priceblock_saleprice"},
-            {"class_": "a-offscreen"},
-        ]
+        # Currency symbols for different marketplaces
+        currency_symbols = ["$", "£", "€", "₹", "¥", "A$", "C$"]
 
-        # Try apex price first (most common)
+        # Try corePriceDisplay first (newer Amazon layout)
+        core_price = soup.find("div", {"id": "corePriceDisplay_desktop_feature_div"})
+        if core_price:
+            offscreen = core_price.find("span", {"class": "a-offscreen"})
+            if offscreen:
+                price_text = offscreen.get_text(strip=True)
+                price_value = self._extract_price_value(price_text)
+                return price_text, price_value
+
+        # Try apex price (common layout)
         apex_price = soup.find("span", {"class": "a-price"})
         if apex_price:
             offscreen = apex_price.find("span", {"class": "a-offscreen"})
@@ -110,24 +114,55 @@ class AmazonScraper:
                 price_value = self._extract_price_value(price_text)
                 return price_text, price_value
 
-        # Try other selectors
-        for selector in price_selectors:
-            price_elem = soup.find("span", selector)
+        # Try specific price element IDs
+        price_ids = [
+            "priceblock_ourprice",
+            "priceblock_dealprice",
+            "priceblock_saleprice",
+            "tp_price_block_total_price_ww",
+            "corePrice_feature_div",
+        ]
+
+        for price_id in price_ids:
+            price_elem = soup.find(id=price_id)
             if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                if "$" in price_text or "£" in price_text or "€" in price_text:
+                # Look for offscreen price first
+                offscreen = price_elem.find("span", {"class": "a-offscreen"})
+                if offscreen:
+                    price_text = offscreen.get_text(strip=True)
                     price_value = self._extract_price_value(price_text)
                     return price_text, price_value
+                # Fallback to element text
+                price_text = price_elem.get_text(strip=True)
+                if any(symbol in price_text for symbol in currency_symbols):
+                    price_value = self._extract_price_value(price_text)
+                    return price_text, price_value
+
+        # Try finding price by class
+        price_whole = soup.find("span", {"class": "a-price-whole"})
+        if price_whole:
+            whole = price_whole.get_text(strip=True).rstrip(".")
+            fraction_elem = soup.find("span", {"class": "a-price-fraction"})
+            fraction = fraction_elem.get_text(strip=True) if fraction_elem else "00"
+            symbol_elem = soup.find("span", {"class": "a-price-symbol"})
+            symbol = symbol_elem.get_text(strip=True) if symbol_elem else ""
+            price_text = f"{symbol}{whole}.{fraction}"
+            price_value = self._extract_price_value(price_text)
+            return price_text, price_value
 
         return None, None
 
     def _extract_price_value(self, price_text: str) -> Optional[float]:
         """Extract numeric value from price string."""
-        # Remove currency symbols and extract number
-        match = re.search(r'[\d,]+\.?\d*', price_text.replace(",", ""))
+        # Remove currency symbols and whitespace
+        cleaned = re.sub(r'[^\d.,]', '', price_text)
+        # Remove commas (handles both 1,000 and 1,00,000 formats)
+        cleaned = cleaned.replace(",", "")
+        # Extract the number
+        match = re.search(r'[\d]+\.?\d*', cleaned)
         if match:
             try:
-                return float(match.group().replace(",", ""))
+                return float(match.group())
             except ValueError:
                 pass
         return None
