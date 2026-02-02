@@ -6,10 +6,13 @@ Usage:
     python main.py <ASIN>
     python main.py B09T9FBR6D
     python main.py B09T9FBR6D B08N5WRWNW  # Multiple ASINs
+    python main.py -m in B09T9FBR6D       # Use amazon.in
+    python main.py --marketplace in B09T9FBR6D
 """
 
 import sys
 import json
+import argparse
 from dataclasses import asdict
 
 from src.scraper import AmazonScraper, ProductData
@@ -40,25 +43,35 @@ def print_result(data: ProductData) -> None:
 
 def main():
     """Main entry point."""
-    if len(sys.argv) < 2:
-        print("Usage: python main.py <ASIN> [ASIN2] [ASIN3] ...")
-        print("Example: python main.py B09T9FBR6D")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Scrape Amazon product price and BSR data"
+    )
+    parser.add_argument(
+        "asins",
+        nargs="+",
+        help="One or more ASINs to scrape"
+    )
+    parser.add_argument(
+        "-m", "--marketplace",
+        default="com",
+        help="Amazon marketplace (com, in, co.uk, de, etc.). Default: com"
+    )
 
-    asins = sys.argv[1:]
-    print(f"\nScraping {len(asins)} ASIN(s)...")
+    args = parser.parse_args()
 
-    scraper = AmazonScraper(marketplace="com")
+    print(f"\nScraping {len(args.asins)} ASIN(s) from amazon.{args.marketplace}...")
 
-    if len(asins) == 1:
-        result = scraper.scrape(asins[0])
+    scraper = AmazonScraper(marketplace=args.marketplace)
+
+    if len(args.asins) == 1:
+        result = scraper.scrape(args.asins[0])
         print_result(result)
 
         # Also output as JSON for programmatic use
         print("\nJSON Output:")
         print(json.dumps(asdict(result), indent=2))
     else:
-        results = scraper.scrape_multiple(asins)
+        results = scraper.scrape_multiple(args.asins)
         for result in results:
             print_result(result)
 
