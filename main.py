@@ -56,15 +56,22 @@ def main():
         default="com",
         help="Amazon marketplace (com, in, co.uk, de, etc.). Default: com"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Save HTML to debug.html for inspection"
+    )
 
     args = parser.parse_args()
 
     print(f"\nScraping {len(args.asins)} ASIN(s) from amazon.{args.marketplace}...")
 
-    scraper = AmazonScraper(marketplace=args.marketplace)
+    scraper = AmazonScraper(marketplace=args.marketplace, debug=args.debug)
 
     if len(args.asins) == 1:
         result = scraper.scrape(args.asins[0])
+        if args.debug:
+            print(f"\nDebug HTML saved to: debug_{args.asins[0]}.html")
         print_result(result)
 
         # Also output as JSON for programmatic use

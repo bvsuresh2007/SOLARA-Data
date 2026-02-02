@@ -32,27 +32,34 @@ class AmazonScraper:
 
     BASE_URL = "https://www.amazon.com/dp/{asin}"
 
-    def __init__(self, marketplace: str = "com"):
+    def __init__(self, marketplace: str = "com", debug: bool = False):
         """
         Initialize the scraper.
 
         Args:
             marketplace: Amazon marketplace (com, co.uk, de, etc.)
+            debug: If True, save HTML to file for inspection
         """
         self.marketplace = marketplace
         self.base_url = f"https://www.amazon.{marketplace}/dp/{{asin}}"
         self.ua = UserAgent()
         self.session = requests.Session()
+        self.debug = debug
 
     def _get_headers(self) -> dict:
         """Generate request headers with random user agent."""
         return {
-            "User-Agent": self.ua.random,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
         }
 
     def _fetch_page(self, asin: str) -> Optional[str]:
@@ -81,9 +88,31 @@ class AmazonScraper:
 
     def _parse_title(self, soup: BeautifulSoup) -> Optional[str]:
         """Extract product title from page."""
+        # Try primary selector
         title_elem = soup.find("span", {"id": "productTitle"})
         if title_elem:
             return title_elem.get_text(strip=True)
+
+        # Try alternate selectors
+        title_selectors = [
+            ("h1", {"id": "title"}),
+            ("h1", {"class": "a-size-large"}),
+            ("span", {"class": "product-title-word-break"}),
+            ("h1", {}),
+        ]
+
+        for tag, attrs in title_selectors:
+            elem = soup.find(tag, attrs)
+            if elem:
+                text = elem.get_text(strip=True)
+                if text and len(text) > 10:
+                    return text
+
+        # Try meta tag
+        meta_title = soup.find("meta", {"name": "title"})
+        if meta_title and meta_title.get("content"):
+            return meta_title["content"]
+
         return None
 
     def _parse_price(self, soup: BeautifulSoup) -> tuple[Optional[str], Optional[float]]:
@@ -149,6 +178,23 @@ class AmazonScraper:
             price_text = f"{symbol}{whole}.{fraction}"
             price_value = self._extract_price_value(price_text)
             return price_text, price_value
+
+        # Fallback: search for price pattern in page text
+        page_text = soup.get_text()
+        price_patterns = [
+            r'₹\s*([\d,]+(?:\.\d{2})?)',  # Indian Rupee
+            r'\$\s*([\d,]+(?:\.\d{2})?)',  # US Dollar
+            r'£\s*([\d,]+(?:\.\d{2})?)',   # British Pound
+            r'€\s*([\d,]+(?:\.\d{2})?)',   # Euro
+        ]
+
+        for pattern in price_patterns:
+            match = re.search(pattern, page_text)
+            if match:
+                symbol = pattern[0] if pattern[0] in "₹$£€" else ""
+                price_text = f"{symbol}{match.group(1)}"
+                price_value = self._extract_price_value(price_text)
+                return price_text, price_value
 
         return None, None
 
@@ -232,6 +278,11 @@ class AmazonScraper:
         if not html:
             result.error = "Failed to fetch page"
             return result
+
+        # Save HTML for debugging
+        if self.debug:
+            with open(f"debug_{asin}.html", "w", encoding="utf-8") as f:
+                f.write(html)
 
         soup = BeautifulSoup(html, "lxml")
 
