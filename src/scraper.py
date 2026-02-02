@@ -92,16 +92,31 @@ class AmazonScraper:
 
         try:
             self.driver.get(url)
-            # Wait for page to load
-            time.sleep(3)
+            # Wait for initial page load
+            time.sleep(2)
 
-            # Wait for product title or price to appear
+            # Scroll down to trigger lazy loading
+            self.driver.execute_script("window.scrollTo(0, 500);")
+            time.sleep(1)
+
+            # Wait for product title to appear
             try:
                 WebDriverWait(self.driver, 10).until(
                     EC.presence_of_element_located((By.ID, "productTitle"))
                 )
             except:
-                pass  # Continue even if element not found
+                pass
+
+            # Try to wait for price element
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "a-price"))
+                )
+            except:
+                pass
+
+            # Additional wait for dynamic content
+            time.sleep(2)
 
             return self.driver.page_source
         except Exception as e:
@@ -190,79 +205,72 @@ class AmazonScraper:
         Returns:
             Tuple of (price_string, price_float)
         """
-        # Currency symbols for different marketplaces
-        currency_symbols = ["$", "£", "€", "₹", "¥", "A$", "C$"]
-
-        # Try corePriceDisplay first (newer Amazon layout)
-        core_price = soup.find("div", {"id": "corePriceDisplay_desktop_feature_div"})
-        if core_price:
-            offscreen = core_price.find("span", {"class": "a-offscreen"})
-            if offscreen:
-                price_text = offscreen.get_text(strip=True)
+        # Method 1: Find all a-offscreen spans (contains hidden price text)
+        offscreen_prices = soup.find_all("span", {"class": "a-offscreen"})
+        for offscreen in offscreen_prices:
+            price_text = offscreen.get_text(strip=True)
+            if price_text and ("₹" in price_text or "$" in price_text or "£" in price_text or "€" in price_text):
                 price_value = self._extract_price_value(price_text)
-                return price_text, price_value
+                if price_value and price_value > 0:
+                    return price_text, price_value
 
-        # Try apex price (common layout)
-        apex_price = soup.find("span", {"class": "a-price"})
-        if apex_price:
-            offscreen = apex_price.find("span", {"class": "a-offscreen"})
-            if offscreen:
-                price_text = offscreen.get_text(strip=True)
-                price_value = self._extract_price_value(price_text)
-                return price_text, price_value
-
-        # Try specific price element IDs
-        price_ids = [
-            "priceblock_ourprice",
-            "priceblock_dealprice",
-            "priceblock_saleprice",
-            "tp_price_block_total_price_ww",
-            "corePrice_feature_div",
+        # Method 2: Look for price in specific containers
+        price_containers = [
+            ("div", {"id": "corePriceDisplay_desktop_feature_div"}),
+            ("div", {"id": "corePrice_feature_div"}),
+            ("div", {"id": "apex_desktop"}),
+            ("span", {"id": "priceblock_ourprice"}),
+            ("span", {"id": "priceblock_dealprice"}),
+            ("span", {"id": "priceblock_saleprice"}),
+            ("div", {"id": "tp_price_block_total_price_ww"}),
+            ("span", {"class": "priceToPay"}),
+            ("span", {"class": "a-price"}),
         ]
 
-        for price_id in price_ids:
-            price_elem = soup.find(id=price_id)
-            if price_elem:
+        for tag, attrs in price_containers:
+            container = soup.find(tag, attrs)
+            if container:
                 # Look for offscreen price first
-                offscreen = price_elem.find("span", {"class": "a-offscreen"})
+                offscreen = container.find("span", {"class": "a-offscreen"})
                 if offscreen:
                     price_text = offscreen.get_text(strip=True)
                     price_value = self._extract_price_value(price_text)
-                    return price_text, price_value
-                # Fallback to element text
-                price_text = price_elem.get_text(strip=True)
-                if any(symbol in price_text for symbol in currency_symbols):
-                    price_value = self._extract_price_value(price_text)
-                    return price_text, price_value
+                    if price_value and price_value > 0:
+                        return price_text, price_value
 
-        # Try finding price by class
+        # Method 3: Build price from whole + fraction
         price_whole = soup.find("span", {"class": "a-price-whole"})
         if price_whole:
-            whole = price_whole.get_text(strip=True).rstrip(".")
+            whole = price_whole.get_text(strip=True).replace(".", "").replace(",", "")
             fraction_elem = soup.find("span", {"class": "a-price-fraction"})
             fraction = fraction_elem.get_text(strip=True) if fraction_elem else "00"
             symbol_elem = soup.find("span", {"class": "a-price-symbol"})
-            symbol = symbol_elem.get_text(strip=True) if symbol_elem else ""
+            symbol = symbol_elem.get_text(strip=True) if symbol_elem else "₹"
             price_text = f"{symbol}{whole}.{fraction}"
             price_value = self._extract_price_value(price_text)
-            return price_text, price_value
+            if price_value and price_value > 0:
+                return price_text, price_value
 
-        # Fallback: search for price pattern in page text
-        page_text = soup.get_text()
+        # Method 4: Search in raw HTML for price patterns
+        html_str = str(soup)
         price_patterns = [
-            r'₹\s*([\d,]+(?:\.\d{2})?)',  # Indian Rupee
-            r'\$\s*([\d,]+(?:\.\d{2})?)',  # US Dollar
-            r'£\s*([\d,]+(?:\.\d{2})?)',   # British Pound
-            r'€\s*([\d,]+(?:\.\d{2})?)',   # Euro
+            r'₹\s?([\d,]+(?:\.\d{2})?)',
+            r'"priceAmount":\s*"?([\d.]+)"?',
+            r'"price":\s*"?₹?\s*([\d,]+(?:\.\d{2})?)"?',
+            r'data-price="([\d.]+)"',
         ]
 
         for pattern in price_patterns:
-            match = re.search(pattern, page_text)
+            match = re.search(pattern, html_str)
             if match:
-                symbol = pattern[0] if pattern[0] in "₹$£€" else ""
-                price_text = f"{symbol}{match.group(1)}"
-                price_value = self._extract_price_value(price_text)
-                return price_text, price_value
+                price_num = match.group(1).replace(",", "")
+                try:
+                    price_value = float(price_num)
+                    if price_value > 0:
+                        price_text = f"₹{match.group(1)}"
+                        return price_text, price_value
+                except ValueError:
+                    continue
 
         return None, None
 
