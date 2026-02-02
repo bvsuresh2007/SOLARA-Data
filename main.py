@@ -3,43 +3,87 @@
 ASIN Price and BSR Scraper CLI
 
 Usage:
-    python main.py <ASIN>
-    python main.py B09T9FBR6D
-    python main.py B09T9FBR6D B08N5WRWNW  # Multiple ASINs
-    python main.py -m in B09T9FBR6D       # Use amazon.in
-    python main.py --browser B09T9FBR6D   # Use browser to avoid CAPTCHA
-    python main.py -m in --browser B09T9FBR6D
+    python main.py <ASIN>                           # Single ASIN
+    python main.py B09T9FBR6D B08N5WRWNW            # Multiple ASINs
+    python main.py -f asins.txt                     # From file (one ASIN per line)
+    python main.py -f asins.txt -o results.csv     # Export to CSV
+    python main.py --browser -m in -f asins.txt    # Browser mode for Amazon India
 """
 
 import sys
+import csv
 import json
 import argparse
 from dataclasses import asdict
+from datetime import datetime
 
 from src.scraper import AmazonScraper, ProductData
 
 
-def print_result(data: ProductData) -> None:
+def print_result(data: ProductData, index: int = None, total: int = None) -> None:
     """Print product data in a formatted way."""
-    print("\n" + "=" * 60)
+    progress = f"[{index}/{total}] " if index and total else ""
+    print(f"\n{progress}" + "=" * 50)
     print(f"ASIN: {data.asin}")
-    print(f"URL:  {data.url}")
-    print("-" * 60)
+    print("-" * 50)
 
     if data.error:
         print(f"ERROR: {data.error}")
     else:
-        print(f"Title:    {data.title or 'N/A'}")
+        title = data.title[:50] + "..." if data.title and len(data.title) > 50 else data.title
+        print(f"Title:    {title or 'N/A'}")
         print(f"Price:    {data.price or 'N/A'}")
-        if data.price_value:
-            print(f"          (${data.price_value:.2f})")
         print(f"BSR:      {data.bsr or 'N/A'}")
-        if data.bsr_value:
-            print(f"          (Rank: {data.bsr_value:,})")
-        if data.bsr_category:
-            print(f"Category: {data.bsr_category}")
 
-    print("=" * 60)
+    print("=" * 50)
+
+
+def load_asins_from_file(filepath: str) -> list[str]:
+    """Load ASINs from a text file (one per line) or CSV."""
+    asins = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        # Check if it's a CSV
+        if filepath.endswith(".csv"):
+            reader = csv.reader(f)
+            for row in reader:
+                if row and row[0].strip():
+                    asin = row[0].strip()
+                    # Skip header rows
+                    if asin.upper() != "ASIN":
+                        asins.append(asin)
+        else:
+            # Plain text file
+            for line in f:
+                asin = line.strip()
+                if asin and not asin.startswith("#"):
+                    asins.append(asin)
+    return asins
+
+
+def save_to_csv(results: list[ProductData], filepath: str) -> None:
+    """Save results to CSV file."""
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        # Write header
+        writer.writerow([
+            "ASIN", "Title", "Price", "Price_Value",
+            "BSR_Rank", "BSR_Category", "URL", "Error", "Scraped_At"
+        ])
+        # Write data
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for r in results:
+            writer.writerow([
+                r.asin,
+                r.title or "",
+                r.price or "",
+                r.price_value or "",
+                r.bsr_value or "",
+                r.bsr_category or "",
+                r.url,
+                r.error or "",
+                timestamp
+            ])
+    print(f"\nResults saved to: {filepath}")
 
 
 def main():
@@ -49,8 +93,16 @@ def main():
     )
     parser.add_argument(
         "asins",
-        nargs="+",
+        nargs="*",
         help="One or more ASINs to scrape"
+    )
+    parser.add_argument(
+        "-f", "--file",
+        help="File containing ASINs (one per line or CSV)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        help="Output CSV file for results"
     )
     parser.add_argument(
         "-m", "--marketplace",
@@ -67,11 +119,39 @@ def main():
         action="store_true",
         help="Use browser (Selenium) to avoid CAPTCHA detection"
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=3.0,
+        help="Delay between requests in seconds (default: 3)"
+    )
 
     args = parser.parse_args()
 
+    # Collect ASINs from arguments and/or file
+    asins = list(args.asins) if args.asins else []
+
+    if args.file:
+        file_asins = load_asins_from_file(args.file)
+        asins.extend(file_asins)
+        print(f"Loaded {len(file_asins)} ASINs from {args.file}")
+
+    if not asins:
+        print("Error: No ASINs provided. Use positional arguments or -f/--file option.")
+        sys.exit(1)
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_asins = []
+    for asin in asins:
+        if asin not in seen:
+            seen.add(asin)
+            unique_asins.append(asin)
+    asins = unique_asins
+
     mode = "browser" if args.browser else "requests"
-    print(f"\nScraping {len(args.asins)} ASIN(s) from amazon.{args.marketplace} using {mode}...")
+    print(f"\nScraping {len(asins)} ASIN(s) from amazon.{args.marketplace} using {mode}...")
+    print(f"Delay between requests: {args.delay}s")
 
     scraper = AmazonScraper(
         marketplace=args.marketplace,
@@ -79,26 +159,35 @@ def main():
         use_browser=args.browser
     )
 
+    results = []
     try:
-        if len(args.asins) == 1:
-            result = scraper.scrape(args.asins[0])
-            if args.debug:
-                print(f"\nDebug HTML saved to: debug_{args.asins[0]}.html")
-            print_result(result)
+        for i, asin in enumerate(asins, 1):
+            print(f"\n[{i}/{len(asins)}] Scraping {asin}...")
+            result = scraper.scrape(asin)
+            results.append(result)
+            print_result(result, i, len(asins))
 
-            # Also output as JSON for programmatic use
-            print("\nJSON Output:")
-            print(json.dumps(asdict(result), indent=2))
-        else:
-            results = scraper.scrape_multiple(args.asins)
-            for result in results:
-                print_result(result)
+            # Delay between requests (except for last one)
+            if i < len(asins):
+                import time
+                time.sleep(args.delay)
 
-            # Output all as JSON
+        # Save to CSV if output specified
+        if args.output:
+            save_to_csv(results, args.output)
+
+        # Print summary
+        successful = sum(1 for r in results if not r.error and r.price)
+        print(f"\n{'='*50}")
+        print(f"SUMMARY: {successful}/{len(results)} products scraped successfully")
+        print(f"{'='*50}")
+
+        # Also output JSON if not saving to CSV
+        if not args.output:
             print("\nJSON Output:")
             print(json.dumps([asdict(r) for r in results], indent=2))
+
     finally:
-        # Close browser if open
         scraper.close()
 
 
