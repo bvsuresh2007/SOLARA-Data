@@ -73,7 +73,8 @@ class ZeptoScraper:
         "Sec-Fetch-User": "?1",
     }
 
-    def __init__(self, headless: bool = True, debug: bool = False, use_browser: bool = True):
+    def __init__(self, headless: bool = True, debug: bool = False, use_browser: bool = True,
+                 pincode: Optional[str] = None):
         """
         Initialize the Zepto scraper.
 
@@ -82,12 +83,15 @@ class ZeptoScraper:
             debug: Save page source to file for inspection
             use_browser: Use Selenium browser (default True). Falls back to requests if False
                          or if Selenium/Chrome is not available.
+            pincode: Delivery pincode to set location (e.g. '400093')
         """
         self.headless = headless
         self.debug = debug
         self.use_browser = use_browser
+        self.pincode = pincode
         self.driver = None
         self.session = http_requests.Session()
+        self._location_set = False
 
         if use_browser:
             if not SELENIUM_AVAILABLE:
@@ -125,6 +129,149 @@ class ZeptoScraper:
         self.driver.execute_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
+
+    def _set_pincode_browser(self):
+        """Set delivery pincode on Zepto via browser interaction."""
+        if not self.pincode or self._location_set:
+            return
+
+        print(f"  Setting delivery pincode to {self.pincode}...")
+        try:
+            # Go to Zepto homepage first to trigger location modal
+            self.driver.get("https://www.zepto.com")
+            time.sleep(3)
+
+            # Strategy 1: Look for location/pincode input in modal
+            input_selectors = [
+                "input[placeholder*='pincode' i]",
+                "input[placeholder*='area' i]",
+                "input[placeholder*='location' i]",
+                "input[placeholder*='delivery' i]",
+                "input[placeholder*='search' i]",
+                "input[data-testid*='location' i]",
+                "input[data-testid*='pincode' i]",
+                "input[data-testid*='address' i]",
+                "input[type='text']",
+                "input[type='search']",
+            ]
+
+            input_elem = None
+            for selector in input_selectors:
+                try:
+                    elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elems:
+                        if elem.is_displayed():
+                            input_elem = elem
+                            break
+                    if input_elem:
+                        break
+                except Exception:
+                    continue
+
+            # Strategy 2: Click a location button first to open modal
+            if not input_elem:
+                location_btn_selectors = [
+                    "[data-testid*='location' i]",
+                    "[data-testid*='address' i]",
+                    "button[aria-label*='location' i]",
+                    "button[aria-label*='address' i]",
+                    ".location-button",
+                    ".address-button",
+                ]
+                for selector in location_btn_selectors:
+                    try:
+                        btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if btn.is_displayed():
+                            btn.click()
+                            time.sleep(2)
+                            # Now look for input again
+                            for inp_sel in input_selectors:
+                                try:
+                                    elems = self.driver.find_elements(By.CSS_SELECTOR, inp_sel)
+                                    for elem in elems:
+                                        if elem.is_displayed():
+                                            input_elem = elem
+                                            break
+                                    if input_elem:
+                                        break
+                                except Exception:
+                                    continue
+                            break
+                    except Exception:
+                        continue
+
+            if input_elem:
+                input_elem.clear()
+                input_elem.send_keys(self.pincode)
+                time.sleep(2)
+
+                # Try to click the first suggestion/result
+                suggestion_selectors = [
+                    "[data-testid*='suggestion']",
+                    "[data-testid*='result']",
+                    ".pac-item",                     # Google Places autocomplete
+                    "[role='option']",
+                    "[role='listbox'] > *",
+                    ".suggestion",
+                    ".search-result",
+                    "ul[role='listbox'] li",
+                    "li[data-testid]",
+                ]
+                clicked = False
+                for selector in suggestion_selectors:
+                    try:
+                        suggestions = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for sug in suggestions:
+                            if sug.is_displayed() and sug.text.strip():
+                                sug.click()
+                                clicked = True
+                                break
+                        if clicked:
+                            break
+                    except Exception:
+                        continue
+
+                if clicked:
+                    time.sleep(2)
+                    # Look for confirm/continue button
+                    confirm_selectors = [
+                        "button[data-testid*='confirm' i]",
+                        "button[data-testid*='continue' i]",
+                        "button[data-testid*='save' i]",
+                        "button[data-testid*='deliver' i]",
+                        "button:not([disabled])",
+                    ]
+                    for selector in confirm_selectors:
+                        try:
+                            btns = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                            for btn in btns:
+                                text = btn.text.strip().lower()
+                                if btn.is_displayed() and text and any(
+                                    kw in text for kw in
+                                    ["confirm", "continue", "save", "deliver here", "yes", "done"]
+                                ):
+                                    btn.click()
+                                    time.sleep(2)
+                                    break
+                        except Exception:
+                            continue
+
+                self._location_set = True
+                print(f"  Pincode {self.pincode} set successfully")
+            else:
+                # Fallback: set pincode via localStorage/cookie
+                self.driver.execute_script(f"""
+                    try {{
+                        localStorage.setItem('pincode', '{self.pincode}');
+                        localStorage.setItem('userPincode', '{self.pincode}');
+                        localStorage.setItem('deliveryPincode', '{self.pincode}');
+                    }} catch(e) {{}}
+                """)
+                self._location_set = True
+                print(f"  Pincode {self.pincode} set via localStorage (modal not found)")
+
+        except Exception as e:
+            print(f"  Warning: Could not set pincode ({e}), continuing without it")
 
     def _extract_product_id(self, url: str) -> Optional[str]:
         """Extract product variant ID from URL."""
@@ -567,6 +714,10 @@ class ZeptoScraper:
     def _scrape_browser(self, url: str, result: ZeptoProductData) -> None:
         """Scrape using Selenium browser."""
         try:
+            # Set pincode/location before first scrape
+            if self.pincode and not self._location_set:
+                self._set_pincode_browser()
+
             self.driver.get(url)
             time.sleep(3)
             self.driver.execute_script("window.scrollTo(0, 300);")

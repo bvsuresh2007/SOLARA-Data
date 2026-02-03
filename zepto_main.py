@@ -3,9 +3,10 @@
 Zepto Product Scraper CLI
 
 Usage:
-    python zepto_main.py <URL>                                 # Single product
-    python zepto_main.py -f urls.txt -o results.csv            # Bulk from file
-    python zepto_main.py --no-headless <URL>                   # Visible browser
+    python zepto_main.py <URL>                                           # Single product
+    python zepto_main.py -p 400093 -o results.csv <URL>                  # With pincode + CSV
+    python zepto_main.py -p 400093 -f urls.txt -o results.csv            # Bulk + pincode
+    python zepto_main.py --no-headless <URL>                             # Visible browser
 """
 
 import sys
@@ -78,38 +79,29 @@ def load_urls_from_file(filepath: str) -> list[str]:
     return urls
 
 
-def save_to_csv(results: list[ZeptoProductData], filepath: str) -> None:
-    """Save results to CSV file."""
+def save_to_csv(results: list[ZeptoProductData], filepath: str,
+                pincode: str = None) -> None:
+    """Save results to CSV file with Product_ID, Name, MRP columns."""
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "Product_ID", "Name", "Brand", "Price", "Price_Value",
-            "MRP", "MRP_Value", "Discount", "Quantity",
-            "Category", "Rating", "Rating_Count",
-            "Availability", "Description", "Highlights",
-            "Image_URL", "URL", "Error", "Scraped_At"
+            "Product_ID", "Name", "MRP", "Selling_Price", "Discount",
+            "Brand", "Quantity", "Availability",
+            "Pincode", "URL", "Scraped_At"
         ])
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for r in results:
             writer.writerow([
                 r.product_id or "",
                 r.name or "",
-                r.brand or "",
+                r.mrp or r.price or "",
                 r.price or "",
-                r.price_value or "",
-                r.mrp or "",
-                r.mrp_value or "",
                 r.discount or "",
+                r.brand or "",
                 r.quantity or "",
-                r.category or "",
-                r.rating or "",
-                r.rating_count or "",
                 r.availability or "",
-                r.description or "",
-                " | ".join(r.highlights) if r.highlights else "",
-                r.image_url or "",
+                pincode or "",
                 r.url,
-                r.error or "",
                 timestamp
             ])
     print(f"\nResults saved to: {filepath}")
@@ -131,6 +123,10 @@ def main():
     parser.add_argument(
         "-o", "--output",
         help="Output CSV file for results"
+    )
+    parser.add_argument(
+        "-p", "--pincode",
+        help="Delivery pincode for location-based pricing (e.g. 400093)"
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -180,9 +176,14 @@ def main():
     else:
         mode = "requests"
     print(f"\nScraping {len(urls)} Zepto product(s) in {mode} mode...")
+    if args.pincode:
+        print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
 
-    scraper = ZeptoScraper(headless=headless, debug=args.debug, use_browser=use_browser)
+    scraper = ZeptoScraper(
+        headless=headless, debug=args.debug,
+        use_browser=use_browser, pincode=args.pincode
+    )
 
     results = []
     try:
@@ -198,7 +199,7 @@ def main():
 
         # Save CSV
         if args.output:
-            save_to_csv(results, args.output)
+            save_to_csv(results, args.output, pincode=args.pincode)
 
         # Summary
         successful = sum(1 for r in results if not r.error)
