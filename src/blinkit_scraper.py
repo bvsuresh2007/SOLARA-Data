@@ -108,18 +108,23 @@ class BlinkitScraper:
         url = self.BASE_URL.format(product_id=product_id)
 
         try:
+            # First visit homepage to establish session/cookies
+            self.driver.get("https://blinkit.com")
+            time.sleep(2)
+
+            # Now visit product page
             self.driver.get(url)
             # Wait for initial page load
-            time.sleep(3)
+            time.sleep(4)
 
             # Scroll down to trigger lazy loading
-            self.driver.execute_script("window.scrollTo(0, 300);")
-            time.sleep(1)
+            self.driver.execute_script("window.scrollTo(0, 500);")
+            time.sleep(2)
 
-            # Wait for product name to appear
+            # Wait for product content to appear
             try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "h1, .ProductName__Name, [class*='ProductName']"))
+                WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='Product'], [class*='product'], h1, script#__NEXT_DATA__"))
                 )
             except:
                 pass
@@ -346,6 +351,94 @@ class BlinkitScraper:
                 return False
         return True
 
+    def _parse_next_data(self, soup: BeautifulSoup, product_id: str) -> Optional[BlinkitProductData]:
+        """Parse product data from __NEXT_DATA__ script tag (Next.js apps)."""
+        import json
+
+        script = soup.find("script", {"id": "__NEXT_DATA__"})
+        if not script:
+            return None
+
+        try:
+            data = json.loads(script.string)
+
+            # Navigate to product data - structure may vary
+            props = data.get("props", {})
+            page_props = props.get("pageProps", {})
+
+            # Try different paths to find product data
+            product = None
+            for key in ["product", "productData", "data", "initialData"]:
+                if key in page_props:
+                    product = page_props[key]
+                    if isinstance(product, dict) and ("name" in product or "product_name" in product):
+                        break
+                    if isinstance(product, dict) and "product" in product:
+                        product = product["product"]
+                        break
+
+            if not product:
+                # Try to find product in nested structures
+                def find_product(obj, depth=0):
+                    if depth > 5:
+                        return None
+                    if isinstance(obj, dict):
+                        if "name" in obj and ("price" in obj or "mrp" in obj or "selling_price" in obj):
+                            return obj
+                        for v in obj.values():
+                            result = find_product(v, depth + 1)
+                            if result:
+                                return result
+                    elif isinstance(obj, list):
+                        for item in obj[:5]:  # Limit search
+                            result = find_product(item, depth + 1)
+                            if result:
+                                return result
+                    return None
+
+                product = find_product(page_props)
+
+            if not product:
+                return None
+
+            url = self.BASE_URL.format(product_id=product_id)
+            result = BlinkitProductData(product_id=product_id, url=url)
+
+            # Extract fields
+            result.title = product.get("name") or product.get("product_name") or product.get("title")
+
+            # Price
+            price = product.get("price") or product.get("selling_price") or product.get("offer_price")
+            if price:
+                result.price_value = float(price)
+                result.price = f"₹{price}"
+
+            # MRP
+            mrp = product.get("mrp") or product.get("max_price") or product.get("original_price")
+            if mrp:
+                result.mrp_value = float(mrp)
+                result.mrp = f"₹{mrp}"
+
+            # Other fields
+            result.quantity = product.get("unit") or product.get("quantity") or product.get("variant")
+            result.brand = product.get("brand") or product.get("brand_name")
+            result.category = product.get("category") or product.get("category_name")
+            result.in_stock = product.get("in_stock", True)
+            if "inventory" in product:
+                result.in_stock = product.get("inventory", 0) > 0
+
+            # Calculate discount
+            if result.price_value and result.mrp_value and result.mrp_value > result.price_value:
+                discount_pct = round((1 - result.price_value / result.mrp_value) * 100)
+                result.discount = f"{discount_pct}%"
+
+            return result
+
+        except Exception as e:
+            if self.debug:
+                print(f"Error parsing __NEXT_DATA__: {e}")
+            return None
+
     def _parse_api_response(self, data: dict, product_id: str) -> BlinkitProductData:
         """Parse product data from API response."""
         url = self.BASE_URL.format(product_id=product_id)
@@ -434,7 +527,12 @@ class BlinkitScraper:
             result.error = "Product not found"
             return result
 
-        # Parse data from HTML
+        # Try parsing from __NEXT_DATA__ first (most reliable for Next.js sites)
+        next_data_result = self._parse_next_data(soup, product_id)
+        if next_data_result and next_data_result.title:
+            return next_data_result
+
+        # Fall back to HTML element parsing
         result.title = self._parse_title(soup)
         result.price, result.price_value = self._parse_price(soup)
         result.mrp, result.mrp_value = self._parse_mrp(soup)
