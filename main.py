@@ -105,7 +105,7 @@ def load_asins_from_file(filepath: str) -> list[str]:
 
 def save_to_csv(results: list[ProductData], filepath: str) -> None:
     """Save results to CSV file."""
-    with open(filepath, "w", newline="", encoding="utf-8") as f:
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow([
             "ASIN", "Title", "Price", "Price_Value",
