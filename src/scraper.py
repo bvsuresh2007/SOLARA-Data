@@ -36,6 +36,8 @@ class ProductData:
     bsr: Optional[str] = None
     bsr_value: Optional[int] = None
     bsr_category: Optional[str] = None
+    seller: Optional[str] = None
+    fulfilled_by: Optional[str] = None
     url: Optional[str] = None
     error: Optional[str] = None
 
@@ -337,6 +339,70 @@ class AmazonScraper:
 
         return None, None, None
 
+    def _parse_seller(self, soup: BeautifulSoup) -> tuple[Optional[str], Optional[str]]:
+        """
+        Extract seller name and fulfillment info from the product page.
+
+        Returns:
+            Tuple of (seller_name, fulfilled_by)
+        """
+        seller = None
+        fulfilled_by = None
+
+        # Method 1: Check #merchant-info div (common on Amazon India)
+        merchant_info = soup.find("div", {"id": "merchant-info"})
+        if merchant_info:
+            text = merchant_info.get_text(strip=True)
+            # Extract seller name: "Sold by <seller> and Fulfilled by <fulfiller>"
+            sold_match = re.search(r'Sold by\s+(.+?)(?:\s+and\s+|\s*$)', text, re.IGNORECASE)
+            if sold_match:
+                seller = sold_match.group(1).strip().rstrip(".")
+            fulfilled_match = re.search(r'Fulfilled by\s+(.+?)(?:\.|$)', text, re.IGNORECASE)
+            if fulfilled_match:
+                fulfilled_by = fulfilled_match.group(1).strip().rstrip(".")
+
+        # Method 2: Check seller profile link
+        if not seller:
+            seller_link = soup.find("a", {"id": "sellerProfileTriggerId"})
+            if seller_link:
+                seller = seller_link.get_text(strip=True)
+
+        # Method 3: Check tabular-buybox (newer layout)
+        if not seller:
+            buybox = soup.find("div", {"id": "tabular-buybox"})
+            if buybox:
+                text = buybox.get_text()
+                sold_match = re.search(r'Sold by\s*(.+?)(?:Fulfilled|Ships|$)', text, re.IGNORECASE)
+                if sold_match:
+                    seller = sold_match.group(1).strip()
+                fulfilled_match = re.search(r'Fulfilled by\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
+                if fulfilled_match:
+                    fulfilled_by = fulfilled_match.group(1).strip()
+
+        # Method 4: Search in buybox area
+        if not seller:
+            buybox_area = soup.find("div", {"id": "buyBoxAccordion"})
+            if not buybox_area:
+                buybox_area = soup.find("div", {"id": "desktop_buybox"})
+            if buybox_area:
+                text = buybox_area.get_text()
+                sold_match = re.search(r'Sold by\s+(.+?)(?:\s+and\s+|\n|$)', text, re.IGNORECASE)
+                if sold_match:
+                    seller = sold_match.group(1).strip()
+
+        # Method 5: Regex on full page as fallback
+        if not seller:
+            page_text = soup.get_text()
+            sold_match = re.search(r'Sold by\s+(.+?)(?:\s+and\s+Fulfilled|\n|$)', page_text, re.IGNORECASE)
+            if sold_match:
+                seller = sold_match.group(1).strip()
+            if not fulfilled_by:
+                fulfilled_match = re.search(r'Fulfilled by\s+(.+?)(?:\.|,|\n|$)', page_text, re.IGNORECASE)
+                if fulfilled_match:
+                    fulfilled_by = fulfilled_match.group(1).strip()
+
+        return seller, fulfilled_by
+
     def scrape(self, asin: str) -> ProductData:
         """
         Scrape price and BSR for a given ASIN.
@@ -376,6 +442,7 @@ class AmazonScraper:
         result.title = self._parse_title(soup)
         result.price, result.price_value = self._parse_price(soup)
         result.bsr, result.bsr_value, result.bsr_category = self._parse_bsr(soup)
+        result.seller, result.fulfilled_by = self._parse_seller(soup)
 
         return result
 

@@ -34,6 +34,9 @@ def print_result(data: ProductData, index: int = None, total: int = None) -> Non
         print(f"Title:    {title or 'N/A'}")
         print(f"Price:    {data.price or 'N/A'}")
         print(f"BSR:      {data.bsr or 'N/A'}")
+        print(f"Seller:   {data.seller or 'N/A'}")
+        if data.fulfilled_by:
+            print(f"Ships:    Fulfilled by {data.fulfilled_by}")
 
     print("=" * 50)
 
@@ -67,7 +70,8 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
         # Write header
         writer.writerow([
             "ASIN", "Title", "Price", "Price_Value",
-            "BSR_Rank", "BSR_Category", "URL", "Error", "Scraped_At"
+            "BSR_Rank", "BSR_Category", "Seller", "Fulfilled_By",
+            "URL", "Error", "Scraped_At"
         ])
         # Write data
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -79,6 +83,8 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
                 r.price_value or "",
                 r.bsr_value or "",
                 r.bsr_category or "",
+                r.seller or "",
+                r.fulfilled_by or "",
                 r.url,
                 r.error or "",
                 timestamp
@@ -124,6 +130,10 @@ def main():
         type=float,
         default=3.0,
         help="Delay between requests in seconds (default: 3)"
+    )
+    parser.add_argument(
+        "-s", "--seller",
+        help="Filter results by seller name (e.g. 'RetailEZ')"
     )
 
     args = parser.parse_args()
@@ -172,9 +182,31 @@ def main():
                 import time
                 time.sleep(args.delay)
 
-        # Save to CSV if output specified
-        if args.output:
-            save_to_csv(results, args.output)
+        # Filter by seller if specified
+        if args.seller:
+            seller_filter = args.seller.lower()
+            matched = [r for r in results if r.seller and seller_filter in r.seller.lower()]
+            not_matched = [r for r in results if not r.seller or seller_filter not in r.seller.lower()]
+
+            print(f"\n{'='*50}")
+            print(f"SELLER FILTER: '{args.seller}'")
+            print(f"Matched:     {len(matched)}/{len(results)}")
+            print(f"Not matched: {len(not_matched)}/{len(results)}")
+            print(f"{'='*50}")
+
+            if not_matched:
+                print("\nASINs NOT sold by this seller:")
+                for r in not_matched:
+                    print(f"  {r.asin} - Sold by: {r.seller or 'N/A'}")
+
+            # Save only matched results to CSV
+            if args.output:
+                save_to_csv(matched, args.output)
+                print(f"(Only {len(matched)} matching results saved to CSV)")
+        else:
+            # Save all results to CSV
+            if args.output:
+                save_to_csv(results, args.output)
 
         # Print summary
         successful = sum(1 for r in results if not r.error and r.price)
