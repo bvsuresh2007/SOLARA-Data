@@ -123,6 +123,11 @@ def main():
         help="Save HTML to debug file for inspection"
     )
     parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Use Selenium browser to bypass anti-bot protection (recommended)"
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         default=3.0,
@@ -152,13 +157,15 @@ def main():
             unique_ids.append(pid)
     product_ids = unique_ids
 
-    print(f"\nScraping {len(product_ids)} product(s) from Blinkit...")
+    mode = "browser" if args.browser else "requests"
+    print(f"\nScraping {len(product_ids)} product(s) from Blinkit using {mode} mode...")
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
 
     scraper = BlinkitScraper(
         pincode=args.pincode,
-        debug=args.debug
+        debug=args.debug,
+        use_browser=args.browser
     )
 
     results = []
