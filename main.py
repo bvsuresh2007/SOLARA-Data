@@ -18,6 +18,7 @@ from dataclasses import asdict
 from datetime import datetime
 
 from src.scraper import AmazonScraper, ProductData
+from src.slack_notifier import post_to_slack, save_webhook, load_webhook
 
 
 def print_result(data: ProductData, index: int = None, total: int = None) -> None:
@@ -169,8 +170,25 @@ def main():
         "-s", "--seller",
         help="Filter results by seller name (e.g. 'RetailEZ')"
     )
+    parser.add_argument(
+        "--slack",
+        action="store_true",
+        help="Post results to Slack after scraping"
+    )
+    parser.add_argument(
+        "--slack-setup",
+        metavar="WEBHOOK_URL",
+        help="Save Slack webhook URL for future use"
+    )
 
     args = parser.parse_args()
+
+    # Handle Slack webhook setup
+    if args.slack_setup:
+        save_webhook(args.slack_setup)
+        print("Slack webhook configured! You can now use --slack flag.")
+        if not args.asins and not args.file:
+            sys.exit(0)
 
     # Collect ASINs
     asins = list(args.asins) if args.asins else []
@@ -247,6 +265,20 @@ def main():
         print(f"\n{'='*55}")
         print(f"DONE: {successful}/{len(results)} products scraped with price data")
         print(f"{'='*55}")
+
+        # Post to Slack
+        if args.slack:
+            webhook_url = load_webhook()
+            if webhook_url:
+                post_to_slack(
+                    webhook_url,
+                    results,
+                    csv_path=args.output,
+                    seller_filter=args.seller
+                )
+            else:
+                print("No Slack webhook configured. Run:")
+                print("  python main.py --slack-setup https://hooks.slack.com/services/YOUR/WEBHOOK/URL")
 
         # JSON if no CSV output
         if not args.output:
