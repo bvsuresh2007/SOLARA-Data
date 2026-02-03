@@ -309,113 +309,140 @@ class AmazonScraper:
             'all_bsr': []
         }
 
-        bsr_pattern = r'#([\d,]+)\s+in\s+([^(\n<]+)'
         all_bsr_entries = []
 
-        # Method 1: Check product details section (detailBulletsWrapper)
-        details_section = soup.find("div", {"id": "detailBulletsWrapper_feature_div"})
-        if details_section:
-            # Find all BSR entries
-            text = details_section.get_text(separator="\n")
-            matches = re.findall(bsr_pattern, text, re.IGNORECASE)
-            for match in matches:
-                rank = int(match[0].replace(",", ""))
-                category = match[1].strip()
-                # Clean up category name
-                category = re.sub(r'\s+', ' ', category).strip()
-                if category and rank > 0:
-                    all_bsr_entries.append({
-                        'rank': rank,
-                        'category': category,
-                        'string': f"#{match[0]} in {category}"
-                    })
+        # Method 1: Find BSR in product details table (most reliable for Amazon India)
+        tables = soup.find_all("table", {"id": re.compile(r"productDetails", re.I)})
+        for table in tables:
+            rows = table.find_all("tr")
+            for row in rows:
+                header = row.find("th")
+                if header and "Best Sellers Rank" in header.get_text():
+                    cell = row.find("td")
+                    if cell:
+                        # Get all text content, preserving structure
+                        # Find all spans and links that contain rank info
+                        for elem in cell.find_all(["span", "a"]):
+                            text = elem.get_text(strip=True)
+                            # Look for category links (subcategories)
+                            if elem.name == "a" and not "See Top" in text:
+                                # This might be a subcategory link
+                                # Check previous sibling for rank
+                                prev_text = ""
+                                for sibling in elem.previous_siblings:
+                                    if hasattr(sibling, 'get_text'):
+                                        prev_text = sibling.get_text() + prev_text
+                                    elif isinstance(sibling, str):
+                                        prev_text = sibling + prev_text
+                                rank_match = re.search(r'#([\d,]+)\s+in\s*$', prev_text)
+                                if rank_match:
+                                    rank = int(rank_match.group(1).replace(",", ""))
+                                    category = text.strip()
+                                    if category and rank > 0:
+                                        all_bsr_entries.append({
+                                            'rank': rank,
+                                            'category': category,
+                                            'string': f"#{rank_match.group(1)} in {category}"
+                                        })
 
-        # Method 2: Check product information table
-        if not all_bsr_entries:
-            tables = soup.find_all("table", {"id": "productDetails_detailBullets_sections1"})
-            for table in tables:
-                # Find BSR row
-                rows = table.find_all("tr")
-                for row in rows:
-                    header = row.find("th")
-                    if header and "Best Sellers Rank" in header.get_text():
-                        cell = row.find("td")
-                        if cell:
-                            # Extract all BSR entries from the cell
-                            text = cell.get_text(separator="\n")
-                            matches = re.findall(bsr_pattern, text, re.IGNORECASE)
-                            for match in matches:
-                                rank = int(match[0].replace(",", ""))
-                                category = match[1].strip()
-                                category = re.sub(r'\s+', ' ', category).strip()
-                                if category and rank > 0:
+                        # Also extract from full cell text for main category
+                        cell_text = cell.get_text(separator=" ")
+                        # Pattern for main category: #1,519 in Home & Kitchen
+                        main_match = re.search(r'#([\d,]+)\s+in\s+([A-Za-z][A-Za-z\s&]+?)(?:\s*\(|$|\s+#)', cell_text)
+                        if main_match:
+                            rank = int(main_match.group(1).replace(",", ""))
+                            category = main_match.group(2).strip()
+                            if category and rank > 0 and len(category) > 2:
+                                # Check if not already added
+                                exists = any(e['rank'] == rank for e in all_bsr_entries)
+                                if not exists:
                                     all_bsr_entries.append({
                                         'rank': rank,
                                         'category': category,
-                                        'string': f"#{match[0]} in {category}"
+                                        'string': f"#{main_match.group(1)} in {category}"
                                     })
 
-        # Method 3: Check for BSR in span elements (Amazon India format)
+        # Method 2: Check detailBulletsWrapper (alternate Amazon layout)
         if not all_bsr_entries:
-            bsr_spans = soup.find_all("span", string=re.compile(r"Best Sellers Rank", re.I))
-            for span in bsr_spans:
-                parent = span.find_parent("li") or span.find_parent("tr") or span.find_parent("div")
-                if parent:
-                    text = parent.get_text(separator="\n")
-                    matches = re.findall(bsr_pattern, text, re.IGNORECASE)
-                    for match in matches:
-                        rank = int(match[0].replace(",", ""))
-                        category = match[1].strip()
-                        category = re.sub(r'\s+', ' ', category).strip()
-                        if category and rank > 0:
-                            all_bsr_entries.append({
-                                'rank': rank,
-                                'category': category,
-                                'string': f"#{match[0]} in {category}"
-                            })
+            details_section = soup.find("div", {"id": "detailBulletsWrapper_feature_div"})
+            if details_section:
+                # Find the BSR list item
+                for li in details_section.find_all("li"):
+                    if "Best Sellers Rank" in li.get_text():
+                        # Extract all rank entries
+                        text = li.get_text(separator=" ")
+                        # Find all #X in Y patterns
+                        matches = re.findall(r'#([\d,]+)\s+in\s+([A-Za-z][A-Za-z\s&]+?)(?:\s*\(|\s+#|\s+See|$)', text)
+                        for match in matches:
+                            rank = int(match[0].replace(",", ""))
+                            category = match[1].strip()
+                            if category and rank > 0 and len(category) > 2:
+                                all_bsr_entries.append({
+                                    'rank': rank,
+                                    'category': category,
+                                    'string': f"#{match[0]} in {category}"
+                                })
 
-        # Method 4: Search entire page as fallback
+                        # Also check for subcategory links
+                        for a_tag in li.find_all("a"):
+                            link_text = a_tag.get_text(strip=True)
+                            if link_text and "See Top" not in link_text and "Best Sellers" not in link_text:
+                                # Check if there's a rank before this link
+                                prev_text = ""
+                                for sibling in a_tag.previous_siblings:
+                                    if isinstance(sibling, str):
+                                        prev_text = sibling + prev_text
+                                    elif hasattr(sibling, 'get_text'):
+                                        prev_text = sibling.get_text() + prev_text
+                                rank_match = re.search(r'#([\d,]+)\s+in\s*$', prev_text)
+                                if rank_match:
+                                    rank = int(rank_match.group(1).replace(",", ""))
+                                    category = link_text.strip()
+                                    exists = any(e['rank'] == rank for e in all_bsr_entries)
+                                    if category and rank > 0 and not exists:
+                                        all_bsr_entries.append({
+                                            'rank': rank,
+                                            'category': category,
+                                            'string': f"#{rank_match.group(1)} in {category}"
+                                        })
+
+        # Method 3: Fallback - search entire page
         if not all_bsr_entries:
-            page_text = soup.get_text(separator="\n")
-            # Look for BSR section
-            bsr_section_match = re.search(
-                r'Best Sellers Rank[:\s]*(.*?)(?=Customer Reviews|Product details|$)',
-                page_text, re.IGNORECASE | re.DOTALL
-            )
-            if bsr_section_match:
-                section_text = bsr_section_match.group(1)
-                matches = re.findall(bsr_pattern, section_text, re.IGNORECASE)
+            page_text = soup.get_text(separator=" ")
+            bsr_section = re.search(r'Best Sellers Rank[:\s]*(.*?)(?=Customer Reviews|ASIN|$)', page_text, re.IGNORECASE | re.DOTALL)
+            if bsr_section:
+                section_text = bsr_section.group(1)[:500]  # Limit search area
+                matches = re.findall(r'#([\d,]+)\s+in\s+([A-Za-z][A-Za-z\s&]+?)(?:\s*\(|\s+#|\s+See|$)', section_text)
                 for match in matches:
                     rank = int(match[0].replace(",", ""))
                     category = match[1].strip()
-                    category = re.sub(r'\s+', ' ', category).strip()
-                    if category and rank > 0:
+                    if category and rank > 0 and len(category) > 2:
                         all_bsr_entries.append({
                             'rank': rank,
                             'category': category,
                             'string': f"#{match[0]} in {category}"
                         })
 
-        # Remove duplicates and sort by rank (higher rank number = less popular, so main category usually has higher number)
+        # Remove duplicates
         seen = set()
         unique_entries = []
         for entry in all_bsr_entries:
-            key = (entry['rank'], entry['category'])
+            key = entry['rank']
             if key not in seen:
                 seen.add(key)
                 unique_entries.append(entry)
 
-        # Sort: main category (higher rank) first, then subcategories (lower ranks)
+        # Sort: main category (higher rank number) first, subcategories (lower rank numbers) after
         unique_entries.sort(key=lambda x: x['rank'], reverse=True)
 
         if unique_entries:
-            # First entry is main category (usually has highest rank number)
+            # First entry is main category (highest rank number = less popular overall)
             main = unique_entries[0]
             result['bsr'] = main['string']
             result['bsr_value'] = main['rank']
             result['bsr_category'] = main['category']
 
-            # Second entry is primary subcategory
+            # Second entry is primary subcategory (lower rank = more popular in subcategory)
             if len(unique_entries) > 1:
                 sub = unique_entries[1]
                 result['sub_bsr'] = sub['string']
