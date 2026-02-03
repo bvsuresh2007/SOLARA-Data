@@ -23,19 +23,26 @@ from src.scraper import AmazonScraper, ProductData
 def print_result(data: ProductData, index: int = None, total: int = None) -> None:
     """Print product data in a formatted way."""
     progress = f"[{index}/{total}] " if index and total else ""
-    print(f"\n{progress}" + "=" * 50)
+    print(f"\n{progress}" + "=" * 60)
     print(f"ASIN: {data.asin}")
-    print("-" * 50)
+    print("-" * 60)
 
     if data.error:
         print(f"ERROR: {data.error}")
     else:
         title = data.title[:50] + "..." if data.title and len(data.title) > 50 else data.title
-        print(f"Title:    {title or 'N/A'}")
-        print(f"Price:    {data.price or 'N/A'}")
-        print(f"BSR:      {data.bsr or 'N/A'}")
+        print(f"Title:       {title or 'N/A'}")
+        print(f"Price:       {data.price or 'N/A'}")
+        print(f"BSR (Main):  {data.bsr or 'N/A'}")
+        if data.sub_bsr:
+            print(f"BSR (Sub):   {data.sub_bsr}")
+        # Show all BSR entries if available
+        if data.all_bsr and len(data.all_bsr) > 2:
+            print(f"All BSR:")
+            for entry in data.all_bsr:
+                print(f"             {entry['string']}")
 
-    print("=" * 50)
+    print("=" * 60)
 
 
 def load_asins_from_file(filepath: str) -> list[str]:
@@ -67,11 +74,18 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
         # Write header
         writer.writerow([
             "ASIN", "Title", "Price", "Price_Value",
-            "BSR_Rank", "BSR_Category", "URL", "Error", "Scraped_At"
+            "BSR_Rank", "BSR_Category",
+            "Sub_BSR_Rank", "Sub_BSR_Category",
+            "All_BSR", "URL", "Error", "Scraped_At"
         ])
         # Write data
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for r in results:
+            # Format all BSR as semicolon-separated string
+            all_bsr_str = ""
+            if r.all_bsr:
+                all_bsr_str = "; ".join([entry['string'] for entry in r.all_bsr])
+
             writer.writerow([
                 r.asin,
                 r.title or "",
@@ -79,6 +93,9 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
                 r.price_value or "",
                 r.bsr_value or "",
                 r.bsr_category or "",
+                r.sub_bsr_value or "",
+                r.sub_bsr_category or "",
+                all_bsr_str,
                 r.url,
                 r.error or "",
                 timestamp
