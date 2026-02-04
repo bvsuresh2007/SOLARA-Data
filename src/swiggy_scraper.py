@@ -502,10 +502,14 @@ class SwiggyInstamartScraper:
                 pct = ((result.mrp_value - result.price_value) / result.mrp_value) * 100
                 result.discount = f"{pct:.0f}%"
 
-            # Availability
+            # Availability — only mark out-of-stock if explicitly false
             avail = product.get("available", product.get("in_stock", product.get("inStock")))
-            if avail is not None:
-                result.availability = "In Stock" if avail else "Out of Stock"
+            if avail is False:
+                result.availability = "Out of Stock"
+            elif result.price_value:
+                # If we have a price, assume in stock (location-dependent stock
+                # data in JSON may not reflect the user's actual pincode)
+                result.availability = "In Stock"
 
             # Image
             images = product.get("images") or product.get("imageUrls")
@@ -775,16 +779,49 @@ class SwiggyInstamartScraper:
                 except Exception:
                     continue
 
-        # Availability
+        # Availability — check for positive "Add" button first, then sold-out
         if not result.availability:
-            try:
-                self.driver.find_element(By.CSS_SELECTOR,
-                    "[data-testid='sold-out'], [class*='sold-out'], "
-                    "[class*='OutOfStock'], [class*='out-of-stock']")
-                result.availability = "Out of Stock"
-            except Exception:
-                if result.name:
-                    result.availability = "In Stock"
+            # Positive signal: "Add to cart" / "Add" button means it's in stock
+            add_btn_selectors = [
+                "button[data-testid*='add' i]",
+                "button[class*='add' i]",
+                "button[aria-label*='add' i]",
+                "[data-testid*='add-to-cart' i]",
+                "[data-testid*='addButton' i]",
+            ]
+            for selector in add_btn_selectors:
+                try:
+                    btns = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for btn in btns:
+                        if btn.is_displayed():
+                            result.availability = "In Stock"
+                            break
+                    if result.availability:
+                        break
+                except Exception:
+                    continue
+
+            # Only check sold-out if no positive signal found
+            if not result.availability:
+                sold_out_selectors = [
+                    "[data-testid='sold-out']",
+                    "[data-testid='out-of-stock']",
+                ]
+                for selector in sold_out_selectors:
+                    try:
+                        elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elems:
+                            if elem.is_displayed():
+                                result.availability = "Out of Stock"
+                                break
+                        if result.availability:
+                            break
+                    except Exception:
+                        continue
+
+            # Default: if we got a name and price, assume in stock
+            if not result.availability and result.name:
+                result.availability = "In Stock"
 
     def _parse_price_value(self, text: str) -> Optional[float]:
         """Extract numeric value from price string like ₹4,599."""
