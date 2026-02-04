@@ -103,9 +103,23 @@ class BlinkitScraper:
         # Remove webdriver flag
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    def _fetch_page_browser(self, product_id: str) -> Optional[str]:
+    @staticmethod
+    def extract_product_id(url_or_id: str) -> str:
+        """Extract product ID from a Blinkit URL or return as-is if already an ID."""
+        url_or_id = url_or_id.strip()
+        # If it's a URL, extract prid
+        match = re.search(r'/prid/(\d+)', url_or_id)
+        if match:
+            return match.group(1)
+        # If it's just a number, return as-is
+        if url_or_id.isdigit():
+            return url_or_id
+        return url_or_id
+
+    def _fetch_page_browser(self, product_id: str, url: str = None) -> Optional[str]:
         """Fetch page using Selenium browser."""
-        url = self.BASE_URL.format(product_id=product_id)
+        if not url:
+            url = self.BASE_URL.format(product_id=product_id)
 
         try:
             # First visit homepage to establish session/cookies
@@ -483,17 +497,21 @@ class BlinkitScraper:
 
         return result
 
-    def scrape(self, product_id: str) -> BlinkitProductData:
+    def scrape(self, url_or_id: str) -> BlinkitProductData:
         """
-        Scrape price and details for a given product ID.
+        Scrape price and details for a given product ID or URL.
 
         Args:
-            product_id: Blinkit product ID (prid)
+            url_or_id: Blinkit product ID (prid) or full product URL
 
         Returns:
             BlinkitProductData object with scraped information
         """
-        url = self.BASE_URL.format(product_id=product_id)
+        # Extract product ID from URL if needed
+        product_id = self.extract_product_id(url_or_id)
+        # Keep original URL if provided, otherwise construct it
+        original_url = url_or_id.strip() if url_or_id.startswith("http") else None
+        url = original_url or self.BASE_URL.format(product_id=product_id)
         result = BlinkitProductData(product_id=product_id, url=url)
 
         # Try API first (faster and more reliable)
@@ -503,11 +521,13 @@ class BlinkitScraper:
                 import json
                 with open(f"debug_blinkit_{product_id}.json", "w", encoding="utf-8") as f:
                     json.dump(api_data, f, indent=2)
-            return self._parse_api_response(api_data, product_id)
+            api_result = self._parse_api_response(api_data, product_id)
+            api_result.url = url
+            return api_result
 
         # Fall back to HTML scraping
         if self.use_browser:
-            html = self._fetch_page_browser(product_id)
+            html = self._fetch_page_browser(product_id, url=original_url)
         else:
             html = self._fetch_page_requests(product_id)
 

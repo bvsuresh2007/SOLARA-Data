@@ -3,11 +3,12 @@
 Blinkit Product Price Scraper CLI
 
 Usage:
-    python blinkit_main.py <product_id>                    # Single product
-    python blinkit_main.py 627046 628123                   # Multiple products
-    python blinkit_main.py -f products.txt                 # From file (one ID per line)
-    python blinkit_main.py -f products.txt -o results.csv  # Export to CSV
-    python blinkit_main.py --pincode 560001 627046         # Specific pincode
+    python blinkit_main.py <product_id_or_url>                           # Single product
+    python blinkit_main.py 627046 628123                                 # Multiple products
+    python blinkit_main.py -f products.txt                               # From file (URLs or IDs, one per line)
+    python blinkit_main.py -f products.txt -o resultsblinkit.csv         # Export to CSV
+    python blinkit_main.py -p 122009 -f products.txt -o results.csv     # Specific pincode
+    python blinkit_main.py --browser -f products.txt -o results.csv     # Browser mode (recommended)
 """
 
 import sys
@@ -42,26 +43,26 @@ def print_result(data: BlinkitProductData, index: int = None, total: int = None)
     print("=" * 60)
 
 
-def load_product_ids_from_file(filepath: str) -> list[str]:
-    """Load product IDs from a text file (one per line) or CSV."""
-    product_ids = []
+def load_entries_from_file(filepath: str) -> list[str]:
+    """Load product IDs or URLs from a text file (one per line) or CSV."""
+    entries = []
     with open(filepath, "r", encoding="utf-8") as f:
         # Check if it's a CSV
         if filepath.endswith(".csv"):
             reader = csv.reader(f)
             for row in reader:
                 if row and row[0].strip():
-                    pid = row[0].strip()
+                    entry = row[0].strip()
                     # Skip header rows
-                    if pid.upper() not in ("PRODUCT_ID", "PRODUCTID", "PID", "ID", "PRID"):
-                        product_ids.append(pid)
+                    if entry.upper() not in ("PRODUCT_ID", "PRODUCTID", "PID", "ID", "PRID", "URL", "LINK", "SKU"):
+                        entries.append(entry)
         else:
-            # Plain text file
+            # Plain text file - each line can be a URL or product ID
             for line in f:
-                pid = line.strip()
-                if pid and not pid.startswith("#"):
-                    product_ids.append(pid)
-    return product_ids
+                entry = line.strip()
+                if entry and not entry.startswith("#"):
+                    entries.append(entry)
+    return entries
 
 
 def save_to_csv(results: list[BlinkitProductData], filepath: str) -> None:
@@ -72,7 +73,7 @@ def save_to_csv(results: list[BlinkitProductData], filepath: str) -> None:
         writer.writerow([
             "Product_ID", "Title", "Price", "Price_Value",
             "MRP", "MRP_Value", "Discount", "Quantity",
-            "In_Stock", "URL", "Error", "Scraped_At"
+            "Brand", "In_Stock", "URL", "Error", "Scraped_At"
         ])
         # Write data
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -86,6 +87,7 @@ def save_to_csv(results: list[BlinkitProductData], filepath: str) -> None:
                 r.mrp_value or "",
                 r.discount or "",
                 r.quantity or "",
+                r.brand or "",
                 "Yes" if r.in_stock else "No",
                 r.url,
                 r.error or "",
@@ -102,11 +104,11 @@ def main():
     parser.add_argument(
         "product_ids",
         nargs="*",
-        help="One or more product IDs to scrape"
+        help="One or more product IDs or Blinkit URLs to scrape"
     )
     parser.add_argument(
         "-f", "--file",
-        help="File containing product IDs (one per line or CSV)"
+        help="File containing product URLs or IDs (one per line or CSV)"
     )
     parser.add_argument(
         "-o", "--output",
@@ -114,8 +116,8 @@ def main():
     )
     parser.add_argument(
         "-p", "--pincode",
-        default="110001",
-        help="Delivery pincode for location-based pricing. Default: 110001 (Delhi)"
+        default="122009",
+        help="Delivery pincode for location-based pricing. Default: 122009 (Gurgaon)"
     )
     parser.add_argument(
         "--debug",
@@ -136,29 +138,30 @@ def main():
 
     args = parser.parse_args()
 
-    # Collect product IDs from arguments and/or file
-    product_ids = list(args.product_ids) if args.product_ids else []
+    # Collect entries from arguments and/or file
+    entries = list(args.product_ids) if args.product_ids else []
 
     if args.file:
-        file_ids = load_product_ids_from_file(args.file)
-        product_ids.extend(file_ids)
-        print(f"Loaded {len(file_ids)} product IDs from {args.file}")
+        file_entries = load_entries_from_file(args.file)
+        entries.extend(file_entries)
+        print(f"Loaded {len(file_entries)} entries from {args.file}")
 
-    if not product_ids:
-        print("Error: No product IDs provided. Use positional arguments or -f/--file option.")
+    if not entries:
+        print("Error: No product IDs or URLs provided. Use positional arguments or -f/--file option.")
         sys.exit(1)
 
     # Remove duplicates while preserving order
     seen = set()
-    unique_ids = []
-    for pid in product_ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique_ids.append(pid)
-    product_ids = unique_ids
+    unique_entries = []
+    for entry in entries:
+        key = BlinkitScraper.extract_product_id(entry)
+        if key not in seen:
+            seen.add(key)
+            unique_entries.append(entry)
+    entries = unique_entries
 
     mode = "browser" if args.browser else "requests"
-    print(f"\nScraping {len(product_ids)} product(s) from Blinkit using {mode} mode...")
+    print(f"\nScraping {len(entries)} product(s) from Blinkit using {mode} mode...")
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
 
@@ -170,14 +173,15 @@ def main():
 
     results = []
     try:
-        for i, pid in enumerate(product_ids, 1):
-            print(f"\n[{i}/{len(product_ids)}] Scraping product {pid}...")
-            result = scraper.scrape(pid)
+        for i, entry in enumerate(entries, 1):
+            pid = BlinkitScraper.extract_product_id(entry)
+            print(f"\n[{i}/{len(entries)}] Scraping product {pid}...")
+            result = scraper.scrape(entry)
             results.append(result)
-            print_result(result, i, len(product_ids))
+            print_result(result, i, len(entries))
 
             # Delay between requests (except for last one)
-            if i < len(product_ids):
+            if i < len(entries):
                 import time
                 time.sleep(args.delay)
 
