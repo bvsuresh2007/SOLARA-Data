@@ -734,61 +734,73 @@ class SwiggyInstamartScraper:
             var discountMatch = bodyText.match(/(\\d+%\\s*OFF)/i);
             data.discount_text = discountMatch ? discountMatch[1] : '';
 
-            // 10. DOM-based price extraction: find individual price ELEMENTS near h1
-            //     This avoids picking up delivery fees/unrelated prices.
+            // 10. DOM-based price extraction near h1.
+            //     Uses textContent (includes child spans) on SMALL elements
+            //     to handle cases like <span>₹</span><span>3199</span>.
             //     Identifies MRP via strikethrough (del/s/line-through CSS).
             data.price_elements = [];
             if (h1) {
                 var priceContainer = h1.parentElement;
-                // Walk up to find a parent that contains ₹ price elements
                 for (var i = 0; i < 8; i++) {
                     if (!priceContainer) break;
                     var cText = priceContainer.innerText || '';
                     if (/₹/.test(cText) && cText.length > 30) {
-                        // Search all descendant elements for price text
+                        // Find all elements whose textContent is a short price string
                         var allEls = priceContainer.querySelectorAll('*');
+                        var seen = {};
                         for (var k = 0; k < allEls.length; k++) {
                             var el = allEls[k];
-                            // Get only THIS element's direct text (not children)
-                            var directText = '';
-                            for (var c = 0; c < el.childNodes.length; c++) {
-                                if (el.childNodes[c].nodeType === 3) {
-                                    directText += el.childNodes[c].textContent;
-                                }
-                            }
-                            directText = directText.trim();
-                            // Check if this element has a ₹ price as direct text
-                            var priceMatch = directText.match(/₹\\s?([\\d,]+(?:\\.\\d{1,2})?)/);
-                            if (priceMatch) {
-                                // Check if this price is inside a strikethrough element
-                                var isStrike = false;
-                                var ancestor = el;
-                                while (ancestor && ancestor !== priceContainer) {
-                                    var tag = ancestor.tagName ? ancestor.tagName.toLowerCase() : '';
-                                    if (tag === 'del' || tag === 's' || tag === 'strike') {
-                                        isStrike = true;
-                                        break;
+                            var tc = (el.textContent || '').trim();
+                            // Only consider short text (< 30 chars) that contains ₹ + digits
+                            if (tc.length > 2 && tc.length < 30) {
+                                var pm = tc.match(/₹\\s?([\\d,]+(?:\\.\\d{1,2})?)/);
+                                if (pm) {
+                                    var numVal = parseFloat(pm[1].replace(/,/g, ''));
+                                    // Skip duplicates (parent and child with same value)
+                                    var key = numVal.toString();
+                                    if (seen[key]) continue;
+                                    // Skip if this element has child elements with ₹
+                                    // (means it's a parent wrapper, not the actual price)
+                                    var childPrices = el.querySelectorAll('*');
+                                    var hasChildPrice = false;
+                                    for (var cp = 0; cp < childPrices.length; cp++) {
+                                        var childTc = (childPrices[cp].textContent || '').trim();
+                                        if (childTc !== tc && childTc.length > 2 && childTc.length < 30 &&
+                                            /₹\\s?[\\d,]+/.test(childTc)) {
+                                            hasChildPrice = true;
+                                            break;
+                                        }
                                     }
-                                    try {
-                                        var cs = window.getComputedStyle(ancestor);
-                                        if (cs && cs.textDecorationLine &&
-                                            cs.textDecorationLine.indexOf('line-through') !== -1) {
-                                            isStrike = true;
-                                            break;
+                                    if (hasChildPrice) continue;
+                                    seen[key] = true;
+
+                                    // Check if strikethrough
+                                    var isStrike = false;
+                                    var anc = el;
+                                    while (anc && anc !== priceContainer) {
+                                        var tag = anc.tagName ? anc.tagName.toLowerCase() : '';
+                                        if (tag === 'del' || tag === 's' || tag === 'strike') {
+                                            isStrike = true; break;
                                         }
-                                        if (cs && cs.textDecoration &&
-                                            cs.textDecoration.indexOf('line-through') !== -1) {
-                                            isStrike = true;
-                                            break;
-                                        }
-                                    } catch(e) {}
-                                    ancestor = ancestor.parentElement;
+                                        try {
+                                            var cs = window.getComputedStyle(anc);
+                                            if ((cs.textDecorationLine || cs.textDecoration || '')
+                                                .indexOf('line-through') !== -1) {
+                                                isStrike = true; break;
+                                            }
+                                        } catch(e) {}
+                                        anc = anc.parentElement;
+                                    }
+                                    // Also check opacity / color as strike indicator
+                                    // (gray/lighter color often = MRP)
+                                    var elColor = '';
+                                    try { elColor = window.getComputedStyle(el).color || ''; } catch(e) {}
+
+                                    data.price_elements.push({
+                                        text: tc, value: numVal,
+                                        strike: isStrike, color: elColor
+                                    });
                                 }
-                                data.price_elements.push({
-                                    text: directText,
-                                    value: parseFloat(priceMatch[1].replace(/,/g, '')),
-                                    strike: isStrike
-                                });
                             }
                         }
                         if (data.price_elements.length > 0) break;
@@ -958,61 +970,89 @@ class SwiggyInstamartScraper:
 
         # ── Price extraction (DOM elements > scoped text > all prices) ──
         price_elements = js_data.get("price_elements", [])
+        all_prices = js_data.get("all_prices", [])
+
+        # Debug: show what was found
+        if price_elements:
+            print(f"  [Prices found] {[{p['text']: p['value']} for p in price_elements]}")
+        elif all_prices:
+            print(f"  [Prices found (page-wide)] {all_prices[:6]}")
 
         if not result.price_value and price_elements:
             # Strategy 1: Use strikethrough detection from DOM elements
             strike_vals = [p for p in price_elements if p.get("strike") and p.get("value", 0) > 0]
             non_strike_vals = [p for p in price_elements if not p.get("strike") and p.get("value", 0) > 0]
 
-            if strike_vals and non_strike_vals:
-                # MRP = strikethrough price (usually the larger one)
-                mrp_val = max(p["value"] for p in strike_vals)
-                # Selling = non-strikethrough, pick the one closest to but less than MRP
-                selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= mrp_val]
-                if selling_candidates:
-                    selling_val = max(selling_candidates)  # largest non-strike <= MRP
+            # If no strikethrough detected but we have exactly 2 prices,
+            # the smaller one is selling and larger is MRP (common layout)
+            if not strike_vals and len(non_strike_vals) >= 2:
+                unique = sorted(set(p["value"] for p in non_strike_vals))
+                if len(unique) >= 2:
+                    result.price_value = unique[0]
+                    result.price = f"₹{unique[0]:,.2f}"
+                    result.mrp_value = unique[-1]
+                    result.mrp = f"₹{unique[-1]:,.2f}"
+                    print(f"  [Price logic] 2 prices: selling=₹{unique[0]}, MRP=₹{unique[-1]}")
                 else:
-                    selling_val = non_strike_vals[0]["value"]
+                    result.price_value = unique[0]
+                    result.price = f"₹{unique[0]:,.2f}"
+            elif strike_vals and non_strike_vals:
+                # MRP = strikethrough price
+                mrp_val = max(p["value"] for p in strike_vals)
+                selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= mrp_val]
+                selling_val = max(selling_candidates) if selling_candidates else non_strike_vals[0]["value"]
 
                 result.price_value = selling_val
                 result.price = f"₹{selling_val:,.2f}"
                 result.mrp_value = mrp_val
                 result.mrp = f"₹{mrp_val:,.2f}"
+                print(f"  [Price logic] strike: selling=₹{selling_val}, MRP=₹{mrp_val}")
             elif non_strike_vals:
-                # No strikethrough found — if there are 2+ distinct prices,
-                # the larger one is likely MRP
-                unique_vals = sorted(set(p["value"] for p in non_strike_vals))
-                if len(unique_vals) >= 2:
-                    result.price_value = unique_vals[0]
-                    result.price = f"₹{unique_vals[0]:,.2f}"
-                    result.mrp_value = unique_vals[-1]
-                    result.mrp = f"₹{unique_vals[-1]:,.2f}"
-                else:
-                    result.price_value = unique_vals[0]
-                    result.price = f"₹{unique_vals[0]:,.2f}"
+                result.price_value = non_strike_vals[0]["value"]
+                result.price = f"₹{non_strike_vals[0]['value']:,.2f}"
             elif strike_vals:
-                # Only strikethrough (MRP) found
                 result.mrp_value = strike_vals[0]["value"]
                 result.mrp = f"₹{strike_vals[0]['value']:,.2f}"
 
-        # Strategy 2: Fallback to scoped text prices
+        # Strategy 2: Fallback to scoped text prices (near h1)
         if not result.price_value:
             scoped_prices = js_data.get("scoped_prices", [])
             if scoped_prices:
                 parsed = []
-                seen = set()
+                seen_vals = set()
                 for p_text in scoped_prices:
                     val = self._parse_price_value(p_text)
-                    if val and val > 0 and val not in seen:
-                        seen.add(val)
+                    if val and val > 0 and val not in seen_vals:
+                        seen_vals.add(val)
                         parsed.append(val)
                 if len(parsed) >= 2:
                     parsed.sort()
-                    result.price_value = parsed[-2] if len(parsed) > 2 else parsed[0]
-                    result.price = f"₹{result.price_value:,.2f}"
+                    # Smaller = selling, larger = MRP
+                    result.price_value = parsed[0]
+                    result.price = f"₹{parsed[0]:,.2f}"
                     result.mrp_value = parsed[-1]
                     result.mrp = f"₹{parsed[-1]:,.2f}"
                 elif parsed:
+                    result.price_value = parsed[0]
+                    result.price = f"₹{parsed[0]:,.2f}"
+
+        # Strategy 3: Last resort — all prices from the full page
+        if not result.price_value and all_prices:
+            parsed = []
+            seen_vals = set()
+            for p_text in all_prices:
+                val = self._parse_price_value(p_text)
+                if val and val > 0 and val not in seen_vals:
+                    seen_vals.add(val)
+                    parsed.append(val)
+            if parsed:
+                parsed.sort()
+                if len(parsed) >= 2:
+                    result.price_value = parsed[0]
+                    result.price = f"₹{parsed[0]:,.2f}"
+                    result.mrp_value = parsed[-1]
+                    result.mrp = f"₹{parsed[-1]:,.2f}"
+                else:
                     result.price_value = parsed[0]
                     result.price = f"₹{parsed[0]:,.2f}"
 
@@ -1041,14 +1081,19 @@ class SwiggyInstamartScraper:
                     result.price_value = round(selling, 2)
                     result.price = f"₹{result.price_value:,.2f}"
 
-        # ── Availability (scoped to product area, not whole page) ──
+        # ── Availability ──
+        # Having a selling price is a strong signal for in-stock.
+        # "sold out" text in the container area can be a false positive
+        # (e.g. description text, footer links).
         if not result.availability:
-            if js_data.get("has_add_button"):
+            if result.price_value and result.price_value > 0:
+                # Product has a selling price displayed — it's in stock
                 result.availability = "In Stock"
-            elif js_data.get("has_sold_out"):
+            elif js_data.get("has_add_button"):
+                result.availability = "In Stock"
+            elif js_data.get("has_sold_out") and not result.price_value:
                 result.availability = "Out of Stock"
-            elif result.name and result.price_value:
-                # If we have both name and price, likely in stock
+            elif result.name:
                 result.availability = "In Stock"
 
         # Image from page images (pick largest)
