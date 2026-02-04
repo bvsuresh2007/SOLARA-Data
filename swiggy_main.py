@@ -13,6 +13,7 @@ Usage:
 import sys
 import csv
 import json
+import random
 import argparse
 from dataclasses import asdict
 from datetime import datetime
@@ -196,7 +197,11 @@ def main():
 
             if i < len(urls):
                 import time
-                time.sleep(args.delay)
+                # Add random jitter (±30%) to avoid detection patterns
+                jitter = args.delay * random.uniform(-0.3, 0.3)
+                wait = max(3, args.delay + jitter)
+                print(f"  Waiting {wait:.1f}s before next request...")
+                time.sleep(wait)
 
         # Save CSV
         if args.output:

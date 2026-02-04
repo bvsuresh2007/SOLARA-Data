@@ -11,6 +11,7 @@ Uses three strategies in order of reliability:
 import re
 import json
 import time
+import random
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -1344,10 +1345,41 @@ class SwiggyInstamartScraper:
         except Exception as e:
             print(f"  [Diagnostic] Error reading page: {e}")
 
+    # Names that indicate the page didn't load the actual product
+    BAD_NAMES = {
+        "instamart", "swiggy", "swiggy instamart", "home", "instamart home",
+        "swiggy instamart - online grocery shopping",
+    }
+
+    def _is_error_page(self) -> bool:
+        """Check if Swiggy is showing an error/rate-limit page."""
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text or ""
+            error_phrases = [
+                "something went wrong",
+                "our best minds are on this",
+                "please refresh or come back later",
+                "try again",
+                "too many requests",
+                "access denied",
+            ]
+            body_lower = body_text.lower()
+            return any(phrase in body_lower for phrase in error_phrases) and len(body_text) < 500
+        except Exception:
+            return False
+
+    def _is_bad_name(self, name: str) -> bool:
+        """Check if a scraped name is a generic page title, not a product name."""
+        if not name:
+            return True
+        return name.strip().lower() in self.BAD_NAMES
+
     def _scrape_browser(self, url: str, result: SwiggyProductData) -> None:
         """Scrape using Selenium browser with network interception + retry."""
-        max_attempts = 3
-        timeouts = [10, 15, 20]
+        max_attempts = 4
+        timeouts = [10, 15, 20, 25]
+        # Backoff delays: wait longer on each retry (rate-limit recovery)
+        retry_delays = [8, 15, 30]
 
         try:
             # Set pincode/location before first scrape
@@ -1356,7 +1388,11 @@ class SwiggyInstamartScraper:
 
             for attempt in range(max_attempts):
                 if attempt > 0:
-                    print(f"  Retrying (attempt {attempt + 1}/{max_attempts})...")
+                    backoff = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                    jitter = random.uniform(0, 3)
+                    wait_time = backoff + jitter
+                    print(f"  Retrying (attempt {attempt + 1}/{max_attempts}) after {wait_time:.0f}s backoff...")
+                    time.sleep(wait_time)
 
                 # Clear previous state
                 if attempt > 0:
@@ -1378,6 +1414,15 @@ class SwiggyInstamartScraper:
                 if not rendered:
                     # Extra wait for slow-loading SPAs
                     time.sleep(5)
+
+                # Check for Swiggy error/rate-limit page
+                if self._is_error_page():
+                    print("  [!] Swiggy error page detected (rate-limited). Will retry with longer backoff.")
+                    if attempt < max_attempts - 1:
+                        continue
+                    else:
+                        result.error = "Swiggy rate-limited: 'Something went wrong' after all retries"
+                        return
 
                 # Scroll to trigger lazy content
                 self.driver.execute_script("window.scrollTo(0, 300);")
@@ -1412,6 +1457,13 @@ class SwiggyInstamartScraper:
                 # nearby_prices can override wrong prices from API/JSON-LD)
                 self._extract_via_javascript(result)
 
+                # Filter out bad names (generic page titles like "Instamart")
+                if self._is_bad_name(result.name):
+                    print(f"  [!] Bad name '{result.name}' — page didn't load product. Retrying...")
+                    result.name = None
+                    if attempt < max_attempts - 1:
+                        continue
+
                 # If we got a name but no price, try once more with a longer wait
                 if result.name and not result.price_value and attempt < max_attempts - 1:
                     continue
@@ -1422,7 +1474,7 @@ class SwiggyInstamartScraper:
 
             # All attempts failed
             result.error = (
-                "Could not extract product data after 3 attempts - "
+                "Could not extract product data after all attempts - "
                 "page may not have loaded or URL may be invalid. "
                 "Try: pip install undetected-chromedriver  OR  --no-headless"
             )
