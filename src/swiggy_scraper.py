@@ -21,6 +21,7 @@ from bs4 import BeautifulSoup
 # Try undetected_chromedriver first (best anti-detection), fall back to regular Selenium
 UNDETECTED_AVAILABLE = False
 SELENIUM_AVAILABLE = False
+EDGE_AVAILABLE = False
 
 try:
     import undetected_chromedriver as uc
@@ -44,6 +45,21 @@ if not UNDETECTED_AVAILABLE:
         SELENIUM_AVAILABLE = True
     except ImportError:
         pass
+
+# Try Edge browser support
+try:
+    from selenium import webdriver as _wb
+    from selenium.webdriver.edge.service import Service as EdgeService
+    from selenium.webdriver.edge.options import Options as EdgeOptions
+    # Also import common Selenium if not already done
+    if not SELENIUM_AVAILABLE:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+    EDGE_AVAILABLE = True
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    pass
 
 
 # Pincode to lat/lng mapping for common Bangalore pincodes
@@ -110,13 +126,15 @@ class SwiggyInstamartScraper:
     }
 
     def __init__(self, headless: bool = True, debug: bool = False,
-                 use_browser: bool = True, pincode: Optional[str] = "560103"):
+                 use_browser: bool = True, pincode: Optional[str] = "560103",
+                 browser_type: str = "chrome"):
         self.headless = headless
         self.debug = debug
         self.use_browser = use_browser
         self.pincode = pincode
         self.coords = PINCODE_COORDS.get(pincode or "560103", PINCODE_COORDS["560103"])
         self.driver = None
+        self._browser_type = browser_type  # "chrome" or "edge"
         self.session = http_requests.Session()
         self._location_set = False
 
@@ -127,21 +145,29 @@ class SwiggyInstamartScraper:
                 self.use_browser = False
             else:
                 try:
-                    self._init_browser()
+                    self.open_browser(browser_type)
                 except Exception as e:
                     print(f"Warning: Could not start browser ({e}), falling back to requests mode.")
                     self.use_browser = False
 
-    def _init_browser(self):
-        """Initialize Chrome browser with anti-detection.
+    def open_browser(self, browser_type: str = "chrome"):
+        """Open a fresh browser instance. Closes existing one first.
 
-        Tries undetected_chromedriver first (best anti-detection),
-        falls back to regular Selenium with CDP stealth scripts.
+        Args:
+            browser_type: "chrome" or "edge"
         """
-        if UNDETECTED_AVAILABLE:
+        self.close()
+        self._browser_type = browser_type
+        self._location_set = False
+
+        if browser_type == "edge" and EDGE_AVAILABLE:
+            self._init_edge_browser()
+        elif UNDETECTED_AVAILABLE and browser_type == "chrome":
             self._init_undetected_browser()
-        else:
+        elif SELENIUM_AVAILABLE:
             self._init_selenium_browser()
+        else:
+            raise RuntimeError(f"No browser driver available for {browser_type}")
 
     def _init_undetected_browser(self):
         """Initialize using undetected_chromedriver (bypasses bot detection)."""
@@ -157,10 +183,10 @@ class SwiggyInstamartScraper:
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
         self.driver = uc.Chrome(options=options, headless=self.headless)
-        print("  [Browser: undetected_chromedriver]")
+        print("  [Browser: undetected_chromedriver (Chrome)]")
 
     def _init_selenium_browser(self):
-        """Initialize using regular Selenium with stealth patches."""
+        """Initialize using regular Selenium Chrome with stealth patches."""
         options = Options()
         if self.headless:
             options.add_argument("--headless=new")
@@ -186,7 +212,35 @@ class SwiggyInstamartScraper:
 
         # Apply CDP stealth patches
         self._apply_stealth_scripts()
-        print("  [Browser: Selenium + stealth]")
+        print("  [Browser: Selenium Chrome + stealth]")
+
+    def _init_edge_browser(self):
+        """Initialize using Microsoft Edge browser."""
+        options = EdgeOptions()
+        if self.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+        )
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+
+        # Enable performance logging for network interception
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
+        self.driver = _wb.Edge(options=options)
+
+        # Apply CDP stealth patches
+        self._apply_stealth_scripts()
+        print("  [Browser: Microsoft Edge + stealth]")
 
     def _apply_stealth_scripts(self):
         """Apply CDP-based stealth scripts to avoid bot detection."""

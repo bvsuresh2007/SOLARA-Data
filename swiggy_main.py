@@ -182,16 +182,50 @@ def main():
     print(f"\nScraping {len(urls)} Swiggy Instamart product(s) in {mode} mode...")
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
+    if use_browser:
+        print(f"Browser rotation: Chrome (4 URLs) → Edge (4 URLs) → repeat")
+        print(f"Fresh browser + pincode for EACH URL")
 
+    # Create scraper without opening browser yet (we open per-URL)
     scraper = SwiggyInstamartScraper(
         headless=headless, debug=args.debug,
-        use_browser=use_browser, pincode=args.pincode
+        use_browser=False,  # Don't open browser in constructor
+        pincode=args.pincode
     )
+    scraper.use_browser = use_browser  # Restore flag after constructor
+
+    # Browser rotation: Chrome for URLs 1-4, Edge for 5-8, Chrome for 9-12, etc.
+    BATCH_SIZE = 4
+    browsers = ["chrome", "edge"]
 
     results = []
     try:
         for i, url in enumerate(urls, 1):
+            # Determine which browser to use (rotate every BATCH_SIZE)
+            batch_index = (i - 1) // BATCH_SIZE
+            browser_type = browsers[batch_index % len(browsers)]
+
             print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
+
+            if use_browser:
+                # Open fresh browser for each URL
+                try:
+                    print(f"  Opening fresh {browser_type.title()} browser...")
+                    scraper.open_browser(browser_type)
+                except Exception as e:
+                    print(f"  ERROR opening {browser_type}: {e}")
+                    # Try the other browser as fallback
+                    fallback = "edge" if browser_type == "chrome" else "chrome"
+                    try:
+                        print(f"  Trying {fallback.title()} as fallback...")
+                        scraper.open_browser(fallback)
+                    except Exception as e2:
+                        print(f"  ERROR: No browser available ({e2})")
+                        result = SwiggyProductData(url=url, error=f"Browser launch failed: {e2}")
+                        results.append(result)
+                        print_result(result, i, len(urls))
+                        continue
+
             try:
                 result = scraper.scrape(url)
             except KeyboardInterrupt:
@@ -200,8 +234,14 @@ def main():
             except Exception as e:
                 print(f"  ERROR: {e}")
                 result = SwiggyProductData(url=url, error=str(e))
+
             results.append(result)
             print_result(result, i, len(urls))
+
+            # Close browser after each URL (fresh session next time)
+            if use_browser:
+                print("  Closing browser...")
+                scraper.close()
 
             # Save partial results after each URL (so nothing is lost on crash)
             if args.output and results:
