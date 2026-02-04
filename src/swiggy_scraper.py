@@ -17,18 +17,32 @@ from dataclasses import dataclass, field
 import requests as http_requests
 from bs4 import BeautifulSoup
 
-# Selenium imports (optional)
+# Try undetected_chromedriver first (best anti-detection), fall back to regular Selenium
+UNDETECTED_AVAILABLE = False
+SELENIUM_AVAILABLE = False
+
 try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
+    import undetected_chromedriver as uc
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
+    UNDETECTED_AVAILABLE = True
     SELENIUM_AVAILABLE = True
 except ImportError:
-    SELENIUM_AVAILABLE = False
+    pass
+
+if not UNDETECTED_AVAILABLE:
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from webdriver_manager.chrome import ChromeDriverManager
+        SELENIUM_AVAILABLE = True
+    except ImportError:
+        pass
 
 
 # Pincode to lat/lng mapping for common Bangalore pincodes
@@ -118,7 +132,34 @@ class SwiggyInstamartScraper:
                     self.use_browser = False
 
     def _init_browser(self):
-        """Initialize Chrome browser with performance logging for network interception."""
+        """Initialize Chrome browser with anti-detection.
+
+        Tries undetected_chromedriver first (best anti-detection),
+        falls back to regular Selenium with CDP stealth scripts.
+        """
+        if UNDETECTED_AVAILABLE:
+            self._init_undetected_browser()
+        else:
+            self._init_selenium_browser()
+
+    def _init_undetected_browser(self):
+        """Initialize using undetected_chromedriver (bypasses bot detection)."""
+        options = uc.ChromeOptions()
+        if self.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+
+        # Enable performance logging for network interception
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
+        self.driver = uc.Chrome(options=options, headless=self.headless)
+        print("  [Browser: undetected_chromedriver]")
+
+    def _init_selenium_browser(self):
+        """Initialize using regular Selenium with stealth patches."""
         options = Options()
         if self.headless:
             options.add_argument("--headless=new")
@@ -131,19 +172,57 @@ class SwiggyInstamartScraper:
         options.add_argument(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
+            "Chrome/131.0.0.0 Safari/537.36"
         )
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
 
-        # Enable performance logging to capture network requests
+        # Enable performance logging for network interception
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=options)
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+
+        # Apply CDP stealth patches
+        self._apply_stealth_scripts()
+        print("  [Browser: Selenium + stealth]")
+
+    def _apply_stealth_scripts(self):
+        """Apply CDP-based stealth scripts to avoid bot detection."""
+        stealth_js = """
+            // Override navigator.webdriver
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+            // Override navigator.plugins (headless Chrome has empty plugins)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+
+            // Override navigator.languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+
+            // Override chrome.runtime (headless doesn't have this)
+            window.chrome = { runtime: {} };
+
+            // Override permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) =>
+                parameters.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : originalQuery(parameters);
+        """
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": stealth_js
+            })
+        except Exception:
+            # Fallback: execute directly
+            try:
+                self.driver.execute_script(stealth_js)
+            except Exception:
+                pass
 
     def _set_pincode_browser(self):
         """Set delivery pincode on Swiggy Instamart via cookies and localStorage."""
@@ -1081,10 +1160,30 @@ class SwiggyInstamartScraper:
         except Exception:
             pass
 
+    def _print_page_diagnostic(self):
+        """Print diagnostic info about the current page state."""
+        try:
+            title = self.driver.title or "(empty)"
+            current_url = self.driver.current_url or "(empty)"
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text or ""
+            text_len = len(body_text)
+            snippet = body_text[:300].replace("\n", " ").strip()
+            has_rupee = "₹" in body_text
+            has_h1 = bool(self.driver.find_elements(By.CSS_SELECTOR, "h1"))
+
+            print(f"  [Diagnostic] Title: {title[:80]}")
+            print(f"  [Diagnostic] URL: {current_url[:80]}")
+            print(f"  [Diagnostic] Body text length: {text_len} chars")
+            print(f"  [Diagnostic] Has ₹: {has_rupee}, Has h1: {has_h1}")
+            if snippet:
+                print(f"  [Diagnostic] Text preview: {snippet[:200]}...")
+        except Exception as e:
+            print(f"  [Diagnostic] Error reading page: {e}")
+
     def _scrape_browser(self, url: str, result: SwiggyProductData) -> None:
         """Scrape using Selenium browser with network interception + retry."""
         max_attempts = 3
-        timeouts = [10, 12, 15]
+        timeouts = [10, 15, 20]
 
         try:
             # Set pincode/location before first scrape
@@ -1109,14 +1208,23 @@ class SwiggyInstamartScraper:
 
                 # Load the page
                 self.driver.get(url)
-                self._wait_for_page_render(timeout=timeouts[attempt])
+
+                # Wait longer — Swiggy SPA needs time to render
+                rendered = self._wait_for_page_render(timeout=timeouts[attempt])
+                if not rendered:
+                    # Extra wait for slow-loading SPAs
+                    time.sleep(5)
 
                 # Scroll to trigger lazy content
                 self.driver.execute_script("window.scrollTo(0, 300);")
-                time.sleep(1)
+                time.sleep(2)
                 self._dismiss_popups()
 
-                # Save debug HTML on first attempt
+                # Print diagnostic info (always, to help debug)
+                if attempt == 0:
+                    self._print_page_diagnostic()
+
+                # Save debug files
                 if self.debug and attempt == 0:
                     try:
                         page_source = self.driver.page_source
@@ -1150,7 +1258,8 @@ class SwiggyInstamartScraper:
             # All attempts failed
             result.error = (
                 "Could not extract product data after 3 attempts - "
-                "page may not have loaded or URL may be invalid"
+                "page may not have loaded or URL may be invalid. "
+                "Try: pip install undetected-chromedriver  OR  --no-headless"
             )
 
         except Exception as e:
