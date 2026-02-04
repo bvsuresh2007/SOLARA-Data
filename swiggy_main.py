@@ -143,8 +143,8 @@ def main():
         help="Use requests mode instead of browser (faster, but may get less data)"
     )
     parser.add_argument(
-        "--delay", type=float, default=5.0,
-        help="Delay between requests in seconds (default: 5)"
+        "--delay", type=float, default=8.0,
+        help="Delay between requests in seconds (default: 8)"
     )
 
     args = parser.parse_args()
