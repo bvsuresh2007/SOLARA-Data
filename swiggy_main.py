@@ -130,8 +130,8 @@ def main():
         help="Delivery pincode for location-based pricing (default: 560103)"
     )
     parser.add_argument(
-        "--debug", action="store_true",
-        help="Save page HTML to file for inspection"
+        "--debug", action="store_true", default=True,
+        help="Save page HTML to file for inspection (enabled by default)"
     )
     parser.add_argument(
         "--no-headless", action="store_true",
@@ -142,8 +142,8 @@ def main():
         help="Use requests mode instead of browser (faster, but may get less data)"
     )
     parser.add_argument(
-        "--delay", type=float, default=3.0,
-        help="Delay between requests in seconds (default: 3)"
+        "--delay", type=float, default=5.0,
+        help="Delay between requests in seconds (default: 5)"
     )
 
     args = parser.parse_args()
