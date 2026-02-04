@@ -640,7 +640,7 @@ class SwiggyInstamartScraper:
         nodes efficiently.
         """
         js_code = """
-        (function() {
+        return (function() {
             var data = {};
 
             // 1. Try __NEXT_DATA__
