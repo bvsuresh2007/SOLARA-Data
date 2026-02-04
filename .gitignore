@@ -25,3 +25,4 @@ Thumbs.db
 *.log
 slack_config.json
 debug_*.html
+debug_swiggy_*.html
