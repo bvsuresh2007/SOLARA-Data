@@ -1072,17 +1072,106 @@ class SwiggyInstamartScraper:
         if not result.name:
             result.error = "Could not extract product data - page may require browser mode"
 
+    def _wait_for_page_render(self, timeout: int = 10) -> bool:
+        """Wait for Swiggy Instamart product page to render.
+
+        Waits for a product-related element (h1, product name, price)
+        to appear in the DOM, indicating the React SPA has rendered.
+        """
+        indicators = [
+            (By.CSS_SELECTOR, "h1"),
+            (By.CSS_SELECTOR, "[data-testid='item-name']"),
+            (By.CSS_SELECTOR, "[data-testid='product-title']"),
+            (By.CSS_SELECTOR, "[data-testid='pdp-product-name']"),
+        ]
+        for by, selector in indicators:
+            try:
+                WebDriverWait(self.driver, timeout).until(
+                    EC.presence_of_element_located((by, selector))
+                )
+                return True
+            except Exception:
+                continue
+
+        # Secondary: wait for any ₹ price to appear in the page text
+        try:
+            WebDriverWait(self.driver, 5).until(
+                lambda d: "₹" in (d.find_element(By.TAG_NAME, "body").text or "")
+            )
+            return True
+        except Exception:
+            pass
+
+        return False
+
+    def _dismiss_popups(self) -> None:
+        """Dismiss any popups, modals, or cookie banners that may block the page."""
+        dismiss_selectors = [
+            "[data-testid='close-btn']",
+            "[data-testid='modal-close']",
+            "[aria-label='close' i]",
+            "[aria-label='dismiss' i]",
+            "button[class*='close' i]",
+            "button[class*='dismiss' i]",
+            "[class*='modal'] button",
+            "[class*='overlay'] button",
+        ]
+        for selector in dismiss_selectors:
+            try:
+                btns = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                for btn in btns:
+                    if btn.is_displayed():
+                        btn.click()
+                        time.sleep(0.5)
+                        break
+            except Exception:
+                continue
+
+    def _try_extract_all(self, result: SwiggyProductData) -> bool:
+        """Run all extraction strategies. Returns True if product name was found."""
+        # Strategy 1: JSON-LD
+        ld_data = self._try_json_ld()
+        if ld_data:
+            self._extract_from_json_ld(ld_data, result)
+            if result.name:
+                print("  [Source: JSON-LD]")
+
+        # Strategy 2: __NEXT_DATA__
+        if not result.name:
+            next_data = self._try_next_data()
+            if next_data:
+                if self._extract_from_next_data(next_data, result) and result.name:
+                    print("  [Source: __NEXT_DATA__]")
+
+        # Strategy 3: DOM
+        if not result.name:
+            self._extract_from_dom(result)
+            if result.name:
+                print("  [Source: DOM]")
+
+        # Supplement missing price from DOM even if name was found via JSON
+        if result.name and not result.price_value:
+            self._extract_from_dom(result)
+
+        return bool(result.name)
+
     def _scrape_browser(self, url: str, result: SwiggyProductData) -> None:
-        """Scrape using Selenium browser."""
+        """Scrape using Selenium browser with retry logic."""
         try:
             # Set pincode/location before first scrape
             if self.pincode and not self._location_set:
                 self._set_pincode_browser()
 
+            # Attempt 1: load page and wait for render
             self.driver.get(url)
-            time.sleep(3)
+            self._wait_for_page_render(timeout=10)
+
+            # Scroll down to trigger lazy-loaded content
             self.driver.execute_script("window.scrollTo(0, 300);")
             time.sleep(1)
+
+            # Dismiss any popups/modals that may be covering content
+            self._dismiss_popups()
 
             if self.debug:
                 page_source = self.driver.page_source
@@ -1091,32 +1180,33 @@ class SwiggyInstamartScraper:
                     f.write(page_source)
                 print(f"  Debug HTML saved to: {debug_file}")
 
-            # Strategy 1: JSON-LD
-            ld_data = self._try_json_ld()
-            if ld_data:
-                self._extract_from_json_ld(ld_data, result)
-                if result.name:
-                    print("  [Source: JSON-LD]")
+            # Try all extraction strategies
+            if self._try_extract_all(result):
+                return
 
-            # Strategy 2: __NEXT_DATA__
-            if not result.name:
-                next_data = self._try_next_data()
-                if next_data:
-                    if self._extract_from_next_data(next_data, result) and result.name:
-                        print("  [Source: __NEXT_DATA__]")
+            # Attempt 2: retry — refresh the page, wait longer
+            print("  Retrying (page may not have loaded fully)...")
+            self.driver.refresh()
+            self._wait_for_page_render(timeout=12)
+            self.driver.execute_script("window.scrollTo(0, 400);")
+            time.sleep(2)
+            self._dismiss_popups()
 
-            # Strategy 3: DOM
-            if not result.name:
-                self._extract_from_dom(result)
-                if result.name:
-                    print("  [Source: DOM]")
+            if self._try_extract_all(result):
+                return
 
-            # Supplement missing price from DOM even if name was found via JSON
-            if result.name and not result.price:
-                self._extract_from_dom(result)
+            # Attempt 3: try direct navigation again (fresh load)
+            print("  Retrying with fresh load...")
+            self.driver.get("about:blank")
+            time.sleep(1)
+            self.driver.get(url)
+            self._wait_for_page_render(timeout=15)
+            time.sleep(2)
 
-            if not result.name:
-                result.error = "Could not extract product data - page may not have loaded"
+            if self._try_extract_all(result):
+                return
+
+            result.error = "Could not extract product data after 3 attempts - page may not have loaded"
 
         except Exception as e:
             result.error = f"Browser scraping failed: {str(e)}"
