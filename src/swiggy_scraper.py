@@ -892,7 +892,8 @@ class SwiggyInstamartScraper:
             product = self._find_product_in_json(next_data)
             if product and self._extract_from_api_json(product, result):
                 print("  [Source: __NEXT_DATA__]")
-                return True
+                # Don't return early — continue to nearby_prices which can
+                # override wrong prices (JSON APIs often return delivery fees)
 
         # Process JSON-LD
         json_ld = js_data.get("json_ld")
@@ -965,10 +966,9 @@ class SwiggyInstamartScraper:
             result.image_url = meta.get("og:image") or meta.get("twitter:image")
 
         # ── Price extraction ──
-        # Strategy 1 (PRIMARY): nearby_prices — ₹ amounts found right after
-        # the h1 product name in body.innerText (text-position approach).
-        # This avoids picking up delivery fees or cart prices that appear
-        # elsewhere on the page.
+        # IMPORTANT: nearby_prices (from rendered page near h1) ALWAYS takes
+        # priority over JSON-LD/API prices, which often contain wrong values
+        # like delivery fees. We override any previously-set price.
         nearby_prices = js_data.get("nearby_prices", [])
         all_prices = js_data.get("all_prices", [])
 
@@ -978,17 +978,16 @@ class SwiggyInstamartScraper:
             print(f"  [Debug] Text after h1: {debug_after_h1[:150]}...")
         if nearby_prices:
             print(f"  [Prices near h1] {[{'text': p.get('text',''), 'val': p.get('value',0)} for p in nearby_prices]}")
-        elif all_prices:
-            print(f"  [Prices (page-wide only)] {all_prices[:6]}")
+        if all_prices:
+            print(f"  [All prices on page] {all_prices[:8]}")
 
-        if not result.price_value and nearby_prices:
-            # Use nearby prices — these are right after the product name
-            # Check for strikethrough info if available
+        # Strategy 1 (PRIMARY): nearby_prices from rendered page near h1
+        # These OVERRIDE any price set by JSON-LD or API (which may be wrong)
+        if nearby_prices:
             strike_vals = [p for p in nearby_prices if p.get("strike") and p.get("value", 0) > 0]
             non_strike_vals = [p for p in nearby_prices if not p.get("strike") and p.get("value", 0) > 0]
 
             if strike_vals and non_strike_vals:
-                # MRP = strikethrough, selling = non-strikethrough
                 mrp_val = max(p["value"] for p in strike_vals)
                 selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= mrp_val]
                 selling_val = max(selling_candidates) if selling_candidates else non_strike_vals[0]["value"]
@@ -998,17 +997,12 @@ class SwiggyInstamartScraper:
                 result.mrp = f"₹{mrp_val:,.2f}"
                 print(f"  [Price logic] strike: selling=₹{selling_val}, MRP=₹{mrp_val}")
             else:
-                # No strikethrough info — use positional order
-                # For text-position results: first ₹ = selling price, second = MRP
                 vals = []
                 for p in nearby_prices:
                     v = p.get("value", 0)
                     if v > 0:
                         vals.append(v)
                 if len(vals) >= 2:
-                    # First price encountered is selling price (bold, prominent)
-                    # Second price is MRP (strikethrough, gray)
-                    # Selling is always <= MRP
                     selling = min(vals[0], vals[1])
                     mrp = max(vals[0], vals[1])
                     result.price_value = selling
@@ -1020,8 +1014,18 @@ class SwiggyInstamartScraper:
                     result.price_value = vals[0]
                     result.price = f"₹{vals[0]:,.2f}"
 
-        # Strategy 2: Last resort — all prices from the full page
-        # Only if nearby_prices found nothing
+        # Strategy 2: Extract price from og:description ("online at Rs. 3199")
+        if not result.price_value:
+            desc = meta.get("og:description") or meta.get("description") or ""
+            desc_price_match = re.search(r'(?:Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)', desc)
+            if desc_price_match:
+                desc_price = float(desc_price_match.group(1).replace(",", ""))
+                if desc_price > 0:
+                    result.price_value = desc_price
+                    result.price = f"₹{desc_price:,.2f}"
+                    print(f"  [Price logic] from description: ₹{desc_price}")
+
+        # Strategy 3: Last resort — all prices from the full page
         if not result.price_value and all_prices:
             parsed = []
             seen_vals = set()
@@ -1031,8 +1035,6 @@ class SwiggyInstamartScraper:
                     seen_vals.add(val)
                     parsed.append(val)
             if parsed:
-                # Sort and pick. With page-wide prices, smaller is likely
-                # selling and larger is MRP — but this is less reliable
                 parsed.sort()
                 if len(parsed) >= 2:
                     result.price_value = parsed[0]
@@ -1377,11 +1379,12 @@ class SwiggyInstamartScraper:
                     best = api_products[0]
                     if self._extract_from_api_json(best, result):
                         print("  [Source: Network API]")
-                        return
+                        # Don't return — continue to JS extraction which uses
+                        # nearby_prices to override potentially wrong API prices
 
-                # Strategy 2: JavaScript-based extraction
-                if self._extract_via_javascript(result):
-                    return
+                # Strategy 2: JavaScript-based extraction (always run —
+                # nearby_prices can override wrong prices from API/JSON-LD)
+                self._extract_via_javascript(result)
 
                 # If we got a name but no price, try once more with a longer wait
                 if result.name and not result.price_value and attempt < max_attempts - 1:
