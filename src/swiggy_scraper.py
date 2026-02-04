@@ -734,94 +734,90 @@ class SwiggyInstamartScraper:
             var discountMatch = bodyText.match(/(\\d+%\\s*OFF)/i);
             data.discount_text = discountMatch ? discountMatch[1] : '';
 
-            // 10. DOM-based price extraction near h1.
-            //     Uses textContent (includes child spans) on SMALL elements
-            //     to handle cases like <span>₹</span><span>3199</span>.
-            //     Identifies MRP via strikethrough (del/s/line-through CSS).
+            // 10. TEXT-POSITION approach: find ₹ prices near h1 text in body innerText.
+            //     The body.innerText preserves visual order, so product prices appear
+            //     right after the product name, while delivery fees appear later.
+            data.nearby_prices = [];
             data.price_elements = [];
-            if (h1) {
-                var priceContainer = h1.parentElement;
-                for (var i = 0; i < 8; i++) {
-                    if (!priceContainer) break;
-                    var cText = priceContainer.innerText || '';
-                    if (/₹/.test(cText) && cText.length > 30) {
-                        // Find all elements whose textContent is a short price string
-                        var allEls = priceContainer.querySelectorAll('*');
-                        var seen = {};
-                        for (var k = 0; k < allEls.length; k++) {
-                            var el = allEls[k];
-                            var tc = (el.textContent || '').trim();
-                            // Only consider short text (< 30 chars) that contains ₹ + digits
-                            if (tc.length > 2 && tc.length < 30) {
-                                var pm = tc.match(/₹\\s?([\\d,]+(?:\\.\\d{1,2})?)/);
-                                if (pm) {
-                                    var numVal = parseFloat(pm[1].replace(/,/g, ''));
-                                    // Skip duplicates (parent and child with same value)
-                                    var key = numVal.toString();
-                                    if (seen[key]) continue;
-                                    // Skip if this element has child elements with ₹
-                                    // (means it's a parent wrapper, not the actual price)
-                                    var childPrices = el.querySelectorAll('*');
-                                    var hasChildPrice = false;
-                                    for (var cp = 0; cp < childPrices.length; cp++) {
-                                        var childTc = (childPrices[cp].textContent || '').trim();
-                                        if (childTc !== tc && childTc.length > 2 && childTc.length < 30 &&
-                                            /₹\\s?[\\d,]+/.test(childTc)) {
-                                            hasChildPrice = true;
-                                            break;
-                                        }
-                                    }
-                                    if (hasChildPrice) continue;
-                                    seen[key] = true;
-
-                                    // Check if strikethrough
-                                    var isStrike = false;
-                                    var anc = el;
-                                    while (anc && anc !== priceContainer) {
-                                        var tag = anc.tagName ? anc.tagName.toLowerCase() : '';
-                                        if (tag === 'del' || tag === 's' || tag === 'strike') {
-                                            isStrike = true; break;
-                                        }
-                                        try {
-                                            var cs = window.getComputedStyle(anc);
-                                            if ((cs.textDecorationLine || cs.textDecoration || '')
-                                                .indexOf('line-through') !== -1) {
-                                                isStrike = true; break;
-                                            }
-                                        } catch(e) {}
-                                        anc = anc.parentElement;
-                                    }
-                                    // Also check opacity / color as strike indicator
-                                    // (gray/lighter color often = MRP)
-                                    var elColor = '';
-                                    try { elColor = window.getComputedStyle(el).color || ''; } catch(e) {}
-
-                                    data.price_elements.push({
-                                        text: tc, value: numVal,
-                                        strike: isStrike, color: elColor
-                                    });
+            if (h1 && bodyText) {
+                var h1Text = h1.textContent.trim();
+                var h1Pos = bodyText.indexOf(h1Text);
+                if (h1Pos === -1 && h1Text.length > 20) {
+                    // Try partial match (first 20 chars)
+                    h1Pos = bodyText.indexOf(h1Text.substring(0, 20));
+                }
+                if (h1Pos >= 0) {
+                    // Get text after h1 (next 800 chars should cover prices)
+                    var afterH1 = bodyText.substring(h1Pos + h1Text.length, h1Pos + h1Text.length + 800);
+                    var nearbyMatches = afterH1.match(/₹\\s?[\\d,]+(?:\\.\\d{1,2})?/g);
+                    if (nearbyMatches) {
+                        var seenVals = {};
+                        for (var nm = 0; nm < nearbyMatches.length && data.nearby_prices.length < 5; nm++) {
+                            var nmMatch = nearbyMatches[nm].match(/₹\\s?([\\d,]+(?:\\.\\d{1,2})?)/);
+                            if (nmMatch) {
+                                var nmVal = parseFloat(nmMatch[1].replace(/,/g, ''));
+                                if (nmVal > 0 && !seenVals[nmVal]) {
+                                    seenVals[nmVal] = true;
+                                    data.nearby_prices.push({text: nearbyMatches[nm], value: nmVal});
                                 }
                             }
                         }
-                        if (data.price_elements.length > 0) break;
                     }
-                    priceContainer = priceContainer.parentElement;
+                    data._debug_after_h1 = afterH1.substring(0, 200);
                 }
             }
 
-            // 11. Also collect scoped text for fallback
-            if (h1) {
-                var container = h1.parentElement;
-                for (var i2 = 0; i2 < 6; i2++) {
-                    if (!container) break;
-                    var cText2 = container.innerText || '';
-                    if (/₹/.test(cText2) && cText2.length > 50 && cText2.length < 5000) {
-                        var scopedPrices = cText2.match(/₹\\s?[\\d,]+(?:\\.\\d{1,2})?/g);
-                        data.scoped_prices = scopedPrices || [];
-                        break;
+            // 11. Also try Selenium-style: find all elements with ₹ and check
+            //     proximity to h1 via DOM position (getBoundingClientRect).
+            if (h1 && data.nearby_prices.length === 0) {
+                try {
+                    var h1Rect = h1.getBoundingClientRect();
+                    var allEls = document.querySelectorAll('*');
+                    var seenVals2 = {};
+                    for (var ae = 0; ae < allEls.length; ae++) {
+                        var el = allEls[ae];
+                        if (el.children.length > 0) continue; // only leaf elements
+                        var tc = (el.textContent || '').trim();
+                        if (tc.length >= 2 && tc.length < 20 && /₹|\\d{3,}/.test(tc)) {
+                            var elRect = el.getBoundingClientRect();
+                            // Check if this element is near h1 (within 500px vertically)
+                            if (elRect.top > h1Rect.bottom - 50 && elRect.top < h1Rect.bottom + 500) {
+                                // Walk up to find the full price text (₹ + digits may be in siblings)
+                                var parent = el.parentElement;
+                                var parentText = parent ? (parent.textContent || '').trim() : tc;
+                                if (parentText.length < 30) {
+                                    var pm2 = parentText.match(/₹\\s?([\\d,]+(?:\\.\\d{1,2})?)/);
+                                    if (pm2) {
+                                        var val2 = parseFloat(pm2[1].replace(/,/g, ''));
+                                        if (val2 > 0 && !seenVals2[val2]) {
+                                            seenVals2[val2] = true;
+                                            // Check strikethrough
+                                            var isStrike2 = false;
+                                            var checkEl = el;
+                                            for (var up2 = 0; up2 < 5; up2++) {
+                                                if (!checkEl) break;
+                                                var tag2 = (checkEl.tagName || '').toLowerCase();
+                                                if (tag2 === 'del' || tag2 === 's' || tag2 === 'strike') {
+                                                    isStrike2 = true; break;
+                                                }
+                                                try {
+                                                    var cs2 = window.getComputedStyle(checkEl);
+                                                    if ((cs2.textDecorationLine || cs2.textDecoration || '').indexOf('line-through') !== -1) {
+                                                        isStrike2 = true; break;
+                                                    }
+                                                } catch(ex) {}
+                                                checkEl = checkEl.parentElement;
+                                            }
+                                            var elColor2 = '';
+                                            try { elColor2 = window.getComputedStyle(parent || el).color || ''; } catch(ex2) {}
+                                            data.nearby_prices.push({text: parentText, value: val2, strike: isStrike2, color: elColor2});
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    container = container.parentElement;
-                }
+                } catch(domErr) {}
             }
 
             // 12. Look for "Add" or "Add to cart" button (availability indicator)
@@ -968,75 +964,64 @@ class SwiggyInstamartScraper:
         if not result.image_url:
             result.image_url = meta.get("og:image") or meta.get("twitter:image")
 
-        # ── Price extraction (DOM elements > scoped text > all prices) ──
-        price_elements = js_data.get("price_elements", [])
+        # ── Price extraction ──
+        # Strategy 1 (PRIMARY): nearby_prices — ₹ amounts found right after
+        # the h1 product name in body.innerText (text-position approach).
+        # This avoids picking up delivery fees or cart prices that appear
+        # elsewhere on the page.
+        nearby_prices = js_data.get("nearby_prices", [])
         all_prices = js_data.get("all_prices", [])
 
-        # Debug: show what was found
-        if price_elements:
-            print(f"  [Prices found] {[{p['text']: p['value']} for p in price_elements]}")
+        # Debug output
+        debug_after_h1 = js_data.get("_debug_after_h1", "")
+        if debug_after_h1:
+            print(f"  [Debug] Text after h1: {debug_after_h1[:150]}...")
+        if nearby_prices:
+            print(f"  [Prices near h1] {[{'text': p.get('text',''), 'val': p.get('value',0)} for p in nearby_prices]}")
         elif all_prices:
-            print(f"  [Prices found (page-wide)] {all_prices[:6]}")
+            print(f"  [Prices (page-wide only)] {all_prices[:6]}")
 
-        if not result.price_value and price_elements:
-            # Strategy 1: Use strikethrough detection from DOM elements
-            strike_vals = [p for p in price_elements if p.get("strike") and p.get("value", 0) > 0]
-            non_strike_vals = [p for p in price_elements if not p.get("strike") and p.get("value", 0) > 0]
+        if not result.price_value and nearby_prices:
+            # Use nearby prices — these are right after the product name
+            # Check for strikethrough info if available
+            strike_vals = [p for p in nearby_prices if p.get("strike") and p.get("value", 0) > 0]
+            non_strike_vals = [p for p in nearby_prices if not p.get("strike") and p.get("value", 0) > 0]
 
-            # If no strikethrough detected but we have exactly 2 prices,
-            # the smaller one is selling and larger is MRP (common layout)
-            if not strike_vals and len(non_strike_vals) >= 2:
-                unique = sorted(set(p["value"] for p in non_strike_vals))
-                if len(unique) >= 2:
-                    result.price_value = unique[0]
-                    result.price = f"₹{unique[0]:,.2f}"
-                    result.mrp_value = unique[-1]
-                    result.mrp = f"₹{unique[-1]:,.2f}"
-                    print(f"  [Price logic] 2 prices: selling=₹{unique[0]}, MRP=₹{unique[-1]}")
-                else:
-                    result.price_value = unique[0]
-                    result.price = f"₹{unique[0]:,.2f}"
-            elif strike_vals and non_strike_vals:
-                # MRP = strikethrough price
+            if strike_vals and non_strike_vals:
+                # MRP = strikethrough, selling = non-strikethrough
                 mrp_val = max(p["value"] for p in strike_vals)
                 selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= mrp_val]
                 selling_val = max(selling_candidates) if selling_candidates else non_strike_vals[0]["value"]
-
                 result.price_value = selling_val
                 result.price = f"₹{selling_val:,.2f}"
                 result.mrp_value = mrp_val
                 result.mrp = f"₹{mrp_val:,.2f}"
                 print(f"  [Price logic] strike: selling=₹{selling_val}, MRP=₹{mrp_val}")
-            elif non_strike_vals:
-                result.price_value = non_strike_vals[0]["value"]
-                result.price = f"₹{non_strike_vals[0]['value']:,.2f}"
-            elif strike_vals:
-                result.mrp_value = strike_vals[0]["value"]
-                result.mrp = f"₹{strike_vals[0]['value']:,.2f}"
+            else:
+                # No strikethrough info — use positional order
+                # For text-position results: first ₹ = selling price, second = MRP
+                vals = []
+                for p in nearby_prices:
+                    v = p.get("value", 0)
+                    if v > 0:
+                        vals.append(v)
+                if len(vals) >= 2:
+                    # First price encountered is selling price (bold, prominent)
+                    # Second price is MRP (strikethrough, gray)
+                    # Selling is always <= MRP
+                    selling = min(vals[0], vals[1])
+                    mrp = max(vals[0], vals[1])
+                    result.price_value = selling
+                    result.price = f"₹{selling:,.2f}"
+                    result.mrp_value = mrp
+                    result.mrp = f"₹{mrp:,.2f}"
+                    print(f"  [Price logic] nearby: selling=₹{selling}, MRP=₹{mrp}")
+                elif vals:
+                    result.price_value = vals[0]
+                    result.price = f"₹{vals[0]:,.2f}"
 
-        # Strategy 2: Fallback to scoped text prices (near h1)
-        if not result.price_value:
-            scoped_prices = js_data.get("scoped_prices", [])
-            if scoped_prices:
-                parsed = []
-                seen_vals = set()
-                for p_text in scoped_prices:
-                    val = self._parse_price_value(p_text)
-                    if val and val > 0 and val not in seen_vals:
-                        seen_vals.add(val)
-                        parsed.append(val)
-                if len(parsed) >= 2:
-                    parsed.sort()
-                    # Smaller = selling, larger = MRP
-                    result.price_value = parsed[0]
-                    result.price = f"₹{parsed[0]:,.2f}"
-                    result.mrp_value = parsed[-1]
-                    result.mrp = f"₹{parsed[-1]:,.2f}"
-                elif parsed:
-                    result.price_value = parsed[0]
-                    result.price = f"₹{parsed[0]:,.2f}"
-
-        # Strategy 3: Last resort — all prices from the full page
+        # Strategy 2: Last resort — all prices from the full page
+        # Only if nearby_prices found nothing
         if not result.price_value and all_prices:
             parsed = []
             seen_vals = set()
@@ -1046,6 +1031,8 @@ class SwiggyInstamartScraper:
                     seen_vals.add(val)
                     parsed.append(val)
             if parsed:
+                # Sort and pick. With page-wide prices, smaller is likely
+                # selling and larger is MRP — but this is less reliable
                 parsed.sort()
                 if len(parsed) >= 2:
                     result.price_value = parsed[0]
