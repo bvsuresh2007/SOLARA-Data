@@ -966,67 +966,69 @@ class SwiggyInstamartScraper:
             result.image_url = meta.get("og:image") or meta.get("twitter:image")
 
         # ── Price extraction ──
-        # IMPORTANT: nearby_prices (from rendered page near h1) ALWAYS takes
-        # priority over JSON-LD/API prices, which often contain wrong values
-        # like delivery fees. We override any previously-set price.
+        # The rendered page prices are MORE reliable than JSON-LD/API prices
+        # (which often return delivery fees like ₹49 instead of product price).
+        # We collect prices from multiple sources and pick the best.
         nearby_prices = js_data.get("nearby_prices", [])
         all_prices = js_data.get("all_prices", [])
+        meta = js_data.get("meta", {})
 
         # Debug output
         debug_after_h1 = js_data.get("_debug_after_h1", "")
+        print(f"  [Debug] nearby_prices: {nearby_prices}")
+        print(f"  [Debug] all_prices: {all_prices[:8]}")
         if debug_after_h1:
-            print(f"  [Debug] Text after h1: {debug_after_h1[:150]}...")
-        if nearby_prices:
-            print(f"  [Prices near h1] {[{'text': p.get('text',''), 'val': p.get('value',0)} for p in nearby_prices]}")
-        if all_prices:
-            print(f"  [All prices on page] {all_prices[:8]}")
+            print(f"  [Debug] Text after h1: {debug_after_h1[:200]}")
 
-        # Strategy 1 (PRIMARY): nearby_prices from rendered page near h1
-        # These OVERRIDE any price set by JSON-LD or API (which may be wrong)
+        # Save the JSON-LD/API price to compare later
+        json_ld_price = result.price_value
+
+        # Source A: og:description — contains "at Rs. 3199" which is the real price
+        desc_price = None
+        desc = meta.get("og:description") or meta.get("description") or ""
+        desc_price_match = re.search(r'(?:Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)', desc)
+        if desc_price_match:
+            desc_price = float(desc_price_match.group(1).replace(",", ""))
+            print(f"  [Debug] Price from og:description: ₹{desc_price}")
+
+        # Source B: nearby_prices (text near h1 in body innerText)
+        # Source C: all_prices (all ₹ amounts on the page)
+
+        # Decision logic: pick the best selling price
+        best_selling = None
+        best_mrp = None
+
+        # Priority 1: nearby_prices (most reliable — near product name)
         if nearby_prices:
             strike_vals = [p for p in nearby_prices if p.get("strike") and p.get("value", 0) > 0]
             non_strike_vals = [p for p in nearby_prices if not p.get("strike") and p.get("value", 0) > 0]
-
             if strike_vals and non_strike_vals:
-                mrp_val = max(p["value"] for p in strike_vals)
-                selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= mrp_val]
-                selling_val = max(selling_candidates) if selling_candidates else non_strike_vals[0]["value"]
-                result.price_value = selling_val
-                result.price = f"₹{selling_val:,.2f}"
-                result.mrp_value = mrp_val
-                result.mrp = f"₹{mrp_val:,.2f}"
-                print(f"  [Price logic] strike: selling=₹{selling_val}, MRP=₹{mrp_val}")
+                best_mrp = max(p["value"] for p in strike_vals)
+                selling_candidates = [p["value"] for p in non_strike_vals if p["value"] <= best_mrp]
+                best_selling = max(selling_candidates) if selling_candidates else non_strike_vals[0]["value"]
             else:
-                vals = []
-                for p in nearby_prices:
-                    v = p.get("value", 0)
-                    if v > 0:
-                        vals.append(v)
+                vals = [p.get("value", 0) for p in nearby_prices if p.get("value", 0) > 0]
                 if len(vals) >= 2:
-                    selling = min(vals[0], vals[1])
-                    mrp = max(vals[0], vals[1])
-                    result.price_value = selling
-                    result.price = f"₹{selling:,.2f}"
-                    result.mrp_value = mrp
-                    result.mrp = f"₹{mrp:,.2f}"
-                    print(f"  [Price logic] nearby: selling=₹{selling}, MRP=₹{mrp}")
+                    best_selling = min(vals[0], vals[1])
+                    best_mrp = max(vals[0], vals[1])
                 elif vals:
-                    result.price_value = vals[0]
-                    result.price = f"₹{vals[0]:,.2f}"
+                    best_selling = vals[0]
+            if best_selling:
+                print(f"  [Price source] nearby_prices: selling=₹{best_selling}, mrp=₹{best_mrp}")
 
-        # Strategy 2: Extract price from og:description ("online at Rs. 3199")
-        if not result.price_value:
-            desc = meta.get("og:description") or meta.get("description") or ""
-            desc_price_match = re.search(r'(?:Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)', desc)
-            if desc_price_match:
-                desc_price = float(desc_price_match.group(1).replace(",", ""))
-                if desc_price > 0:
-                    result.price_value = desc_price
-                    result.price = f"₹{desc_price:,.2f}"
-                    print(f"  [Price logic] from description: ₹{desc_price}")
+        # Priority 2: og:description price (very reliable for selling price)
+        if not best_selling and desc_price and desc_price > 0:
+            best_selling = desc_price
+            # Find MRP from all_prices: any unique price > selling price
+            for p_text in all_prices:
+                val = self._parse_price_value(p_text)
+                if val and val > best_selling:
+                    best_mrp = val
+                    break
+            print(f"  [Price source] og:description: selling=₹{best_selling}, mrp=₹{best_mrp}")
 
-        # Strategy 3: Last resort — all prices from the full page
-        if not result.price_value and all_prices:
+        # Priority 3: all_prices with smart filtering
+        if not best_selling and all_prices:
             parsed = []
             seen_vals = set()
             for p_text in all_prices:
@@ -1036,14 +1038,42 @@ class SwiggyInstamartScraper:
                     parsed.append(val)
             if parsed:
                 parsed.sort()
-                if len(parsed) >= 2:
-                    result.price_value = parsed[0]
-                    result.price = f"₹{parsed[0]:,.2f}"
-                    result.mrp_value = parsed[-1]
-                    result.mrp = f"₹{parsed[-1]:,.2f}"
-                else:
-                    result.price_value = parsed[0]
-                    result.price = f"₹{parsed[0]:,.2f}"
+                # If we have the JSON-LD price and it's suspiciously small,
+                # skip it and use larger prices
+                if json_ld_price and len(parsed) >= 3:
+                    # Skip the smallest price (likely delivery fee)
+                    bigger = [v for v in parsed if v > json_ld_price * 5]
+                    if bigger:
+                        best_selling = bigger[0]
+                        if len(bigger) >= 2:
+                            best_mrp = bigger[-1]
+                if not best_selling:
+                    if len(parsed) >= 2:
+                        best_selling = parsed[0]
+                        best_mrp = parsed[-1]
+                    else:
+                        best_selling = parsed[0]
+            if best_selling:
+                print(f"  [Price source] all_prices: selling=₹{best_selling}, mrp=₹{best_mrp}")
+
+        # Priority 4: JSON-LD/API price (least reliable for Swiggy)
+        if not best_selling and json_ld_price:
+            best_selling = json_ld_price
+            print(f"  [Price source] JSON-LD: selling=₹{best_selling}")
+
+        # Apply the best prices — clear old JSON-LD values first
+        # so the discount calculation doesn't use wrong ₹49
+        if best_selling and best_selling > 0:
+            result.price_value = best_selling
+            result.price = f"₹{best_selling:,.2f}"
+            result.mrp_value = None
+            result.mrp = None
+            result.discount = None
+            print(f"  [Price FINAL] selling=₹{best_selling}")
+        if best_mrp and best_mrp > 0:
+            result.mrp_value = best_mrp
+            result.mrp = f"₹{best_mrp:,.2f}"
+            print(f"  [Price FINAL] mrp=₹{best_mrp}")
 
         # ── Discount ──
         if not result.discount:
@@ -1126,21 +1156,17 @@ class SwiggyInstamartScraper:
 
         offers = ld_data.get("offers")
         if isinstance(offers, dict):
-            price = offers.get("price")
-            if price:
-                result.price_value = float(price)
-                result.price = f"₹{result.price_value:,.2f}"
+            # NOTE: Do NOT set price from JSON-LD offers — Swiggy's JSON-LD
+            # often has wrong price (e.g. delivery fee ₹49 instead of product
+            # price ₹3199). Prices are extracted from the rendered page instead.
             availability = offers.get("availability", "")
             if "InStock" in availability:
                 result.availability = "In Stock"
             elif "OutOfStock" in availability:
                 result.availability = "Out of Stock"
         elif isinstance(offers, list) and offers:
-            offer = offers[0]
-            price = offer.get("price")
-            if price:
-                result.price_value = float(price)
-                result.price = f"₹{result.price_value:,.2f}"
+            # Skip price from offers list (same unreliable data)
+            pass
 
         rating_data = ld_data.get("aggregateRating")
         if rating_data:
