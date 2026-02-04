@@ -82,7 +82,7 @@ def load_urls_from_file(filepath: str) -> list[str]:
 
 
 def save_to_csv(results: list[SwiggyProductData], filepath: str,
-                pincode: str = None) -> None:
+                pincode: str = None, quiet: bool = False) -> None:
     """Save results to CSV file with UTF-8 BOM for Excel compatibility."""
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
@@ -106,7 +106,8 @@ def save_to_csv(results: list[SwiggyProductData], filepath: str,
                 r.url,
                 timestamp
             ])
-    print(f"\nResults saved to: {filepath}")
+    if not quiet:
+        print(f"\nResults saved to: {filepath}")
 
 
 def main():
@@ -191,9 +192,20 @@ def main():
     try:
         for i, url in enumerate(urls, 1):
             print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
-            result = scraper.scrape(url)
+            try:
+                result = scraper.scrape(url)
+            except KeyboardInterrupt:
+                print("\n\n  Interrupted by user. Saving results collected so far...")
+                break
+            except Exception as e:
+                print(f"  ERROR: {e}")
+                result = SwiggyProductData(url=url, error=str(e))
             results.append(result)
             print_result(result, i, len(urls))
+
+            # Save partial results after each URL (so nothing is lost on crash)
+            if args.output and results:
+                save_to_csv(results, args.output, pincode=args.pincode, quiet=True)
 
             if i < len(urls):
                 import time
@@ -203,22 +215,25 @@ def main():
                 print(f"  Waiting {wait:.1f}s before next request...")
                 time.sleep(wait)
 
-        # Save CSV
-        if args.output:
+    except KeyboardInterrupt:
+        print("\n\n  Interrupted by user.")
+
+    finally:
+        # Always save results (even partial) and close browser
+        if args.output and results:
             save_to_csv(results, args.output, pincode=args.pincode)
 
-        # Summary
         successful = sum(1 for r in results if not r.error)
         print(f"\n{'='*60}")
         print(f"DONE: {successful}/{len(results)} products scraped successfully")
+        if len(results) < len(urls):
+            print(f"  ({len(urls) - len(results)} URLs were not attempted)")
         print(f"{'='*60}")
 
-        # JSON output if no CSV
-        if not args.output:
+        if not args.output and results:
             print("\nJSON Output:")
             print(json.dumps([asdict(r) for r in results], indent=2))
 
-    finally:
         scraper.close()
 
 
