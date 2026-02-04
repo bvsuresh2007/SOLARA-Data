@@ -230,6 +230,8 @@ def main():
                 result = scraper.scrape(url)
             except KeyboardInterrupt:
                 print("\n\n  Interrupted by user. Saving results collected so far...")
+                if use_browser:
+                    scraper.close()
                 break
             except Exception as e:
                 print(f"  ERROR: {e}")

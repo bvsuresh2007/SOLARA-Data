@@ -1441,98 +1441,112 @@ class SwiggyInstamartScraper:
                 self._set_pincode_browser()
 
             for attempt in range(max_attempts):
-                if attempt > 0:
-                    backoff = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
-                    jitter = random.uniform(0, 3)
-                    wait_time = backoff + jitter
-                    print(f"  Retrying (attempt {attempt + 1}/{max_attempts}) after {wait_time:.0f}s backoff...")
-                    time.sleep(wait_time)
+                try:
+                    if attempt > 0:
+                        backoff = retry_delays[min(attempt - 1, len(retry_delays) - 1)]
+                        jitter = random.uniform(0, 3)
+                        wait_time = backoff + jitter
+                        print(f"  Retrying (attempt {attempt + 1}/{max_attempts}) after {wait_time:.0f}s backoff...")
+                        time.sleep(wait_time)
 
-                # Clear previous state
-                if attempt > 0:
-                    self.driver.get("about:blank")
-                    time.sleep(1)
-                    # Clear result for retry
-                    for attr in ["name", "brand", "price", "price_value", "mrp",
-                                 "mrp_value", "discount", "quantity", "description",
-                                 "category", "image_url", "availability", "rating",
-                                 "rating_count", "error"]:
-                        setattr(result, attr, None)
-                    result.highlights = []
+                    # Clear previous state
+                    if attempt > 0:
+                        self.driver.get("about:blank")
+                        time.sleep(1)
+                        # Clear result for retry
+                        for attr in ["name", "brand", "price", "price_value", "mrp",
+                                     "mrp_value", "discount", "quantity", "description",
+                                     "category", "image_url", "availability", "rating",
+                                     "rating_count", "error"]:
+                            setattr(result, attr, None)
+                        result.highlights = []
 
-                # Load the page
-                self.driver.get(url)
+                    # Load the page
+                    self.driver.get(url)
 
-                # Wait longer — Swiggy SPA needs time to render
-                rendered = self._wait_for_page_render(timeout=timeouts[attempt])
-                if not rendered:
-                    # Extra wait for slow-loading SPAs
-                    time.sleep(5)
+                    # Wait longer — Swiggy SPA needs time to render
+                    rendered = self._wait_for_page_render(timeout=timeouts[attempt])
+                    if not rendered:
+                        # Extra wait for slow-loading SPAs
+                        time.sleep(5)
 
-                # Check for Swiggy error/rate-limit page
-                if self._is_error_page():
-                    print("  [!] Swiggy error page detected (rate-limited). Will retry with longer backoff.")
-                    if attempt < max_attempts - 1:
+                    # Check for Swiggy error/rate-limit page
+                    if self._is_error_page():
+                        print("  [!] Swiggy error page detected (rate-limited). Will retry with longer backoff.")
+                        if attempt < max_attempts - 1:
+                            continue
+                        else:
+                            result.error = "Swiggy rate-limited: 'Something went wrong' after all retries"
+                            return
+
+                    # Scroll to trigger lazy content
+                    self.driver.execute_script("window.scrollTo(0, 300);")
+                    time.sleep(2)
+                    self._dismiss_popups()
+
+                    # Print diagnostic info (always, to help debug)
+                    if attempt == 0:
+                        self._print_page_diagnostic()
+
+                    # Save debug files
+                    if self.debug and attempt == 0:
+                        try:
+                            page_source = self.driver.page_source
+                            debug_file = f"debug_swiggy_{result.product_id or 'page'}.html"
+                            with open(debug_file, "w", encoding="utf-8") as f:
+                                f.write(page_source)
+                            print(f"  Debug HTML saved to: {debug_file}")
+                        except Exception:
+                            pass
+
+                    # Strategy 1: Capture API responses from network logs
+                    api_products = self._capture_api_responses()
+                    if api_products:
+                        best = api_products[0]
+                        if self._extract_from_api_json(best, result):
+                            print("  [Source: Network API]")
+                            # Don't return — continue to JS extraction which uses
+                            # nearby_prices to override potentially wrong API prices
+
+                    # Strategy 2: JavaScript-based extraction (always run —
+                    # nearby_prices can override wrong prices from API/JSON-LD)
+                    self._extract_via_javascript(result)
+
+                    # Filter out bad names (generic page titles like "Instamart")
+                    if self._is_bad_name(result.name):
+                        print(f"  [!] Bad name '{result.name}' — page didn't load product. Retrying...")
+                        result.name = None
+                        if attempt < max_attempts - 1:
+                            continue
+
+                    # If we got a name but no price, try once more with a longer wait
+                    if result.name and not result.price_value and attempt < max_attempts - 1:
                         continue
-                    else:
-                        result.error = "Swiggy rate-limited: 'Something went wrong' after all retries"
+
+                    # If we got a name, we have something — return it
+                    if result.name:
                         return
 
-                # Scroll to trigger lazy content
-                self.driver.execute_script("window.scrollTo(0, 300);")
-                time.sleep(2)
-                self._dismiss_popups()
+                except KeyboardInterrupt:
+                    raise  # Let KeyboardInterrupt propagate to outer handler
+                except Exception as attempt_err:
+                    print(f"  [!] Attempt {attempt + 1} error: {attempt_err}")
+                    if attempt >= max_attempts - 1:
+                        result.error = f"All {max_attempts} attempts failed. Last error: {attempt_err}"
+                        return
 
-                # Print diagnostic info (always, to help debug)
-                if attempt == 0:
-                    self._print_page_diagnostic()
+            # All attempts failed without error but no data extracted
+            if not result.error:
+                result.error = (
+                    "Could not extract product data after all attempts - "
+                    "page may not have loaded or URL may be invalid. "
+                    "Try: pip install undetected-chromedriver  OR  --no-headless"
+                )
 
-                # Save debug files
-                if self.debug and attempt == 0:
-                    try:
-                        page_source = self.driver.page_source
-                        debug_file = f"debug_swiggy_{result.product_id or 'page'}.html"
-                        with open(debug_file, "w", encoding="utf-8") as f:
-                            f.write(page_source)
-                        print(f"  Debug HTML saved to: {debug_file}")
-                    except Exception:
-                        pass
-
-                # Strategy 1: Capture API responses from network logs
-                api_products = self._capture_api_responses()
-                if api_products:
-                    best = api_products[0]
-                    if self._extract_from_api_json(best, result):
-                        print("  [Source: Network API]")
-                        # Don't return — continue to JS extraction which uses
-                        # nearby_prices to override potentially wrong API prices
-
-                # Strategy 2: JavaScript-based extraction (always run —
-                # nearby_prices can override wrong prices from API/JSON-LD)
-                self._extract_via_javascript(result)
-
-                # Filter out bad names (generic page titles like "Instamart")
-                if self._is_bad_name(result.name):
-                    print(f"  [!] Bad name '{result.name}' — page didn't load product. Retrying...")
-                    result.name = None
-                    if attempt < max_attempts - 1:
-                        continue
-
-                # If we got a name but no price, try once more with a longer wait
-                if result.name and not result.price_value and attempt < max_attempts - 1:
-                    continue
-
-                # If we got a name, we have something — return it
-                if result.name:
-                    return
-
-            # All attempts failed
-            result.error = (
-                "Could not extract product data after all attempts - "
-                "page may not have loaded or URL may be invalid. "
-                "Try: pip install undetected-chromedriver  OR  --no-headless"
-            )
-
+        except KeyboardInterrupt:
+            print("  Interrupted during scraping — recording partial result.")
+            if not result.error:
+                result.error = "Interrupted by user (Ctrl+C)"
         except Exception as e:
             result.error = f"Browser scraping failed: {str(e)}"
 
