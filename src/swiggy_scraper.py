@@ -555,8 +555,127 @@ class SwiggyInstamartScraper:
 
         return None
 
+    def _get_product_container(self):
+        """Find the main product detail container on the page.
+
+        Walks up from the h1 (product name) to find the enclosing section
+        so that price/MRP extraction is scoped to the product — not the
+        whole page (which may contain delivery fees, related products, etc.).
+        """
+        # Try to find the product name element first
+        name_elem = None
+        for sel in ["h1", "[data-testid='product-title']",
+                     "[data-testid='pdp-product-name']",
+                     "[data-testid='item-name']"]:
+            try:
+                elem = self.driver.find_element(By.CSS_SELECTOR, sel)
+                if elem.is_displayed() and elem.text.strip():
+                    name_elem = elem
+                    break
+            except Exception:
+                continue
+
+        if not name_elem:
+            return None
+
+        # Walk up the DOM to find a container that also has price info
+        container = name_elem
+        for _ in range(6):
+            try:
+                container = container.find_element(By.XPATH, "..")
+                text = container.text or ""
+                # A good container has both the product name AND a ₹ price
+                if "₹" in text and len(text) > 50:
+                    return container
+            except Exception:
+                break
+
+        return None
+
+    def _extract_prices_from_container(self, container, result: SwiggyProductData) -> None:
+        """Extract selling price and MRP from the product container text.
+
+        Finds all ₹ amounts in the container, then determines which is
+        the selling price and which is the MRP based on:
+        - Strikethrough elements (del/s) → MRP
+        - Smaller value when two prices exist → selling price
+        - Larger value → MRP
+        - If only one price + discount %, calculates the other
+        """
+        if container:
+            # Strategy 1: Look for strikethrough (MRP) within the container
+            for sel in ["del", "s", "[style*='line-through']"]:
+                try:
+                    elems = container.find_elements(By.CSS_SELECTOR, sel)
+                    for elem in elems:
+                        text = elem.text.strip()
+                        val = self._parse_price_value(text)
+                        if val and val > 0:
+                            result.mrp = text if "₹" in text else f"₹{val:,.0f}"
+                            result.mrp_value = val
+                            break
+                    if result.mrp_value:
+                        break
+                except Exception:
+                    continue
+
+            # Strategy 2: Collect ALL visible ₹ amounts from the container text
+            try:
+                container_text = container.text or ""
+                all_prices = re.findall(r'₹\s?([\d,]+(?:\.\d{1,2})?)', container_text)
+                # Parse to floats and deduplicate
+                price_values = []
+                seen = set()
+                for p in all_prices:
+                    val = self._parse_price_value(f"₹{p}")
+                    if val and val > 0 and val not in seen:
+                        seen.add(val)
+                        price_values.append(val)
+
+                if len(price_values) >= 2:
+                    # Two distinct prices: smaller = selling, larger = MRP
+                    price_values.sort()
+                    selling = price_values[0]
+                    mrp = price_values[-1]
+
+                    if not result.price_value:
+                        result.price_value = selling
+                        result.price = f"₹{selling:,.0f}"
+                    if not result.mrp_value:
+                        result.mrp_value = mrp
+                        result.mrp = f"₹{mrp:,.0f}"
+
+                elif len(price_values) == 1:
+                    # Single price — it's the selling price
+                    if not result.price_value:
+                        result.price_value = price_values[0]
+                        result.price = f"₹{price_values[0]:,.0f}"
+
+            except Exception:
+                pass
+
+        # Strategy 3: If we have discount % and one price, calculate the other
+        # (works even without a container)
+        if result.discount and (result.price_value or result.mrp_value):
+            pct_match = re.search(r'(\d+)\s*%', result.discount)
+            if pct_match:
+                pct = float(pct_match.group(1)) / 100.0
+                if result.price_value and not result.mrp_value and pct > 0 and pct < 1:
+                    mrp = result.price_value / (1 - pct)
+                    result.mrp_value = round(mrp, 2)
+                    result.mrp = f"₹{result.mrp_value:,.0f}"
+                elif result.mrp_value and not result.price_value and pct > 0 and pct < 1:
+                    selling = result.mrp_value * (1 - pct)
+                    result.price_value = round(selling, 2)
+                    result.price = f"₹{result.price_value:,.0f}"
+
     def _extract_from_dom(self, result: SwiggyProductData) -> None:
-        """Extract product data by parsing the rendered DOM."""
+        """Extract product data by parsing the rendered DOM.
+
+        Uses a scoped approach: first finds the product container (via h1),
+        then extracts prices only from within that container to avoid
+        picking up delivery fees, related products, etc.
+        """
         # Product name
         name_selectors = [
             "h1",
@@ -578,96 +697,83 @@ class SwiggyInstamartScraper:
             except Exception:
                 continue
 
-        # Price
+        # Find the product container to scope price extraction
+        product_container = self._get_product_container()
+
+        # Price — try specific selectors first (page-wide is OK for data-testid)
         price_selectors = [
             "[data-testid='product-price']",
             "[data-testid='selling-price']",
             "[data-testid='item-offer-price']",
             "[data-testid='pdp-product-price']",
-            "[class*='offer-price']",
-            "[class*='selling-price']",
-            "[class*='discountedPrice']",
-            ".selling-price",
-            ".product-price",
         ]
         for selector in price_selectors:
             try:
                 elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                text = elem.text.strip()
-                if text and "₹" in text:
-                    result.price = text
-                    result.price_value = self._parse_price_value(text)
-                    break
+                if elem.is_displayed():
+                    text = elem.text.strip()
+                    if text and "₹" in text:
+                        result.price = text
+                        result.price_value = self._parse_price_value(text)
+                        break
             except Exception:
                 continue
 
-        # If price not found, search for ₹ patterns in the page
-        if not result.price:
+        # MRP — try specific selectors first
+        mrp_selectors = [
+            "[data-testid='product-mrp']",
+            "[data-testid='item-mrp-price']",
+            "[data-testid='mrp']",
+        ]
+        for selector in mrp_selectors:
             try:
-                page_text = self.driver.find_element(By.TAG_NAME, "body").text
-                prices = re.findall(r'₹\s?([\d,]+(?:\.\d{1,2})?)', page_text)
-                if prices:
-                    result.price = f"₹{prices[0]}"
-                    result.price_value = self._parse_price_value(result.price)
-                    if len(prices) > 1:
-                        mrp_val = self._parse_price_value(f"₹{prices[1]}")
-                        if mrp_val and result.price_value and mrp_val > result.price_value:
-                            result.mrp = f"₹{prices[1]}"
-                            result.mrp_value = mrp_val
-            except Exception:
-                pass
-
-        # MRP
-        if not result.mrp:
-            mrp_selectors = [
-                "[data-testid='product-mrp']",
-                "[data-testid='item-mrp-price']",
-                "[data-testid='mrp']",
-                "[class*='mrp-price']",
-                "[class*='original-price']",
-                "[class*='strikePrice']",
-                ".mrp",
-                ".original-price",
-                "del", "s",
-            ]
-            for selector in mrp_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                if elem.is_displayed():
                     text = elem.text.strip()
                     if text and "₹" in text:
                         result.mrp = text
                         result.mrp_value = self._parse_price_value(text)
                         break
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
-        # Discount
-        if not result.discount:
-            discount_selectors = [
-                "[data-testid='discount']",
-                "[data-testid='discount-percentage']",
-                "[data-testid='item-offer-label-discount-text']",
-                "[class*='discount']",
-                "[class*='Discount']",
-                "[class*='offer-label']",
-                ".discount",
-                ".discount-tag",
-            ]
-            for selector in discount_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+        # Discount — try specific selectors
+        discount_selectors = [
+            "[data-testid='discount']",
+            "[data-testid='discount-percentage']",
+            "[data-testid='item-offer-label-discount-text']",
+        ]
+        for selector in discount_selectors:
+            try:
+                elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                if elem.is_displayed():
                     text = elem.text.strip()
                     if text and ("%" in text or "OFF" in text.upper()):
                         result.discount = text
                         break
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
-        # Calculate discount if we have both prices but no discount
+        # Fallback: extract prices from the SCOPED product container
+        if not result.price_value or not result.mrp_value:
+            self._extract_prices_from_container(product_container, result)
+
+        # If still no discount, try broader selectors within container
+        if not result.discount:
+            search_in = product_container or self.driver
+            try:
+                container_text = search_in.text or ""
+                disc_match = re.search(r'(\d+%\s*OFF)', container_text, re.IGNORECASE)
+                if disc_match:
+                    result.discount = disc_match.group(1)
+            except Exception:
+                pass
+
+        # Calculate discount if we have both prices but no discount text
         if not result.discount and result.price_value and result.mrp_value:
             if result.mrp_value > result.price_value:
                 pct = ((result.mrp_value - result.price_value) / result.mrp_value) * 100
-                result.discount = f"{pct:.0f}% off"
+                result.discount = f"{pct:.0f}% OFF"
 
         # Brand
         if not result.brand:
@@ -779,9 +885,8 @@ class SwiggyInstamartScraper:
                 except Exception:
                     continue
 
-        # Availability — check for positive "Add" button first, then sold-out
+        # Availability — check for visible "Add" button first, then sold-out
         if not result.availability:
-            # Positive signal: "Add to cart" / "Add" button means it's in stock
             add_btn_selectors = [
                 "button[data-testid*='add' i]",
                 "button[class*='add' i]",
@@ -801,7 +906,6 @@ class SwiggyInstamartScraper:
                 except Exception:
                     continue
 
-            # Only check sold-out if no positive signal found
             if not result.availability:
                 sold_out_selectors = [
                     "[data-testid='sold-out']",
@@ -819,7 +923,6 @@ class SwiggyInstamartScraper:
                     except Exception:
                         continue
 
-            # Default: if we got a name and price, assume in stock
             if not result.availability and result.name:
                 result.availability = "In Stock"
 
