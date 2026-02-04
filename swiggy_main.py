@@ -3,298 +3,215 @@
 Swiggy Instamart Product Scraper CLI
 
 Usage:
-    python swiggy_main.py                                    # Scrape all categories
-    python swiggy_main.py -s milk bread eggs                 # Search specific items
-    python swiggy_main.py -p 560103 -o results.csv           # Custom pincode + CSV
-    python swiggy_main.py -s rice --slack                    # Search + Slack notify
-    python swiggy_main.py --no-headless -s milk --debug      # Visible browser + debug
+    python swiggy_main.py <URL>                                          # Single product
+    python swiggy_main.py -p 560103 -o results.csv <URL>                 # With pincode + CSV
+    python swiggy_main.py -p 560103 -f urls.txt -o results.csv           # Bulk from file
+    python swiggy_main.py --no-headless <URL>                            # Visible browser
+    python swiggy_main.py --no-browser -f urls.txt -o results.csv        # Requests mode (faster)
 """
 
 import sys
 import csv
 import json
 import argparse
-from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
 
-import requests as req
-
-from src.swiggy_scraper import SwiggyInstamartScraper, SwiggyProduct, PINCODE_COORDS
-from src.slack_notifier import save_webhook, load_webhook
+from src.swiggy_scraper import SwiggyInstamartScraper, SwiggyProductData
 
 
-def print_result(product: SwiggyProduct, index: int = None, total: int = None) -> None:
-    """Print a single product in a compact formatted line."""
+def print_result(data: SwiggyProductData, index: int = None, total: int = None) -> None:
+    """Print product data in a formatted way."""
     progress = f"[{index}/{total}] " if index and total else ""
-    name = (product.name[:45] + "...") if len(product.name) > 48 else product.name
-    print(f"{progress}{name}", end="")
+    print(f"\n{progress}" + "=" * 60)
 
-    if product.error:
-        print(f"  ERROR: {product.error}")
+    if data.error:
+        print(f"URL:   {data.url}")
+        print(f"ERROR: {data.error}")
     else:
-        price_str = f"₹{product.price:.0f}" if product.price else "N/A"
-        mrp_str = f"₹{product.mrp:.0f}" if product.mrp else ""
-        discount_str = product.discount or ""
-        qty_str = product.quantity or ""
-        avail_str = "" if product.available else " [OUT OF STOCK]"
+        print(f"Name:     {data.name or 'N/A'}")
+        if data.brand:
+            print(f"Brand:    {data.brand}")
+        print(f"Price:    {data.price or 'N/A'}")
+        if data.mrp:
+            print(f"MRP:      {data.mrp}")
+        if data.discount:
+            print(f"Discount: {data.discount}")
+        if data.quantity:
+            print(f"Quantity: {data.quantity}")
+        if data.category:
+            print(f"Category: {data.category}")
+        if data.availability:
+            print(f"Status:   {data.availability}")
+        if data.rating:
+            rating_str = f"{data.rating}"
+            if data.rating_count:
+                rating_str += f" ({data.rating_count} ratings)"
+            print(f"Rating:   {rating_str}")
+        if data.description:
+            desc = data.description[:120] + "..." if len(data.description) > 120 else data.description
+            print(f"Desc:     {desc}")
+        if data.highlights:
+            print(f"Highlights:")
+            for h in data.highlights[:5]:
+                print(f"  - {h}")
+        if data.image_url:
+            print(f"Image:    {data.image_url[:80]}...")
 
-        print(f"  {price_str}", end="")
-        if mrp_str and product.mrp != product.price:
-            print(f" (MRP: {mrp_str})", end="")
-        if discount_str:
-            print(f" [{discount_str}]", end="")
-        if qty_str:
-            print(f" - {qty_str}", end="")
-        print(avail_str)
+    print("=" * 60)
 
 
-def print_category_report(results: list[SwiggyProduct]) -> None:
-    """Print a category-level summary report."""
-    cat_groups = defaultdict(list)
-    for r in results:
-        if r.error:
-            cat_groups["[ERROR]"].append(r)
+def load_urls_from_file(filepath: str) -> list[str]:
+    """Load URLs from a text file (one per line) or CSV."""
+    urls = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        if filepath.endswith(".csv"):
+            reader = csv.reader(f)
+            for row in reader:
+                if row and row[0].strip():
+                    url = row[0].strip()
+                    if url.lower() != "url" and url.startswith("http"):
+                        urls.append(url)
         else:
-            cat_groups[r.category or "[UNCATEGORIZED]"].append(r)
-
-    print(f"\n{'#' * 60}")
-    print(f"  CATEGORY REPORT")
-    print(f"{'#' * 60}")
-
-    for cat, items in sorted(cat_groups.items()):
-        prices = [r.price for r in items if r.price]
-        in_stock = sum(1 for r in items if r.available)
-
-        print(f"\n  Category:  {cat}")
-        print(f"  Products:  {len(items)} ({in_stock} in stock)")
-
-        if prices:
-            avg_price = sum(prices) / len(prices)
-            min_price = min(prices)
-            max_price = max(prices)
-            print(f"  Prices:    Avg ₹{avg_price:,.0f} | Min ₹{min_price:,.0f} | Max ₹{max_price:,.0f}")
-
-    print(f"\n{'#' * 60}")
+            for line in f:
+                url = line.strip()
+                if url and not url.startswith("#") and url.startswith("http"):
+                    urls.append(url)
+    return urls
 
 
-def save_to_csv(results: list[SwiggyProduct], filepath: str) -> None:
+def save_to_csv(results: list[SwiggyProductData], filepath: str,
+                pincode: str = None) -> None:
     """Save results to CSV file with UTF-8 BOM for Excel compatibility."""
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "Name", "Brand", "Price", "MRP", "Discount",
-            "Quantity", "Category", "Available",
-            "Image_URL", "Delivery_Time", "Scraped_At"
+            "Product_ID", "Name", "MRP", "Selling_Price", "Discount",
+            "Brand", "Quantity", "Availability",
+            "Pincode", "URL", "Scraped_At"
         ])
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for r in results:
             writer.writerow([
-                r.name,
-                r.brand or "",
+                r.product_id or "",
+                r.name or "",
+                r.mrp or r.price or "",
                 r.price or "",
-                r.mrp or "",
                 r.discount or "",
+                r.brand or "",
                 r.quantity or "",
-                r.category or "",
-                "Yes" if r.available else "No",
-                r.image_url or "",
-                r.delivery_time or "",
-                timestamp,
+                r.availability or "",
+                pincode or "",
+                r.url,
+                timestamp
             ])
     print(f"\nResults saved to: {filepath}")
-
-
-def format_swiggy_slack_message(results: list[SwiggyProduct], pincode: str) -> str:
-    """Format Swiggy Instamart results for Slack."""
-    with_price = [r for r in results if not r.error and r.price]
-    failed = [r for r in results if r.error]
-    in_stock = sum(1 for r in results if r.available and not r.error)
-
-    lines = []
-    lines.append(f"*Swiggy Instamart Scraper Report — Pincode {pincode}*")
-    lines.append(
-        f"Total: {len(results)} | With Price: {len(with_price)} "
-        f"| In Stock: {in_stock} | Failed: {len(failed)}"
-    )
-    lines.append("")
-
-    # Table of products (capped at 50 for Slack message limits)
-    lines.append("```")
-    lines.append(f"{'Product':<30} {'Price':>8} {'MRP':>8} {'Discount':>10}")
-    lines.append("-" * 60)
-
-    for r in with_price[:50]:
-        name = (r.name[:28] + "..") if len(r.name) > 30 else r.name
-        price = f"₹{r.price:.0f}" if r.price else "N/A"
-        mrp = f"₹{r.mrp:.0f}" if r.mrp else ""
-        discount = r.discount or ""
-        lines.append(f"{name:<30} {price:>8} {mrp:>8} {discount:>10}")
-
-    if len(with_price) > 50:
-        lines.append(f"... and {len(with_price) - 50} more products")
-
-    lines.append("```")
-
-    if failed:
-        lines.append(f"\n*Failed ({len(failed)}):*")
-        for r in failed[:10]:
-            lines.append(f"  `{r.name}` — {r.error}")
-
-    return "\n".join(lines)
-
-
-def post_swiggy_to_slack(webhook_url: str, results: list[SwiggyProduct],
-                         pincode: str, csv_path: str = None) -> bool:
-    """Post Swiggy Instamart results to Slack via incoming webhook."""
-    message = format_swiggy_slack_message(results, pincode)
-
-    if csv_path:
-        message += f"\n\nCSV saved: `{csv_path}`"
-
-    payload = {"text": message}
-
-    try:
-        response = req.post(
-            webhook_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=10,
-        )
-        if response.status_code == 200:
-            print("Results posted to Slack successfully!")
-            return True
-        else:
-            print(f"Slack error: {response.status_code} - {response.text}")
-            return False
-    except req.RequestException as e:
-        print(f"Failed to post to Slack: {e}")
-        return False
 
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Scrape Swiggy Instamart product data"
+        description="Scrape product data from Swiggy Instamart product pages"
     )
     parser.add_argument(
-        "-s", "--search", nargs="+",
-        help="Search terms (e.g., -s milk bread eggs)"
+        "urls", nargs="*",
+        help="One or more Swiggy Instamart product URLs to scrape"
     )
     parser.add_argument(
-        "-p", "--pincode", default="560103",
-        help="Delivery pincode (default: 560103 — Koramangala, Bangalore)"
+        "-f", "--file",
+        help="File containing URLs (one per line or CSV)"
     )
     parser.add_argument(
         "-o", "--output",
-        help="Output CSV file path"
+        help="Output CSV file for results"
     )
     parser.add_argument(
-        "--max-products", type=int, default=500,
-        help="Maximum number of products to scrape (default: 500)"
+        "-p", "--pincode", default="560103",
+        help="Delivery pincode for location-based pricing (default: 560103)"
     )
     parser.add_argument(
         "--debug", action="store_true",
-        help="Save HTML pages to debug_*.html for inspection"
+        help="Save page HTML to file for inspection"
     )
     parser.add_argument(
         "--no-headless", action="store_true",
-        help="Show the browser window (default: headless)"
+        help="Show browser window (not headless)"
     )
     parser.add_argument(
-        "--slack", action="store_true",
-        help="Post results to Slack after scraping"
+        "--no-browser", action="store_true",
+        help="Use requests mode instead of browser (faster, but may get less data)"
     )
     parser.add_argument(
-        "--slack-setup", metavar="WEBHOOK_URL",
-        help="Save Slack webhook URL for future use"
+        "--delay", type=float, default=3.0,
+        help="Delay between requests in seconds (default: 3)"
     )
 
     args = parser.parse_args()
 
-    # Handle Slack webhook setup
-    if args.slack_setup:
-        save_webhook(args.slack_setup)
-        print("Slack webhook configured! Use --slack to post results.")
-        if not args.search:
-            sys.exit(0)
+    # Collect URLs
+    urls = list(args.urls) if args.urls else []
+    if args.file:
+        file_urls = load_urls_from_file(args.file)
+        urls.extend(file_urls)
+        print(f"Loaded {len(file_urls)} URLs from {args.file}")
 
-    # Show configuration
-    area = PINCODE_COORDS.get(args.pincode, {}).get("area", "Unknown area")
-    print(f"\nSwiggy Instamart Scraper")
-    print(f"{'=' * 55}")
-    print(f"Pincode:      {args.pincode} ({area})")
-    if args.search:
-        print(f"Search:       {', '.join(args.search)}")
+    if not urls:
+        print("Error: No URLs provided. Use positional arguments or -f/--file option.")
+        print("\nExample:")
+        print("  python swiggy_main.py https://www.swiggy.com/instamart/item/product-name/product-id")
+        print("  python swiggy_main.py -f urls.txt -o results.csv")
+        sys.exit(1)
+
+    # Remove duplicates preserving order
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    urls = unique_urls
+
+    headless = not args.no_headless
+    use_browser = not args.no_browser
+    if use_browser:
+        mode = "headless browser" if headless else "visible browser"
     else:
-        print("Mode:         Browse all categories")
-    print(f"Max products: {args.max_products}")
-    print(f"Browser:      {'visible' if args.no_headless else 'headless'}")
-    print(f"{'=' * 55}")
+        mode = "requests"
+    print(f"\nScraping {len(urls)} Swiggy Instamart product(s) in {mode} mode...")
+    print(f"Pincode: {args.pincode}")
+    print(f"Delay between requests: {args.delay}s")
 
     scraper = SwiggyInstamartScraper(
-        pincode=args.pincode,
-        debug=args.debug,
-        headless=not args.no_headless,
+        headless=headless, debug=args.debug,
+        use_browser=use_browser, pincode=args.pincode
     )
 
     results = []
     try:
-        results = scraper.scrape_all(
-            search_terms=args.search,
-            max_products=args.max_products,
-        )
+        for i, url in enumerate(urls, 1):
+            print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
+            result = scraper.scrape(url)
+            results.append(result)
+            print_result(result, i, len(urls))
 
-        # Print results
-        print(f"\n{'=' * 60}")
-        print(f"  RESULTS: {len(results)} products found")
-        print(f"{'=' * 60}")
+            if i < len(urls):
+                import time
+                time.sleep(args.delay)
 
-        for i, product in enumerate(results, 1):
-            print_result(product, i, len(results))
-
-        # Category report
-        print_category_report(results)
-
-        # Summary stats
-        with_price = sum(1 for r in results if r.price)
-        in_stock = sum(1 for r in results if r.available)
-        avg_price = (
-            sum(r.price for r in results if r.price) / with_price
-            if with_price else 0
-        )
-
-        print(f"\n{'=' * 60}")
-        print(f"DONE: {len(results)} products | {with_price} with price | {in_stock} in stock")
-        if avg_price:
-            print(f"Average price: ₹{avg_price:,.0f}")
-        print(f"{'=' * 60}")
-
-        # Save to CSV
+        # Save CSV
         if args.output:
-            save_to_csv(results, args.output)
+            save_to_csv(results, args.output, pincode=args.pincode)
 
-        # Post to Slack
-        if args.slack:
-            webhook_url = load_webhook()
-            if webhook_url:
-                post_swiggy_to_slack(
-                    webhook_url, results,
-                    pincode=args.pincode,
-                    csv_path=args.output,
-                )
-            else:
-                print("No Slack webhook configured. Run:")
-                print("  python swiggy_main.py --slack-setup "
-                      "https://hooks.slack.com/services/YOUR/WEBHOOK/URL")
+        # Summary
+        successful = sum(1 for r in results if not r.error)
+        print(f"\n{'='*60}")
+        print(f"DONE: {successful}/{len(results)} products scraped successfully")
+        print(f"{'='*60}")
 
         # JSON output if no CSV
         if not args.output:
             print("\nJSON Output:")
-            json_results = [asdict(r) for r in results[:20]]
-            print(json.dumps(json_results, indent=2, default=str))
-            if len(results) > 20:
-                print(f"... ({len(results) - 20} more products)")
+            print(json.dumps([asdict(r) for r in results], indent=2))
 
     finally:
         scraper.close()
