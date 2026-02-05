@@ -183,8 +183,8 @@ def main():
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
     if use_browser:
-        print(f"Browser rotation: Chrome (4 URLs) → Edge (4 URLs) → repeat")
-        print(f"Fresh browser + pincode for EACH URL")
+        print(f"Browser strategy: 4 attempts on Chrome, then 4 attempts on Edge (8 total per URL)")
+        print(f"Fresh browser + pincode for EACH attempt")
 
     # Create scraper without opening browser yet (we open per-URL)
     scraper = SwiggyInstamartScraper(
@@ -194,56 +194,84 @@ def main():
     )
     scraper.use_browser = use_browser  # Restore flag after constructor
 
-    # Browser rotation: Chrome for URLs 1-4, Edge for 5-8, Chrome for 9-12, etc.
-    BATCH_SIZE = 4
+    # Browser order: try Chrome first, then Edge as fallback
     browsers = ["chrome", "edge"]
 
     results = []
     try:
         for i, url in enumerate(urls, 1):
-            # Determine which browser to use (rotate every BATCH_SIZE)
-            batch_index = (i - 1) // BATCH_SIZE
-            browser_type = browsers[batch_index % len(browsers)]
-
             print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
 
-            if use_browser:
-                # Open fresh browser for each URL
-                try:
-                    print(f"  Opening fresh {browser_type.title()} browser...")
-                    scraper.open_browser(browser_type)
-                except Exception as e:
-                    print(f"  ERROR opening {browser_type}: {e}")
-                    # Try the other browser as fallback
-                    fallback = "edge" if browser_type == "chrome" else "chrome"
-                    try:
-                        print(f"  Trying {fallback.title()} as fallback...")
-                        scraper.open_browser(fallback)
-                    except Exception as e2:
-                        print(f"  ERROR: No browser available ({e2})")
-                        result = SwiggyProductData(url=url, error=f"Browser launch failed: {e2}")
-                        results.append(result)
-                        print_result(result, i, len(urls))
-                        continue
+            result = None
+            user_interrupted = False
 
-            try:
-                result = scraper.scrape(url)
-            except KeyboardInterrupt:
-                print("\n\n  Interrupted by user. Saving results collected so far...")
-                if use_browser:
+            if use_browser:
+                # Try each browser (4 attempts each = 8 total attempts per URL)
+                for browser_idx, browser_type in enumerate(browsers):
+                    alternate_browser = browsers[1 - browser_idx]  # The other browser
+
+                    print(f"\n  === Trying {browser_type.title()} browser (4 attempts) ===")
+
+                    # Open fresh browser
+                    try:
+                        print(f"  Opening fresh {browser_type.title()} browser...")
+                        scraper.open_browser(browser_type)
+                    except Exception as e:
+                        print(f"  ERROR opening {browser_type}: {e}")
+                        continue  # Try the next browser
+
+                    # Scrape with this browser (4 attempts inside _scrape_browser)
+                    try:
+                        result = scraper.scrape(url)
+                    except KeyboardInterrupt:
+                        print("\n\n  Interrupted by user. Saving results collected so far...")
+                        scraper.close()
+                        user_interrupted = True
+                        break
+                    except Exception as e:
+                        print(f"  ERROR during scrape: {e}")
+                        result = SwiggyProductData(url=url, error=str(e))
+
+                    # Close browser after attempt
+                    print(f"  Closing {browser_type.title()} browser...")
                     scraper.close()
-                break
-            except Exception as e:
-                print(f"  ERROR: {e}")
-                result = SwiggyProductData(url=url, error=str(e))
+
+                    # Check if scrape was successful (has name and no error)
+                    if result and result.name and not result.error:
+                        print(f"  SUCCESS with {browser_type.title()}!")
+                        break  # Got good result, no need to try other browser
+                    else:
+                        error_msg = result.error if result else "Unknown error"
+                        print(f"  FAILED with {browser_type.title()}: {error_msg}")
+                        if browser_idx < len(browsers) - 1:
+                            print(f"  Will try {alternate_browser.title()} browser next...")
+                            # Brief pause before switching browsers
+                            import time
+                            time.sleep(3)
+
+                if user_interrupted:
+                    break
+
+                # If all browsers failed, create error result
+                if not result or (not result.name and not result.error):
+                    result = SwiggyProductData(
+                        url=url,
+                        error="Failed to extract data after 8 attempts (4 Chrome + 4 Edge)"
+                    )
+
+            else:
+                # Non-browser mode (requests)
+                try:
+                    result = scraper.scrape(url)
+                except KeyboardInterrupt:
+                    print("\n\n  Interrupted by user. Saving results collected so far...")
+                    break
+                except Exception as e:
+                    print(f"  ERROR: {e}")
+                    result = SwiggyProductData(url=url, error=str(e))
 
             results.append(result)
             print_result(result, i, len(urls))
-
-            # Close browser after each URL (fresh session next time)
-            if use_browser:
-                print("  Closing browser...")
-                scraper.close()
 
             # Save partial results after each URL (so nothing is lost on crash)
             if args.output and results:
