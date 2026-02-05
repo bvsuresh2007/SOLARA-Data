@@ -362,7 +362,15 @@ class SwiggyInstamartScraper:
                 pass
 
     def _set_pincode_browser(self):
-        """Set delivery pincode on Swiggy Instamart via cookies and localStorage."""
+        """Set delivery pincode via cookies WITHOUT visiting any page.
+
+        Uses CDP (Chrome DevTools Protocol) to inject cookies directly for
+        Chrome/Edge browsers. For Firefox, loads robots.txt (lightweight text
+        file) instead of the full Instamart SPA homepage.
+
+        This avoids an extra full page load per URL, cutting Swiggy requests
+        in half and significantly reducing rate-limiting.
+        """
         if not self.pincode or self._location_set:
             return
 
@@ -370,35 +378,79 @@ class SwiggyInstamartScraper:
         lat = self.coords["lat"]
         lng = self.coords["lng"]
 
+        location_json = json.dumps({
+            "lat": lat, "lng": lng,
+            "address": f"{area}, Bangalore, Karnataka {self.pincode}",
+            "area": area
+        })
+
         print(f"  Setting delivery location to {area}, Bangalore - {self.pincode}...")
         try:
-            self.driver.get("https://www.swiggy.com/instamart")
-            time.sleep(3)
+            if self._browser_type in ("chrome", "edge"):
+                # CDP: set cookies directly — zero page loads needed
+                cookies = [
+                    {"name": "lat", "value": str(lat)},
+                    {"name": "lng", "value": str(lng)},
+                    {"name": "userLocation", "value": location_json},
+                    {"name": "addressId", "value": ""},
+                ]
+                for cookie in cookies:
+                    try:
+                        self.driver.execute_cdp_cmd("Network.setCookie", {
+                            "name": cookie["name"],
+                            "value": cookie["value"],
+                            "domain": ".swiggy.com",
+                            "path": "/",
+                        })
+                    except Exception:
+                        pass
 
-            # Set location via cookies
-            for name, value in [("lat", str(lat)), ("lng", str(lng))]:
+                self._location_set = True
+                print(f"  Location set via CDP cookies (no extra page load): {area} - {self.pincode}")
+
+            else:
+                # Firefox: no CDP — load lightweight robots.txt to get on domain
+                self.driver.get("https://www.swiggy.com/robots.txt")
+                time.sleep(1)
+
+                for name, value in [("lat", str(lat)), ("lng", str(lng))]:
+                    try:
+                        self.driver.add_cookie({
+                            "name": name, "value": value,
+                            "domain": ".swiggy.com"
+                        })
+                    except Exception:
+                        pass
+
                 try:
                     self.driver.add_cookie({
-                        "name": name, "value": value,
+                        "name": "userLocation",
+                        "value": location_json,
                         "domain": ".swiggy.com"
                     })
                 except Exception:
                     pass
 
-            try:
-                self.driver.add_cookie({
-                    "name": "userLocation",
-                    "value": json.dumps({
-                        "lat": lat, "lng": lng,
-                        "address": f"{area}, Bangalore, Karnataka {self.pincode}",
-                        "area": area
-                    }),
-                    "domain": ".swiggy.com"
-                })
-            except Exception:
-                pass
+                self._location_set = True
+                print(f"  Location set via cookies (lightweight): {area} - {self.pincode}")
 
-            # Set via localStorage
+        except Exception as e:
+            print(f"  Warning: Could not set pincode ({e}), continuing without it")
+
+    def _set_localstorage_location(self):
+        """Set location in localStorage after product page has loaded.
+
+        localStorage can only be set when the browser is on the swiggy.com domain,
+        so this is called after the product URL is loaded.
+        """
+        if not self.pincode:
+            return
+
+        area = self.coords.get("area", "Koramangala")
+        lat = self.coords["lat"]
+        lng = self.coords["lng"]
+
+        try:
             self.driver.execute_script(f"""
                 try {{
                     localStorage.setItem('userLocation', JSON.stringify({{
@@ -410,15 +462,8 @@ class SwiggyInstamartScraper:
                     localStorage.setItem('lng', '{lng}');
                 }} catch(e) {{}}
             """)
-
-            # Try to interact with location modal if visible
-            self._try_set_location_ui(area)
-
-            self._location_set = True
-            print(f"  Location set: {area}, Bangalore - {self.pincode}")
-
-        except Exception as e:
-            print(f"  Warning: Could not set pincode ({e}), continuing without it")
+        except Exception:
+            pass
 
     def _try_set_location_ui(self, area: str):
         """Try to set location through Swiggy's UI modal."""
@@ -1560,6 +1605,10 @@ class SwiggyInstamartScraper:
                         else:
                             result.error = "Swiggy rate-limited: 'Something went wrong' after all retries"
                             return
+
+                    # Now that we're on swiggy.com domain, set localStorage for location
+                    if attempt == 0:
+                        self._set_localstorage_location()
 
                     # Scroll to trigger lazy content
                     self.driver.execute_script("window.scrollTo(0, 300);")
