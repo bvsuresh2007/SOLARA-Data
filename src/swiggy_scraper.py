@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 UNDETECTED_AVAILABLE = False
 SELENIUM_AVAILABLE = False
 EDGE_AVAILABLE = False
+FIREFOX_AVAILABLE = False
 
 try:
     import undetected_chromedriver as uc
@@ -57,6 +58,22 @@ try:
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
     EDGE_AVAILABLE = True
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    pass
+
+# Try Firefox browser support
+try:
+    from selenium import webdriver as _wb_ff
+    from selenium.webdriver.firefox.service import Service as FirefoxService
+    from selenium.webdriver.firefox.options import Options as FirefoxOptions
+    from webdriver_manager.firefox import GeckoDriverManager
+    # Also import common Selenium if not already done
+    if not SELENIUM_AVAILABLE:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+    FIREFOX_AVAILABLE = True
     SELENIUM_AVAILABLE = True
 except ImportError:
     pass
@@ -154,17 +171,19 @@ class SwiggyInstamartScraper:
         """Open a fresh browser instance. Closes existing one first.
 
         Args:
-            browser_type: "chrome" or "edge"
+            browser_type: "chrome", "edge", or "firefox"
         """
         self.close()
         self._browser_type = browser_type
         self._location_set = False
 
-        if browser_type == "edge" and EDGE_AVAILABLE:
+        if browser_type == "firefox" and FIREFOX_AVAILABLE:
+            self._init_firefox_browser()
+        elif browser_type == "edge" and EDGE_AVAILABLE:
             self._init_edge_browser()
         elif UNDETECTED_AVAILABLE and browser_type == "chrome":
             self._init_undetected_browser()
-        elif SELENIUM_AVAILABLE:
+        elif SELENIUM_AVAILABLE and browser_type == "chrome":
             self._init_selenium_browser()
         else:
             raise RuntimeError(f"No browser driver available for {browser_type}")
@@ -241,6 +260,33 @@ class SwiggyInstamartScraper:
         # Apply CDP stealth patches
         self._apply_stealth_scripts()
         print("  [Browser: Microsoft Edge + stealth]")
+
+    def _init_firefox_browser(self):
+        """Initialize using Mozilla Firefox browser."""
+        options = FirefoxOptions()
+        if self.headless:
+            options.add_argument("--headless")
+        options.add_argument("--width=1920")
+        options.add_argument("--height=1080")
+
+        # Set Firefox preferences for stealth
+        options.set_preference("dom.webdriver.enabled", False)
+        options.set_preference("useAutomationExtension", False)
+        options.set_preference("general.useragent.override",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0")
+
+        # Disable telemetry and other tracking
+        options.set_preference("toolkit.telemetry.enabled", False)
+        options.set_preference("browser.safebrowsing.malware.enabled", False)
+        options.set_preference("browser.safebrowsing.phishing.enabled", False)
+
+        # Enable performance logging (Firefox uses different method)
+        options.set_preference("devtools.console.stdout.content", True)
+
+        service = FirefoxService(GeckoDriverManager().install())
+        self.driver = _wb_ff.Firefox(service=service, options=options)
+
+        print("  [Browser: Mozilla Firefox]")
 
     def _apply_stealth_scripts(self):
         """Apply CDP-based stealth scripts to avoid bot detection."""

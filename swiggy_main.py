@@ -183,7 +183,7 @@ def main():
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
     if use_browser:
-        print(f"Browser strategy: 4 attempts on Chrome, then 4 attempts on Edge (8 total per URL)")
+        print(f"Browser strategy: 4 attempts Chrome -> 4 attempts Edge -> 4 attempts Firefox (12 total per URL)")
         print(f"Fresh browser + pincode for EACH attempt")
 
     # Create scraper without opening browser yet (we open per-URL)
@@ -194,8 +194,8 @@ def main():
     )
     scraper.use_browser = use_browser  # Restore flag after constructor
 
-    # Browser order: try Chrome first, then Edge as fallback
-    browsers = ["chrome", "edge"]
+    # Browser order: try Chrome first, then Edge, then Firefox as fallback
+    browsers = ["chrome", "edge", "firefox"]
 
     results = []
     try:
@@ -206,11 +206,9 @@ def main():
             user_interrupted = False
 
             if use_browser:
-                # Try each browser (4 attempts each = 8 total attempts per URL)
+                # Try each browser (4 attempts each = 12 total attempts per URL)
                 for browser_idx, browser_type in enumerate(browsers):
-                    alternate_browser = browsers[1 - browser_idx]  # The other browser
-
-                    print(f"\n  === Trying {browser_type.title()} browser (4 attempts) ===")
+                    print(f"\n  === Trying {browser_type.title()} browser (4 attempts) [{browser_idx + 1}/{len(browsers)}] ===")
 
                     # Open fresh browser
                     try:
@@ -244,7 +242,8 @@ def main():
                         error_msg = result.error if result else "Unknown error"
                         print(f"  FAILED with {browser_type.title()}: {error_msg}")
                         if browser_idx < len(browsers) - 1:
-                            print(f"  Will try {alternate_browser.title()} browser next...")
+                            next_browser = browsers[browser_idx + 1]
+                            print(f"  Will try {next_browser.title()} browser next...")
                             # Brief pause before switching browsers
                             import time
                             time.sleep(3)
@@ -256,7 +255,7 @@ def main():
                 if not result or (not result.name and not result.error):
                     result = SwiggyProductData(
                         url=url,
-                        error="Failed to extract data after 8 attempts (4 Chrome + 4 Edge)"
+                        error="Failed to extract data after 12 attempts (4 Chrome + 4 Edge + 4 Firefox)"
                     )
 
             else:
