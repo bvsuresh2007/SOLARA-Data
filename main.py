@@ -24,9 +24,9 @@ from src.slack_notifier import post_to_slack, save_webhook, load_webhook
 def print_result(data: ProductData, index: int = None, total: int = None) -> None:
     """Print product data in a formatted way."""
     progress = f"[{index}/{total}] " if index and total else ""
-    print(f"\n{progress}" + "=" * 55)
+    print(f"\n{progress}" + "=" * 60)
     print(f"ASIN: {data.asin}")
-    print("-" * 55)
+    print("-" * 60)
 
     if data.error:
         print(f"ERROR: {data.error}")
@@ -34,13 +34,17 @@ def print_result(data: ProductData, index: int = None, total: int = None) -> Non
         title = data.title[:50] + "..." if data.title and len(data.title) > 50 else data.title
         print(f"Title:      {title or 'N/A'}")
         print(f"Price:      {data.price or 'N/A'}")
-        print(f"BSR:        {data.bsr or 'N/A'}")
+        print(f"Main BSR:   {data.bsr or 'N/A'}")
+        if data.sub_bsr:
+            print(f"Sub BSR:    {data.sub_bsr}")
+        if data.all_bsr and len(data.all_bsr) > 2:
+            print(f"All BSRs:   {len(data.all_bsr)} rankings")
         print(f"Sold by:    {data.seller or 'N/A'}")
         print(f"Ships from: {data.ships_from or 'N/A'}")
         if data.fulfilled_by:
             print(f"Fulfilled:  {data.fulfilled_by}")
 
-    print("=" * 55)
+    print("=" * 60)
 
 
 def print_seller_report(results: list[ProductData]) -> None:
@@ -61,6 +65,7 @@ def print_seller_report(results: list[ProductData]) -> None:
     for seller, items in sorted(seller_groups.items()):
         prices = [r.price_value for r in items if r.price_value]
         bsr_values = [r.bsr_value for r in items if r.bsr_value]
+        sub_bsr_values = [r.sub_bsr_value for r in items if r.sub_bsr_value]
 
         print(f"\n  Seller: {seller}")
         print(f"  ASINs:  {len(items)}")
@@ -69,18 +74,24 @@ def print_seller_report(results: list[ProductData]) -> None:
             avg_price = sum(prices) / len(prices)
             min_price = min(prices)
             max_price = max(prices)
-            print(f"  Prices: Avg ₹{avg_price:,.0f} | Min ₹{min_price:,.0f} | Max ₹{max_price:,.0f}")
+            print(f"  Prices:   Avg ₹{avg_price:,.0f} | Min ₹{min_price:,.0f} | Max ₹{max_price:,.0f}")
 
         if bsr_values:
             avg_bsr = sum(bsr_values) / len(bsr_values)
             best_bsr = min(bsr_values)
-            print(f"  BSR:    Avg #{avg_bsr:,.0f} | Best #{best_bsr:,}")
+            print(f"  Main BSR: Avg #{avg_bsr:,.0f} | Best #{best_bsr:,}")
+
+        if sub_bsr_values:
+            avg_sub = sum(sub_bsr_values) / len(sub_bsr_values)
+            best_sub = min(sub_bsr_values)
+            print(f"  Sub BSR:  Avg #{avg_sub:,.0f} | Best #{best_sub:,}")
 
         # List ASINs under this seller
         for r in items:
             price_str = r.price or "N/A"
-            bsr_str = f"#{r.bsr_value:,}" if r.bsr_value else "N/A"
-            print(f"    - {r.asin}  {price_str:>12}  BSR: {bsr_str}")
+            main_bsr = f"#{r.bsr_value:,}" if r.bsr_value else "N/A"
+            sub_bsr = f"#{r.sub_bsr_value:,}" if r.sub_bsr_value else "-"
+            print(f"    - {r.asin}  {price_str:>10}  Main: {main_bsr:>8}  Sub: {sub_bsr}")
 
     print(f"\n{'#' * 55}")
 
@@ -111,11 +122,17 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
         writer.writerow([
             "ASIN", "Title", "Price", "Price_Value",
             "BSR_Rank", "BSR_Category",
+            "Sub_BSR_Rank", "Sub_BSR_Category", "All_BSR",
             "Seller", "Ships_From", "Fulfilled_By",
             "URL", "Error", "Scraped_At"
         ])
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for r in results:
+            # Format all_bsr as a string
+            all_bsr_str = ""
+            if r.all_bsr:
+                all_bsr_str = " | ".join([f"#{b['rank']:,} in {b['category']}" for b in r.all_bsr])
+
             writer.writerow([
                 r.asin,
                 r.title or "",
@@ -123,6 +140,9 @@ def save_to_csv(results: list[ProductData], filepath: str) -> None:
                 r.price_value or "",
                 r.bsr_value or "",
                 r.bsr_category or "",
+                r.sub_bsr_value or "",
+                r.sub_bsr_category or "",
+                all_bsr_str,
                 r.seller or "",
                 r.ships_from or "",
                 r.fulfilled_by or "",

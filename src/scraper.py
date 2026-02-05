@@ -33,9 +33,17 @@ class ProductData:
     title: Optional[str] = None
     price: Optional[str] = None
     price_value: Optional[float] = None
+    # Main category BSR
     bsr: Optional[str] = None
     bsr_value: Optional[int] = None
     bsr_category: Optional[str] = None
+    # Sub-category BSR
+    sub_bsr: Optional[str] = None
+    sub_bsr_value: Optional[int] = None
+    sub_bsr_category: Optional[str] = None
+    # All BSR rankings as list
+    all_bsr: Optional[list] = None
+    # Seller info
     seller: Optional[str] = None
     ships_from: Optional[str] = None
     fulfilled_by: Optional[str] = None
@@ -292,53 +300,88 @@ class AmazonScraper:
                 pass
         return None
 
-    def _parse_bsr(self, soup: BeautifulSoup) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    def _parse_bsr(self, soup: BeautifulSoup) -> dict:
         """
-        Extract Best Seller Rank from the product page.
+        Extract all Best Seller Ranks from the product page.
 
         Returns:
-            Tuple of (bsr_string, bsr_value, category)
+            Dict with main_bsr, main_bsr_value, main_category,
+                  sub_bsr, sub_bsr_value, sub_category, all_bsr
         """
-        bsr_patterns = [
-            r'#([\d,]+)\s+in\s+([^(\n]+)',
-            r'Best Sellers Rank[:\s]*#?([\d,]+)\s+in\s+([^(\n]+)',
-        ]
+        result = {
+            "main_bsr": None,
+            "main_bsr_value": None,
+            "main_category": None,
+            "sub_bsr": None,
+            "sub_bsr_value": None,
+            "sub_category": None,
+            "all_bsr": []
+        }
+
+        # Pattern to find all BSR entries: #123 in Category Name
+        bsr_pattern = r'#([\d,]+)\s+in\s+([^\n(]+?)(?:\s*\(|$|\n)'
+
+        bsr_text = ""
 
         # Check product details section
         details_section = soup.find("div", {"id": "detailBulletsWrapper_feature_div"})
         if details_section:
-            text = details_section.get_text()
-            for pattern in bsr_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    bsr_str = f"#{match.group(1)} in {match.group(2).strip()}"
-                    bsr_value = int(match.group(1).replace(",", ""))
-                    category = match.group(2).strip()
-                    return bsr_str, bsr_value, category
+            bsr_text = details_section.get_text()
 
         # Check product information table
-        tables = soup.find_all("table", {"id": "productDetails_detailBullets_sections1"})
-        for table in tables:
-            text = table.get_text()
-            for pattern in bsr_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    bsr_str = f"#{match.group(1)} in {match.group(2).strip()}"
-                    bsr_value = int(match.group(1).replace(",", ""))
-                    category = match.group(2).strip()
-                    return bsr_str, bsr_value, category
+        if not bsr_text:
+            table = soup.find("table", {"id": "productDetails_detailBullets_sections1"})
+            if table:
+                bsr_text = table.get_text()
 
-        # Check entire page as fallback
-        page_text = soup.get_text()
-        for pattern in bsr_patterns:
-            match = re.search(pattern, page_text, re.IGNORECASE)
-            if match:
-                bsr_str = f"#{match.group(1)} in {match.group(2).strip()}"
-                bsr_value = int(match.group(1).replace(",", ""))
-                category = match.group(2).strip()
-                return bsr_str, bsr_value, category
+        # Check techProductInfoTable (another common location)
+        if not bsr_text:
+            tech_table = soup.find("div", {"id": "detailBullets_feature_div"})
+            if tech_table:
+                bsr_text = tech_table.get_text()
 
-        return None, None, None
+        # Fallback to entire page
+        if not bsr_text:
+            bsr_text = soup.get_text()
+
+        # Find all BSR matches
+        matches = re.findall(bsr_pattern, bsr_text, re.IGNORECASE)
+
+        for rank, category in matches:
+            rank_value = int(rank.replace(",", ""))
+            category = category.strip()
+
+            # Skip invalid categories
+            if len(category) < 3 or category.lower() in ["see top 100", "see top"]:
+                continue
+
+            bsr_entry = {
+                "rank": rank_value,
+                "category": category,
+                "display": f"#{rank} in {category}"
+            }
+            result["all_bsr"].append(bsr_entry)
+
+        # Sort by rank (lowest first)
+        result["all_bsr"].sort(key=lambda x: x["rank"])
+
+        # Determine main category (highest rank number = broadest category)
+        # and sub-category (lowest rank number = most specific)
+        if result["all_bsr"]:
+            # Main category is typically the one with highest rank (broadest)
+            main = max(result["all_bsr"], key=lambda x: x["rank"])
+            result["main_bsr"] = main["display"]
+            result["main_bsr_value"] = main["rank"]
+            result["main_category"] = main["category"]
+
+            # Sub-category is the one with lowest rank (most specific)
+            sub = min(result["all_bsr"], key=lambda x: x["rank"])
+            if sub != main:
+                result["sub_bsr"] = sub["display"]
+                result["sub_bsr_value"] = sub["rank"]
+                result["sub_category"] = sub["category"]
+
+        return result
 
     def _parse_seller(self, soup: BeautifulSoup) -> tuple[Optional[str], Optional[str], Optional[str]]:
         """
@@ -460,7 +503,17 @@ class AmazonScraper:
         # Parse data
         result.title = self._parse_title(soup)
         result.price, result.price_value = self._parse_price(soup)
-        result.bsr, result.bsr_value, result.bsr_category = self._parse_bsr(soup)
+
+        # Parse BSR (main + sub-categories)
+        bsr_data = self._parse_bsr(soup)
+        result.bsr = bsr_data["main_bsr"]
+        result.bsr_value = bsr_data["main_bsr_value"]
+        result.bsr_category = bsr_data["main_category"]
+        result.sub_bsr = bsr_data["sub_bsr"]
+        result.sub_bsr_value = bsr_data["sub_bsr_value"]
+        result.sub_bsr_category = bsr_data["sub_category"]
+        result.all_bsr = bsr_data["all_bsr"]
+
         result.seller, result.ships_from, result.fulfilled_by = self._parse_seller(soup)
 
         return result

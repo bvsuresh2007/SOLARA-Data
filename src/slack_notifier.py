@@ -47,14 +47,14 @@ def format_message(results: list[ProductData], seller_filter: str = None) -> str
 
     # Table header
     lines.append("```")
-    lines.append(f"{'ASIN':<12} {'Price':>10} {'BSR':>8} {'Seller':<20}")
-    lines.append("-" * 55)
+    lines.append(f"{'ASIN':<12} {'Price':>10} {'Main BSR':>10} {'Sub BSR':>10}")
+    lines.append("-" * 50)
 
     for r in successful:
         price = r.price or "N/A"
-        bsr = f"#{r.bsr_value:,}" if r.bsr_value else "N/A"
-        seller = (r.seller or "N/A")[:20]
-        lines.append(f"{r.asin:<12} {price:>10} {bsr:>8} {seller:<20}")
+        main_bsr = f"#{r.bsr_value:,}" if r.bsr_value else "N/A"
+        sub_bsr = f"#{r.sub_bsr_value:,}" if r.sub_bsr_value else "-"
+        lines.append(f"{r.asin:<12} {price:>10} {main_bsr:>10} {sub_bsr:>10}")
 
     lines.append("```")
 
