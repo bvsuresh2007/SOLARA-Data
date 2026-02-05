@@ -197,6 +197,8 @@ class SwiggyInstamartScraper:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
+        options.add_argument("--log-level=3")  # Suppress browser console noise
+        options.add_argument("--silent")
 
         # Enable performance logging for network interception
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -215,12 +217,14 @@ class SwiggyInstamartScraper:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
+        options.add_argument("--log-level=3")  # Suppress browser console noise
+        options.add_argument("--silent")
         options.add_argument(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/131.0.0.0 Safari/537.36"
         )
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
 
         # Enable performance logging for network interception
@@ -244,12 +248,15 @@ class SwiggyInstamartScraper:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
+        options.add_argument("--log-level=3")  # Suppress browser console noise
+        options.add_argument("--silent")
+        options.add_argument("--disable-features=msEdgeOnDeviceAI")  # Suppress Edge LLM errors
         options.add_argument(
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
         )
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
 
         # Enable performance logging for network interception
@@ -280,8 +287,9 @@ class SwiggyInstamartScraper:
         options.set_preference("browser.safebrowsing.malware.enabled", False)
         options.set_preference("browser.safebrowsing.phishing.enabled", False)
 
-        # Enable performance logging (Firefox uses different method)
+        # Suppress console noise
         options.set_preference("devtools.console.stdout.content", True)
+        options.log.level = "fatal"  # Only show fatal errors
 
         service = FirefoxService(GeckoDriverManager().install())
         self.driver = _wb_ff.Firefox(service=service, options=options)
