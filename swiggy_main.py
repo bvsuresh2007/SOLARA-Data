@@ -183,7 +183,7 @@ def main():
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
     if use_browser:
-        print(f"Browser strategy: 4 attempts Chrome -> 4 attempts Edge -> 4 attempts Firefox (12 total per URL)")
+        print(f"Browser strategy: 2 attempts Chrome -> 2 attempts Edge -> 2 attempts Firefox (6 total per URL)")
         print(f"Fresh browser + pincode for EACH attempt")
 
     # Create scraper without opening browser yet (we open per-URL)
@@ -206,9 +206,9 @@ def main():
             user_interrupted = False
 
             if use_browser:
-                # Try each browser (4 attempts each = 12 total attempts per URL)
+                # Try each browser (2 attempts each = 6 total attempts per URL)
                 for browser_idx, browser_type in enumerate(browsers):
-                    print(f"\n  === Trying {browser_type.title()} browser (4 attempts) [{browser_idx + 1}/{len(browsers)}] ===")
+                    print(f"\n  === Trying {browser_type.title()} browser (2 attempts) [{browser_idx + 1}/{len(browsers)}] ===")
 
                     # Open fresh browser
                     try:
@@ -255,7 +255,7 @@ def main():
                 if not result or (not result.name and not result.error):
                     result = SwiggyProductData(
                         url=url,
-                        error="Failed to extract data after 12 attempts (4 Chrome + 4 Edge + 4 Firefox)"
+                        error="Failed to extract data after 6 attempts (2 Chrome + 2 Edge + 2 Firefox)"
                     )
 
             else:

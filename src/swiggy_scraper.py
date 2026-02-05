@@ -1476,10 +1476,10 @@ class SwiggyInstamartScraper:
 
     def _scrape_browser(self, url: str, result: SwiggyProductData) -> None:
         """Scrape using Selenium browser with network interception + retry."""
-        max_attempts = 4
-        timeouts = [10, 15, 20, 25]
+        max_attempts = 2
+        timeouts = [10, 20]
         # Backoff delays: wait longer on each retry (rate-limit recovery)
-        retry_delays = [8, 15, 30]
+        retry_delays = [10]
 
         try:
             # Set pincode/location before first scrape
