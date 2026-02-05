@@ -147,6 +147,10 @@ def main():
         "--delay", type=float, default=15.0,
         help="Delay between requests in seconds (default: 15)"
     )
+    parser.add_argument(
+        "--proxy",
+        help="Proxy URL for rotating IP (e.g. http://user:pass@host:port)"
+    )
 
     args = parser.parse_args()
 
@@ -182,16 +186,20 @@ def main():
     print(f"\nScraping {len(urls)} Swiggy Instamart product(s) in {mode} mode...")
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
+    if args.proxy:
+        print(f"Proxy: {args.proxy}")
     if use_browser:
         print(f"Browser strategy: Chrome -> Edge -> Firefox (2 attempts each)")
-        print(f"  If rate-limited: 90s cooldown before next browser")
+        if not args.proxy:
+            print(f"  If rate-limited: 90s cooldown before next browser")
         print(f"Fresh browser + pincode for EACH attempt")
 
     # Create scraper without opening browser yet (we open per-URL)
     scraper = SwiggyInstamartScraper(
         headless=headless, debug=args.debug,
         use_browser=False,  # Don't open browser in constructor
-        pincode=args.pincode
+        pincode=args.pincode,
+        proxy=args.proxy
     )
     scraper.use_browser = use_browser  # Restore flag after constructor
 

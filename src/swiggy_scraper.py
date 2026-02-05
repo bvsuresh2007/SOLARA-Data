@@ -144,16 +144,21 @@ class SwiggyInstamartScraper:
 
     def __init__(self, headless: bool = True, debug: bool = False,
                  use_browser: bool = True, pincode: Optional[str] = "560103",
-                 browser_type: str = "chrome"):
+                 browser_type: str = "chrome", proxy: Optional[str] = None):
         self.headless = headless
         self.debug = debug
         self.use_browser = use_browser
         self.pincode = pincode
+        self.proxy = proxy  # e.g. "http://user:pass@host:port"
         self.coords = PINCODE_COORDS.get(pincode or "560103", PINCODE_COORDS["560103"])
         self.driver = None
-        self._browser_type = browser_type  # "chrome" or "edge"
+        self._browser_type = browser_type  # "chrome", "edge", or "firefox"
         self.session = http_requests.Session()
         self._location_set = False
+
+        # Configure requests session proxy
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
 
         if use_browser:
             if not SELENIUM_AVAILABLE:
@@ -199,12 +204,15 @@ class SwiggyInstamartScraper:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--log-level=3")  # Suppress browser console noise
         options.add_argument("--silent")
+        if self.proxy:
+            options.add_argument(f"--proxy-server={self.proxy}")
 
         # Enable performance logging for network interception
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
         self.driver = uc.Chrome(options=options, headless=self.headless)
-        print("  [Browser: undetected_chromedriver (Chrome)]")
+        proxy_msg = f" via proxy" if self.proxy else ""
+        print(f"  [Browser: undetected_chromedriver (Chrome){proxy_msg}]")
 
     def _init_selenium_browser(self):
         """Initialize using regular Selenium Chrome with stealth patches."""
@@ -226,6 +234,8 @@ class SwiggyInstamartScraper:
         )
         options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
+        if self.proxy:
+            options.add_argument(f"--proxy-server={self.proxy}")
 
         # Enable performance logging for network interception
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -235,7 +245,8 @@ class SwiggyInstamartScraper:
 
         # Apply CDP stealth patches
         self._apply_stealth_scripts()
-        print("  [Browser: Selenium Chrome + stealth]")
+        proxy_msg = f" via proxy" if self.proxy else ""
+        print(f"  [Browser: Selenium Chrome + stealth{proxy_msg}]")
 
     def _init_edge_browser(self):
         """Initialize using Microsoft Edge browser."""
@@ -258,6 +269,8 @@ class SwiggyInstamartScraper:
         )
         options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
+        if self.proxy:
+            options.add_argument(f"--proxy-server={self.proxy}")
 
         # Enable performance logging for network interception
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -266,7 +279,8 @@ class SwiggyInstamartScraper:
 
         # Apply CDP stealth patches
         self._apply_stealth_scripts()
-        print("  [Browser: Microsoft Edge + stealth]")
+        proxy_msg = f" via proxy" if self.proxy else ""
+        print(f"  [Browser: Microsoft Edge + stealth{proxy_msg}]")
 
     def _init_firefox_browser(self):
         """Initialize using Mozilla Firefox browser."""
@@ -291,10 +305,24 @@ class SwiggyInstamartScraper:
         options.set_preference("devtools.console.stdout.content", True)
         options.log.level = "fatal"  # Only show fatal errors
 
+        # Firefox proxy configuration
+        if self.proxy:
+            from urllib.parse import urlparse
+            parsed = urlparse(self.proxy)
+            proxy_host = parsed.hostname
+            proxy_port = parsed.port or 8080
+            options.set_preference("network.proxy.type", 1)  # Manual proxy
+            options.set_preference("network.proxy.http", proxy_host)
+            options.set_preference("network.proxy.http_port", proxy_port)
+            options.set_preference("network.proxy.ssl", proxy_host)
+            options.set_preference("network.proxy.ssl_port", proxy_port)
+            options.set_preference("network.proxy.no_proxies_on", "")
+
         service = FirefoxService(GeckoDriverManager().install())
         self.driver = _wb_ff.Firefox(service=service, options=options)
 
-        print("  [Browser: Mozilla Firefox]")
+        proxy_msg = f" via proxy" if self.proxy else ""
+        print(f"  [Browser: Mozilla Firefox{proxy_msg}]")
 
     def _apply_stealth_scripts(self):
         """Apply CDP-based stealth scripts to avoid bot detection."""
