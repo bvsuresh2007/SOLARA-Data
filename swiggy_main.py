@@ -13,6 +13,7 @@ Usage:
 import sys
 import csv
 import json
+import time
 import random
 import argparse
 from dataclasses import asdict
@@ -151,6 +152,14 @@ def main():
         "--proxy",
         help="Proxy URL for rotating IP (e.g. http://user:pass@host:port)"
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=5,
+        help="Number of URLs per batch before long pause (default: 5)"
+    )
+    parser.add_argument(
+        "--batch-pause", type=int, default=300,
+        help="Seconds to pause between batches for rate-limit reset (default: 300 = 5 min)"
+    )
 
     args = parser.parse_args()
 
@@ -183,16 +192,19 @@ def main():
         mode = "headless browser" if headless else "visible browser"
     else:
         mode = "requests"
+
+    num_batches = (len(urls) + args.batch_size - 1) // args.batch_size
+
     print(f"\nScraping {len(urls)} Swiggy Instamart product(s) in {mode} mode...")
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
+    print(f"Batch size: {args.batch_size} URLs per batch ({num_batches} batches total)")
+    print(f"Batch pause: {args.batch_pause}s ({args.batch_pause // 60} min) between batches")
     if args.proxy:
         print(f"Proxy: {args.proxy}")
     if use_browser:
-        print(f"Browser strategy: Chrome -> Edge -> Firefox (2 attempts each)")
-        if not args.proxy:
-            print(f"  If rate-limited: 90s cooldown before next browser")
-        print(f"Fresh browser + pincode for EACH attempt")
+        print(f"Browser: Chrome (2 attempts per URL)")
+        print(f"Fresh browser + pincode for EACH URL")
 
     # Create scraper without opening browser yet (we open per-URL)
     scraper = SwiggyInstamartScraper(
@@ -203,82 +215,62 @@ def main():
     )
     scraper.use_browser = use_browser  # Restore flag after constructor
 
-    # Browser order: try Chrome first, then Edge, then Firefox
-    browsers = ["chrome", "edge", "firefox"]
-    RATE_LIMIT_COOLDOWN = 90  # seconds to wait when rate-limited
+    # Use Chrome as primary browser (most reliable with undetected_chromedriver)
+    browser_type = "chrome"
 
     results = []
     try:
         for i, url in enumerate(urls, 1):
+            # Check if this is the start of a new batch (after the first batch)
+            url_in_batch = (i - 1) % args.batch_size  # 0-indexed position within batch
+            batch_num = (i - 1) // args.batch_size + 1
+
+            if url_in_batch == 0:
+                if i > 1:
+                    # Pause between batches
+                    pause = args.batch_pause + random.uniform(0, 30)
+                    print(f"\n{'*'*60}")
+                    print(f"  BATCH {batch_num - 1} COMPLETE — {args.batch_size} URLs done")
+                    print(f"  Pausing {pause:.0f}s ({pause/60:.1f} min) to reset rate-limit...")
+                    print(f"  Remaining: {len(urls) - i + 1} URLs in {num_batches - batch_num + 1} batches")
+                    print(f"{'*'*60}")
+
+                    # Save results before long pause
+                    if args.output and results:
+                        save_to_csv(results, args.output, pincode=args.pincode, quiet=True)
+
+                    time.sleep(pause)
+
+                print(f"\n--- Batch {batch_num}/{num_batches} (URLs {i}-{min(i + args.batch_size - 1, len(urls))}) ---")
+
             print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
 
             result = None
-            user_interrupted = False
 
             if use_browser:
-                # Try each browser (2 attempts each = 6 total per URL)
-                for browser_idx, browser_type in enumerate(browsers):
-                    print(f"\n  === Trying {browser_type.title()} browser (2 attempts) [{browser_idx + 1}/{len(browsers)}] ===")
+                # Open fresh browser
+                try:
+                    print(f"  Opening fresh {browser_type.title()} browser...")
+                    scraper.open_browser(browser_type)
+                except Exception as e:
+                    print(f"  ERROR opening {browser_type}: {e}")
+                    result = SwiggyProductData(url=url, error=f"Browser launch failed: {e}")
 
-                    # Open fresh browser
-                    try:
-                        print(f"  Opening fresh {browser_type.title()} browser...")
-                        scraper.open_browser(browser_type)
-                    except Exception as e:
-                        print(f"  ERROR opening {browser_type}: {e}")
-                        continue  # Try the next browser
-
+                if not result:
                     # Scrape with this browser (2 attempts inside _scrape_browser)
                     try:
                         result = scraper.scrape(url)
                     except KeyboardInterrupt:
                         print("\n\n  Interrupted by user. Saving results collected so far...")
                         scraper.close()
-                        user_interrupted = True
                         break
                     except Exception as e:
                         print(f"  ERROR during scrape: {e}")
                         result = SwiggyProductData(url=url, error=str(e))
 
-                    # Close browser after attempt
-                    print(f"  Closing {browser_type.title()} browser...")
+                    # Close browser after each URL
+                    print(f"  Closing browser...")
                     scraper.close()
-
-                    # Check if scrape was successful (has name and no error)
-                    if result and result.name and not result.error:
-                        print(f"  SUCCESS with {browser_type.title()}!")
-                        break  # Got good result, no need to try other browser
-
-                    # Failed — check WHY
-                    error_msg = result.error if result else "Unknown error"
-                    is_rate_limited = result and result.error and "rate-limit" in result.error.lower()
-                    print(f"  FAILED with {browser_type.title()}: {error_msg}")
-
-                    if browser_idx < len(browsers) - 1:
-                        next_browser = browsers[browser_idx + 1]
-                        if is_rate_limited:
-                            # Rate-limited = IP blocked. Must wait a long time
-                            # before trying again (different browser, same IP).
-                            import time
-                            cooldown = RATE_LIMIT_COOLDOWN + random.uniform(0, 15)
-                            print(f"\n  [!] RATE-LIMITED — Swiggy blocked this IP.")
-                            print(f"  [!] Cooling down for {cooldown:.0f}s before trying {next_browser.title()}...")
-                            time.sleep(cooldown)
-                        else:
-                            # Non-rate-limit error — quick switch to next browser
-                            import time
-                            print(f"  Will try {next_browser.title()} browser next...")
-                            time.sleep(3)
-
-                if user_interrupted:
-                    break
-
-                # If all browsers failed, create error result
-                if not result or (not result.name and not result.error):
-                    result = SwiggyProductData(
-                        url=url,
-                        error="Failed to extract data after 6 attempts (2 Chrome + 2 Edge + 2 Firefox)"
-                    )
 
             else:
                 # Non-browser mode (requests)
@@ -294,26 +286,20 @@ def main():
             results.append(result)
             print_result(result, i, len(urls))
 
-            # Check if this URL was rate-limited
-            was_rate_limited = result and result.error and "rate-limit" in (result.error or "").lower()
-
-            # Save partial results after each URL (so nothing is lost on crash)
+            # Save partial results after each URL
             if args.output and results:
                 save_to_csv(results, args.output, pincode=args.pincode, quiet=True)
 
+            # Delay before next URL (within same batch)
             if i < len(urls):
-                import time
-                if was_rate_limited:
-                    # Extra long wait after a rate-limited URL before trying next one
-                    cooldown = RATE_LIMIT_COOLDOWN + random.uniform(0, 15)
-                    print(f"  [!] Rate-limited on previous URL. Waiting {cooldown:.0f}s before next URL...")
-                    time.sleep(cooldown)
-                else:
-                    # Normal delay with jitter
+                next_url_in_batch = i % args.batch_size  # position of NEXT url
+                if next_url_in_batch != 0:
+                    # Normal delay within batch
                     jitter = args.delay * random.uniform(-0.3, 0.3)
                     wait = max(5, args.delay + jitter)
                     print(f"  Waiting {wait:.1f}s before next request...")
                     time.sleep(wait)
+                # else: batch boundary — the long pause happens at the top of the loop
 
     except KeyboardInterrupt:
         print("\n\n  Interrupted by user.")
