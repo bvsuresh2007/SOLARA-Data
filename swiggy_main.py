@@ -144,8 +144,8 @@ def main():
         help="Use requests mode instead of browser (faster, but may get less data)"
     )
     parser.add_argument(
-        "--delay", type=float, default=8.0,
-        help="Delay between requests in seconds (default: 8)"
+        "--delay", type=float, default=15.0,
+        help="Delay between requests in seconds (default: 15)"
     )
 
     args = parser.parse_args()
@@ -183,7 +183,8 @@ def main():
     print(f"Pincode: {args.pincode}")
     print(f"Delay between requests: {args.delay}s")
     if use_browser:
-        print(f"Browser strategy: 2 attempts Chrome -> 2 attempts Edge -> 2 attempts Firefox (6 total per URL)")
+        print(f"Browser strategy: Chrome -> Edge -> Firefox (2 attempts each)")
+        print(f"  If rate-limited: 90s cooldown before next browser")
         print(f"Fresh browser + pincode for EACH attempt")
 
     # Create scraper without opening browser yet (we open per-URL)
@@ -194,8 +195,9 @@ def main():
     )
     scraper.use_browser = use_browser  # Restore flag after constructor
 
-    # Browser order: try Chrome first, then Edge, then Firefox as fallback
+    # Browser order: try Chrome first, then Edge, then Firefox
     browsers = ["chrome", "edge", "firefox"]
+    RATE_LIMIT_COOLDOWN = 90  # seconds to wait when rate-limited
 
     results = []
     try:
@@ -206,7 +208,7 @@ def main():
             user_interrupted = False
 
             if use_browser:
-                # Try each browser (2 attempts each = 6 total attempts per URL)
+                # Try each browser (2 attempts each = 6 total per URL)
                 for browser_idx, browser_type in enumerate(browsers):
                     print(f"\n  === Trying {browser_type.title()} browser (2 attempts) [{browser_idx + 1}/{len(browsers)}] ===")
 
@@ -218,7 +220,7 @@ def main():
                         print(f"  ERROR opening {browser_type}: {e}")
                         continue  # Try the next browser
 
-                    # Scrape with this browser (4 attempts inside _scrape_browser)
+                    # Scrape with this browser (2 attempts inside _scrape_browser)
                     try:
                         result = scraper.scrape(url)
                     except KeyboardInterrupt:
@@ -238,14 +240,26 @@ def main():
                     if result and result.name and not result.error:
                         print(f"  SUCCESS with {browser_type.title()}!")
                         break  # Got good result, no need to try other browser
-                    else:
-                        error_msg = result.error if result else "Unknown error"
-                        print(f"  FAILED with {browser_type.title()}: {error_msg}")
-                        if browser_idx < len(browsers) - 1:
-                            next_browser = browsers[browser_idx + 1]
-                            print(f"  Will try {next_browser.title()} browser next...")
-                            # Brief pause before switching browsers
+
+                    # Failed — check WHY
+                    error_msg = result.error if result else "Unknown error"
+                    is_rate_limited = result and result.error and "rate-limit" in result.error.lower()
+                    print(f"  FAILED with {browser_type.title()}: {error_msg}")
+
+                    if browser_idx < len(browsers) - 1:
+                        next_browser = browsers[browser_idx + 1]
+                        if is_rate_limited:
+                            # Rate-limited = IP blocked. Must wait a long time
+                            # before trying again (different browser, same IP).
                             import time
+                            cooldown = RATE_LIMIT_COOLDOWN + random.uniform(0, 15)
+                            print(f"\n  [!] RATE-LIMITED — Swiggy blocked this IP.")
+                            print(f"  [!] Cooling down for {cooldown:.0f}s before trying {next_browser.title()}...")
+                            time.sleep(cooldown)
+                        else:
+                            # Non-rate-limit error — quick switch to next browser
+                            import time
+                            print(f"  Will try {next_browser.title()} browser next...")
                             time.sleep(3)
 
                 if user_interrupted:
@@ -272,17 +286,26 @@ def main():
             results.append(result)
             print_result(result, i, len(urls))
 
+            # Check if this URL was rate-limited
+            was_rate_limited = result and result.error and "rate-limit" in (result.error or "").lower()
+
             # Save partial results after each URL (so nothing is lost on crash)
             if args.output and results:
                 save_to_csv(results, args.output, pincode=args.pincode, quiet=True)
 
             if i < len(urls):
                 import time
-                # Add random jitter (±30%) to avoid detection patterns
-                jitter = args.delay * random.uniform(-0.3, 0.3)
-                wait = max(3, args.delay + jitter)
-                print(f"  Waiting {wait:.1f}s before next request...")
-                time.sleep(wait)
+                if was_rate_limited:
+                    # Extra long wait after a rate-limited URL before trying next one
+                    cooldown = RATE_LIMIT_COOLDOWN + random.uniform(0, 15)
+                    print(f"  [!] Rate-limited on previous URL. Waiting {cooldown:.0f}s before next URL...")
+                    time.sleep(cooldown)
+                else:
+                    # Normal delay with jitter
+                    jitter = args.delay * random.uniform(-0.3, 0.3)
+                    wait = max(5, args.delay + jitter)
+                    print(f"  Waiting {wait:.1f}s before next request...")
+                    time.sleep(wait)
 
     except KeyboardInterrupt:
         print("\n\n  Interrupted by user.")
