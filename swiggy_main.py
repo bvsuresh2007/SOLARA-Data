@@ -145,20 +145,20 @@ def main():
         help="Use requests mode instead of browser (faster, but may get less data)"
     )
     parser.add_argument(
-        "--delay", type=float, default=15.0,
-        help="Delay between requests in seconds (default: 15)"
+        "--delay", type=float, default=25.0,
+        help="Delay between requests in seconds (default: 25)"
     )
     parser.add_argument(
         "--proxy",
         help="Proxy URL for rotating IP (e.g. http://user:pass@host:port)"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=5,
-        help="Number of URLs per batch before long pause (default: 5)"
+        "--batch-size", type=int, default=3,
+        help="Number of URLs per batch before long pause (default: 3)"
     )
     parser.add_argument(
-        "--batch-pause", type=int, default=300,
-        help="Seconds to pause between batches for rate-limit reset (default: 300 = 5 min)"
+        "--batch-pause", type=int, default=480,
+        help="Seconds to pause between batches for rate-limit reset (default: 480 = 8 min)"
     )
 
     args = parser.parse_args()
@@ -203,8 +203,15 @@ def main():
     if args.proxy:
         print(f"Proxy: {args.proxy}")
     if use_browser:
-        print(f"Browser: Chrome (2 attempts per URL)")
-        print(f"Fresh browser + pincode for EACH URL")
+        from src.swiggy_scraper import STEALTH_AVAILABLE, UNDETECTED_AVAILABLE
+        if UNDETECTED_AVAILABLE:
+            print(f"Browser: Chrome via undetected_chromedriver (best stealth)")
+        elif STEALTH_AVAILABLE:
+            print(f"Browser: Chrome + selenium-stealth (good stealth)")
+        else:
+            print(f"Browser: Chrome + basic CDP stealth (install selenium-stealth for better results)")
+            print(f"  Run: pip install selenium-stealth")
+        print(f"2 attempts per URL, fresh browser each time")
 
     # Create scraper without opening browser yet (we open per-URL)
     scraper = SwiggyInstamartScraper(

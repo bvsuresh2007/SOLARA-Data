@@ -18,6 +18,14 @@ from dataclasses import dataclass, field
 import requests as http_requests
 from bs4 import BeautifulSoup
 
+# Try selenium-stealth for better bot evasion (works with regular Selenium)
+STEALTH_AVAILABLE = False
+try:
+    from selenium_stealth import stealth
+    STEALTH_AVAILABLE = True
+except ImportError:
+    pass
+
 # Try undetected_chromedriver first (best anti-detection), fall back to regular Selenium
 UNDETECTED_AVAILABLE = False
 SELENIUM_AVAILABLE = False
@@ -215,7 +223,7 @@ class SwiggyInstamartScraper:
         print(f"  [Browser: undetected_chromedriver (Chrome){proxy_msg}]")
 
     def _init_selenium_browser(self):
-        """Initialize using regular Selenium Chrome with stealth patches."""
+        """Initialize using regular Selenium Chrome with selenium-stealth."""
         options = Options()
         if self.headless:
             options.add_argument("--headless=new")
@@ -227,11 +235,6 @@ class SwiggyInstamartScraper:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--log-level=3")  # Suppress browser console noise
         options.add_argument("--silent")
-        options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        )
         options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         options.add_experimental_option("useAutomationExtension", False)
         if self.proxy:
@@ -243,10 +246,22 @@ class SwiggyInstamartScraper:
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=options)
 
-        # Apply CDP stealth patches
-        self._apply_stealth_scripts()
+        # Apply selenium-stealth (comprehensive bot evasion) or fall back to manual CDP
+        if STEALTH_AVAILABLE:
+            stealth(self.driver,
+                languages=["en-US", "en"],
+                vendor="Google Inc.",
+                platform="Win32",
+                webgl_vendor="Intel Inc.",
+                renderer="Intel Iris OpenGL Engine",
+                fix_hairline=True,
+            )
+            stealth_label = "selenium-stealth"
+        else:
+            self._apply_stealth_scripts()
+            stealth_label = "CDP stealth"
         proxy_msg = f" via proxy" if self.proxy else ""
-        print(f"  [Browser: Selenium Chrome + stealth{proxy_msg}]")
+        print(f"  [Browser: Chrome + {stealth_label}{proxy_msg}]")
 
     def _init_edge_browser(self):
         """Initialize using Microsoft Edge browser."""
@@ -277,10 +292,22 @@ class SwiggyInstamartScraper:
 
         self.driver = _wb.Edge(options=options)
 
-        # Apply CDP stealth patches
-        self._apply_stealth_scripts()
+        # Apply selenium-stealth or fall back to manual CDP
+        if STEALTH_AVAILABLE:
+            stealth(self.driver,
+                languages=["en-US", "en"],
+                vendor="Google Inc.",
+                platform="Win32",
+                webgl_vendor="Intel Inc.",
+                renderer="Intel Iris OpenGL Engine",
+                fix_hairline=True,
+            )
+            stealth_label = "selenium-stealth"
+        else:
+            self._apply_stealth_scripts()
+            stealth_label = "CDP stealth"
         proxy_msg = f" via proxy" if self.proxy else ""
-        print(f"  [Browser: Microsoft Edge + stealth{proxy_msg}]")
+        print(f"  [Browser: Edge + {stealth_label}{proxy_msg}]")
 
     def _init_firefox_browser(self):
         """Initialize using Mozilla Firefox browser."""
