@@ -1,0 +1,6 @@
+# SolaraDashboard - Scraper Cron Schedule
+# Edit SCRAPE_SCHEDULE_HOUR and SCRAPE_SCHEDULE_MINUTE in .env to change the time.
+# Default: 2:00 AM IST daily
+
+# m h  dom mon dow  command
+0 2 * * * cd /app && python -m scrapers.orchestrator >> /var/log/solara_scraper.log 2>&1

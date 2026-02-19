@@ -1,0 +1,100 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: solara_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-solara_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-solara_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-solara_user} -d ${POSTGRES_DB:-solara_dashboard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: solara_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-solara_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-solara_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_CHANNEL_ID: ${SLACK_CHANNEL_ID:-}
+      API_SECRET_KEY: ${API_SECRET_KEY:-change-me-in-production}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: solara_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+
+  scrapers:
+    build:
+      context: ./scrapers
+      dockerfile: Dockerfile
+    container_name: solara_scrapers
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-solara_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-solara_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SWIGGY_EMAIL: ${SWIGGY_EMAIL:-}
+      SWIGGY_PASSWORD: ${SWIGGY_PASSWORD:-}
+      BLINKIT_EMAIL: ${BLINKIT_EMAIL:-}
+      BLINKIT_PASSWORD: ${BLINKIT_PASSWORD:-}
+      AMAZON_EMAIL: ${AMAZON_EMAIL:-}
+      AMAZON_PASSWORD: ${AMAZON_PASSWORD:-}
+      ZEPTO_EMAIL: ${ZEPTO_EMAIL:-}
+      ZEPTO_PASSWORD: ${ZEPTO_PASSWORD:-}
+      SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:-}
+      SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:-}
+      SHOPIFY_STORE_URL: ${SHOPIFY_STORE_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SCRAPE_SCHEDULE_HOUR: ${SCRAPE_SCHEDULE_HOUR:-2}
+      SCRAPE_SCHEDULE_MINUTE: ${SCRAPE_SCHEDULE_MINUTE:-0}
+      RAW_DATA_PATH: /app/data/raw
+      PROCESSED_DATA_PATH: /app/data/processed
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  postgres_data:
