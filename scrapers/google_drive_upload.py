@@ -46,6 +46,11 @@ SCOPES = [
 
 ROOT_FOLDER_NAME = "SolaraDashboard Reports"
 
+# Set GOOGLE_DRIVE_ROOT_FOLDER_ID in .env to use an existing Drive folder as root
+# (paste the folder ID from the Drive URL). If not set, falls back to creating /
+# finding a folder named ROOT_FOLDER_NAME in My Drive.
+_ROOT_FOLDER_ID_ENV = "GOOGLE_DRIVE_ROOT_FOLDER_ID"
+
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_CSV  = "text/csv"
 MIME_DIR  = "application/vnd.google-apps.folder"
@@ -118,8 +123,10 @@ def upload_to_drive(
         service = _get_drive_service()
 
         # Build folder path: Root / YYYY-MM / Portal
+        # Root: use GOOGLE_DRIVE_ROOT_FOLDER_ID env var if set, else find/create by name
         month_label = report_date.strftime("%Y-%m")
-        root_id     = _get_or_create_folder(service, ROOT_FOLDER_NAME)
+        env_root_id = os.environ.get(_ROOT_FOLDER_ID_ENV)
+        root_id     = env_root_id or _get_or_create_folder(service, ROOT_FOLDER_NAME)
         month_id    = _get_or_create_folder(service, month_label, parent_id=root_id)
         portal_id   = _get_or_create_folder(service, portal, parent_id=month_id)
 
@@ -172,7 +179,8 @@ def get_month_folder_link(report_date: date) -> str | None:
     try:
         service   = _get_drive_service()
         month_label = report_date.strftime("%Y-%m")
-        root_id   = _get_or_create_folder(service, ROOT_FOLDER_NAME)
+        env_root_id = os.environ.get(_ROOT_FOLDER_ID_ENV)
+        root_id   = env_root_id or _get_or_create_folder(service, ROOT_FOLDER_NAME)
         month_id  = _get_or_create_folder(service, month_label, parent_id=root_id)
 
         service.permissions().create(

@@ -31,7 +31,17 @@ from dotenv import load_dotenv
 try:
     from .google_drive_upload import upload_to_drive as _upload_to_drive
 except ImportError:
-    _upload_to_drive = None
+    # Running as __main__ (standalone) — relative imports don't work, use path directly
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "google_drive_upload", Path(__file__).parent / "google_drive_upload.py"
+    )
+    try:
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _upload_to_drive = _mod.upload_to_drive
+    except Exception:
+        _upload_to_drive = None
 
 # Force UTF-8 output to avoid Windows cp1252 encoding errors
 if hasattr(sys.stdout, "buffer"):
