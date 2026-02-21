@@ -171,6 +171,46 @@ def upload_to_drive(
         return None
 
 
+def setup_monthly_folders(portals: list[str], target_date: date = None) -> tuple[str, str] | None:
+    """
+    Create the YYYY-MM folder and one subfolder per portal under SolaraDashboard Reports.
+    Called once on the 1st of each month.
+
+    Args:
+        portals:     List of portal display names, e.g. ["EasyEcom", "Zepto", ...]
+        target_date: Month to set up (defaults to today).
+
+    Returns:
+        (folder_url, month_label) tuple, or None on failure.
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    try:
+        service = _get_drive_service()
+        month_label = target_date.strftime("%Y-%m")
+        env_root_id = os.environ.get(_ROOT_FOLDER_ID_ENV)
+        root_id  = env_root_id or _get_or_create_folder(service, ROOT_FOLDER_NAME)
+        month_id = _get_or_create_folder(service, month_label, parent_id=root_id)
+
+        for portal in portals:
+            _get_or_create_folder(service, portal, parent_id=month_id)
+            logger.info("[Drive] Folder ready: %s / %s / %s", ROOT_FOLDER_NAME, month_label, portal)
+
+        service.permissions().create(
+            fileId=month_id,
+            body={"type": "anyone", "role": "reader"},
+        ).execute()
+
+        folder_url = f"https://drive.google.com/drive/folders/{month_id}"
+        logger.info("[Drive] Month folder: %s", folder_url)
+        return folder_url, month_label
+
+    except Exception as exc:
+        logger.error("[Drive] setup_monthly_folders failed: %s", exc)
+        return None
+
+
 def get_month_folder_link(report_date: date) -> str | None:
     """
     Return the shareable link to the YYYY-MM folder for a given date.
