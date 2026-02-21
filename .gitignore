@@ -39,6 +39,9 @@ yarn-error.log*
 .env.local
 .env.*.local
 slack_config.json
+credentials.json
+token.json
+*_session.json
 
 # ── Data files ───────────────────────────────────────────────────────────────
 data/raw/
@@ -46,6 +49,9 @@ data/processed/
 *.csv
 *.xlsx
 *.xls
+
+# ── Scraper browser profiles (auth credentials — never commit) ───────────────
+scrapers/sessions/*_profile/
 
 # ── Scraper debug output ─────────────────────────────────────────────────────
 debug_*.html
