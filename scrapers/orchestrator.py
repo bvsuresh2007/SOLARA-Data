@@ -13,8 +13,11 @@ import os
 import sys
 from datetime import date, datetime
 
+from dotenv import load_dotenv
+
 # Ensure project root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+load_dotenv()
 
 from scrapers.swiggy_scraper   import SwiggyScraper
 from scrapers.blinkit_scraper  import BlinkitScraper
@@ -47,14 +50,14 @@ def _get_db():
 
 def _upsert_sales(db, rows: list[dict]) -> int:
     from sqlalchemy.dialects.postgresql import insert
-    from backend.app.models.sales import SalesData
+    from backend.app.models.sales import CityDailySales
     if not rows:
         return 0
-    stmt = insert(SalesData).values(rows)
+    stmt = insert(CityDailySales).values(rows)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["portal_id", "city_id", "product_id", "sale_date"],
+        index_elements=["portal_id", "product_id", "city_id", "sale_date"],
         set_={
-            "quantity_sold": stmt.excluded.quantity_sold,
+            "units_sold": stmt.excluded.units_sold,
             "revenue": stmt.excluded.revenue,
             "discount_amount": stmt.excluded.discount_amount,
             "net_revenue": stmt.excluded.net_revenue,
@@ -68,16 +71,20 @@ def _upsert_sales(db, rows: list[dict]) -> int:
 
 def _upsert_inventory(db, rows: list[dict]) -> int:
     from sqlalchemy.dialects.postgresql import insert
-    from backend.app.models.inventory import InventoryData
+    from backend.app.models.inventory import InventorySnapshot
     if not rows:
         return 0
-    stmt = insert(InventoryData).values(rows)
+    stmt = insert(InventorySnapshot).values(rows)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["portal_id", "warehouse_id", "product_id", "snapshot_date"],
+        index_elements=["portal_id", "product_id", "snapshot_date"],
         set_={
-            "stock_quantity": stmt.excluded.stock_quantity,
-            "available_quantity": stmt.excluded.available_quantity,
-            "reserved_quantity": stmt.excluded.reserved_quantity,
+            "portal_stock":    stmt.excluded.portal_stock,
+            "backend_stock":   stmt.excluded.backend_stock,
+            "frontend_stock":  stmt.excluded.frontend_stock,
+            "solara_stock":    stmt.excluded.solara_stock,
+            "amazon_fc_stock": stmt.excluded.amazon_fc_stock,
+            "open_po":         stmt.excluded.open_po,
+            "doc":             stmt.excluded.doc,
         },
     )
     db.execute(stmt)
@@ -86,14 +93,15 @@ def _upsert_inventory(db, rows: list[dict]) -> int:
 
 
 def _log_scrape(db, portal_name: str, scrape_date: date, status: str, records: int, error: str = None):
-    from backend.app.models.inventory import ScrapingLog
+    from backend.app.models.inventory import ImportLog
     from backend.app.models.metadata import Portal
     portal = db.query(Portal).filter_by(name=portal_name).first()
-    log = ScrapingLog(
+    log = ImportLog(
+        source_type="portal_scraper",
         portal_id=portal.id if portal else None,
-        scrape_date=scrape_date,
+        import_date=scrape_date,
         status=status,
-        records_processed=records,
+        records_imported=records,
         error_message=error,
         end_time=datetime.now(),
     )

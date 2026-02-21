@@ -20,12 +20,12 @@ class SalesDataOut(BaseModel):
     city_id: Optional[int]
     product_id: int
     sale_date: date
-    quantity_sold: Decimal
-    revenue: Decimal
-    discount_amount: Decimal
-    net_revenue: Decimal
+    units_sold: Decimal
+    revenue: Optional[Decimal]
+    discount_amount: Optional[Decimal]
+    net_revenue: Optional[Decimal]
     order_count: Optional[int]
-    created_at: datetime
+    imported_at: datetime
 
     class Config:
         from_attributes = True

@@ -4,47 +4,53 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class InventoryDataOut(BaseModel):
+class InventorySnapshotOut(BaseModel):
     id: int
     portal_id: int
-    city_id: Optional[int]
-    warehouse_id: Optional[int]
     product_id: int
     snapshot_date: date
-    stock_quantity: Decimal
-    reserved_quantity: Decimal
-    available_quantity: Decimal
-    unsellable_units: Optional[Decimal]
-    aged_90_plus_units: Optional[Decimal]
-    oos_percentage: Optional[Decimal]
-    lead_time_days: Optional[int]
-    created_at: datetime
+    portal_stock: Optional[Decimal]
+    backend_stock: Optional[Decimal]
+    frontend_stock: Optional[Decimal]
+    solara_stock: Optional[Decimal]
+    amazon_fc_stock: Optional[Decimal]
+    open_po: Optional[Decimal]
+    doc: Optional[Decimal]
+    imported_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# Keep old name as alias so existing imports don't break immediately
+InventoryDataOut = InventorySnapshotOut
 
 
 class InventorySummary(BaseModel):
     product_id: int
     product_name: str
     sku_code: str
-    total_stock: Decimal
-    total_available: Decimal
-    total_reserved: Decimal
+    total_portal_stock: Optional[Decimal]
     portal_count: int
 
 
-class ScrapingLogOut(BaseModel):
+class ImportLogOut(BaseModel):
     id: int
+    source_type: str
     portal_id: Optional[int]
-    scrape_date: date
+    sheet_name: Optional[str]
+    file_name: Optional[str]
+    import_date: date
     start_time: datetime
     end_time: Optional[datetime]
     status: str
-    records_processed: int
+    records_imported: int
     error_message: Optional[str]
-    file_path: Optional[str]
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# Keep old name as alias so existing imports don't break immediately
+ScrapingLogOut = ImportLogOut

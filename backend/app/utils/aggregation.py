@@ -6,17 +6,16 @@ from decimal import Decimal
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models.sales import SalesData
+from ..models.sales import CityDailySales, Product
 from ..models.metadata import City, Portal
-from ..models.sales import Product
 
 
 def revenue_for_period(db: Session, start: date, end: date, portal_id: int = None) -> Decimal:
-    q = db.query(func.coalesce(func.sum(SalesData.revenue), 0)).filter(
-        SalesData.sale_date.between(start, end)
+    q = db.query(func.coalesce(func.sum(CityDailySales.revenue), 0)).filter(
+        CityDailySales.sale_date.between(start, end)
     )
     if portal_id:
-        q = q.filter(SalesData.portal_id == portal_id)
+        q = q.filter(CityDailySales.portal_id == portal_id)
     return q.scalar() or Decimal(0)
 
 
@@ -24,12 +23,12 @@ def top_products(db: Session, start: date, end: date, limit: int = 5) -> list[di
     rows = (
         db.query(
             Product.product_name,
-            func.sum(SalesData.revenue).label("revenue"),
+            func.sum(CityDailySales.revenue).label("revenue"),
         )
-        .join(SalesData, SalesData.product_id == Product.id)
-        .filter(SalesData.sale_date.between(start, end))
+        .join(CityDailySales, CityDailySales.product_id == Product.id)
+        .filter(CityDailySales.sale_date.between(start, end))
         .group_by(Product.id, Product.product_name)
-        .order_by(func.sum(SalesData.revenue).desc())
+        .order_by(func.sum(CityDailySales.revenue).desc())
         .limit(limit)
         .all()
     )
@@ -40,12 +39,12 @@ def top_cities(db: Session, start: date, end: date, limit: int = 5) -> list[dict
     rows = (
         db.query(
             City.name,
-            func.sum(SalesData.revenue).label("revenue"),
+            func.sum(CityDailySales.revenue).label("revenue"),
         )
-        .join(SalesData, SalesData.city_id == City.id)
-        .filter(SalesData.sale_date.between(start, end))
+        .join(CityDailySales, CityDailySales.city_id == City.id)
+        .filter(CityDailySales.sale_date.between(start, end))
         .group_by(City.id, City.name)
-        .order_by(func.sum(SalesData.revenue).desc())
+        .order_by(func.sum(CityDailySales.revenue).desc())
         .limit(limit)
         .all()
     )

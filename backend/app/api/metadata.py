@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.metadata import Portal, City, Warehouse
-from ..models.inventory import ScrapingLog
+from ..models.inventory import ImportLog
 from ..schemas.metadata import PortalOut, CityOut, WarehouseOut
-from ..schemas.inventory import ScrapingLogOut
+from ..schemas.inventory import ImportLogOut
 
 router = APIRouter()
 
@@ -47,16 +47,16 @@ def list_warehouses(
     return q.order_by(Warehouse.name).all()
 
 
-@router.get("/scraping-logs", response_model=List[ScrapingLogOut])
+@router.get("/scraping-logs", response_model=List[ImportLogOut])
 def list_scraping_logs(
     portal_id: int = Query(None),
     status: str = Query(None),
     limit: int = Query(50, le=500),
     db: Session = Depends(get_db),
 ):
-    q = db.query(ScrapingLog)
+    q = db.query(ImportLog)
     if portal_id:
-        q = q.filter(ScrapingLog.portal_id == portal_id)
+        q = q.filter(ImportLog.portal_id == portal_id)
     if status:
-        q = q.filter(ScrapingLog.status == status)
-    return q.order_by(ScrapingLog.created_at.desc()).limit(limit).all()
+        q = q.filter(ImportLog.status == status)
+    return q.order_by(ImportLog.created_at.desc()).limit(limit).all()
