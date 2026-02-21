@@ -2,7 +2,7 @@
 EasyEcom Sales Details scraper.
 
 Login strategy:
-  - Uses a persistent Chrome profile (easyecom_profile/) so Google OAuth
+  - Uses a persistent Chrome profile (scrapers/sessions/easyecom_profile/) so Google OAuth
     auto-completes on every run without entering credentials.
   - Must do a fresh Google OAuth each run because the PHP session for
     sales_dashboard.php is short-lived (~24 min). Google auto-approves
@@ -26,7 +26,6 @@ import zipfile
 from datetime import date, timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
 
 try:
     from .google_drive_upload import upload_to_drive as _upload_to_drive
@@ -47,11 +46,15 @@ except ImportError:
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-load_dotenv()
-
 # --- Paths ---
 _HERE = Path(__file__).resolve().parent
-PROFILE_DIR = (_HERE.parent / "easyecom_profile").resolve()
+# Module-level constant kept for backward-compat; run() always calls _profile_dir().
+PROFILE_DIR = (_HERE / "sessions" / "easyecom_profile").resolve()
+
+
+def _profile_dir() -> Path:
+    """Return the resolved path of the EasyEcom Chrome profile directory."""
+    return (_HERE / "sessions" / "easyecom_profile").resolve()
 
 # --- URLs ---
 LOGIN_URL = "https://app.easyecom.io/V2/account/auth/login"
@@ -80,14 +83,15 @@ class EasyecomScraper:
 
     def _init_browser(self):
         from playwright.sync_api import sync_playwright
-        if not PROFILE_DIR.exists():
+        profile = _profile_dir()
+        if not profile.exists():
             raise RuntimeError(
-                f"EasyEcom Chrome profile not found at {PROFILE_DIR}. "
+                f"EasyEcom Chrome profile not found at {profile}. "
                 "Run auth_easyecom.py first to set up the profile."
             )
         self._pw = sync_playwright().__enter__()
         self._ctx = self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
+            user_data_dir=str(profile),
             headless=self.headless,
             slow_mo=300 if not self.headless else 0,
             args=["--start-maximized"] if not self.headless else [],
@@ -744,6 +748,14 @@ class EasyecomScraper:
         }
 
         try:
+            from scrapers.profile_sync import download_profile, upload_profile
+        except ImportError:
+            from profile_sync import download_profile, upload_profile
+
+        try:
+            # Pull latest profile from Drive before launching browser (no-op if not configured)
+            download_profile("easyecom")
+
             self._init_browser()
             self.login()
             self._go_to_sales_page()
@@ -768,6 +780,8 @@ class EasyecomScraper:
             result["error"] = str(exc)
         finally:
             self._close_browser()
+            # Push updated profile back to Drive (no-op if not configured)
+            upload_profile("easyecom")
 
         return result
 
@@ -777,6 +791,9 @@ class EasyecomScraper:
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     import logging
+    from dotenv import load_dotenv
+    load_dotenv()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
