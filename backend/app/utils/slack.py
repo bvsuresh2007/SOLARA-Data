@@ -83,6 +83,20 @@ def notify_scraping_failure(portal: str, scrape_date: date, error: str) -> bool:
     return _post({"text": text})
 
 
+def notify_monthly_drive_folder(month_label: str, folder_url: str) -> bool:
+    """
+    Post the Google Drive monthly folder link at the start of each month.
+    Call this on the 1st of every month.
+    """
+    text = (
+        f"*SolaraDashboard Reports — {month_label}*\n"
+        f"All daily sales reports for this month are stored here:\n"
+        f"{folder_url}\n"
+        f"_(Anyone with the link can view and download)_"
+    )
+    return _post({"text": text})
+
+
 def notify_weekly_summary(
     week_label: str,
     total_revenue: float,
