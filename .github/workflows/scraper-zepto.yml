@@ -86,3 +86,14 @@ jobs:
           name: zepto-debug-${{ github.run_id }}
           path: data/raw/zepto/debug_*.png
           retention-days: 3
+
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":warning: *Zepto scraper failed* — session or OTP issue.\n\n*Action needed:*\n1. Run locally in visible mode: `python scrapers/zepto_scraper.py`\n2. Complete the OTP login in the browser window\n3. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-zepto.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
+            }'

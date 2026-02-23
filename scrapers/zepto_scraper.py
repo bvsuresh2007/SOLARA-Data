@@ -15,10 +15,17 @@ Report download flow:
   5. Save Excel file
 """
 
+import logging
 import os
+import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+
+# Allow running as a script: python scrapers/zepto_scraper.py
+if __name__ == "__main__" and __package__ is None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    __package__ = "scrapers"
 
 from .base_scraper import BaseScraper, logger
 from .gmail_otp import fetch_latest_otp
@@ -258,3 +265,20 @@ class ZeptoScraper(BaseScraper):
             self.page.locator('button:has-text("Logout"), a:has-text("Logout")').first.click(timeout=5_000)
         except Exception:
             pass
+
+
+# ------------------------------------------------------------------
+# CLI entry point for manual testing / session refresh
+# ------------------------------------------------------------------
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+
+    scraper = ZeptoScraper(headless=False)
+    result  = scraper.run()
+    print("\nResult:", result)
