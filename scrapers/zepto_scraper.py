@@ -225,6 +225,31 @@ class ZeptoScraper(BaseScraper):
         return output_path
 
     # ------------------------------------------------------------------
+    # run() — overrides BaseScraper to add Drive session sync
+    # ------------------------------------------------------------------
+
+    def run(self, report_date: date = None) -> dict:
+        """
+        Wraps BaseScraper.run() with Drive session sync:
+          1. Download zepto_session.json from Drive (so CI has a saved session)
+          2. Run the normal scrape (login checks session validity, falls back to OTP)
+          3. Upload the refreshed session JSON back to Drive
+        No-op if PROFILE_STORAGE_DRIVE_FOLDER_ID is not set (local dev).
+        """
+        try:
+            from scrapers.profile_sync import download_session_file, upload_session_file
+        except ImportError:
+            from profile_sync import download_session_file, upload_session_file
+
+        download_session_file("zepto")
+        try:
+            result = super().run(report_date=report_date)
+        finally:
+            upload_session_file("zepto")
+
+        return result
+
+    # ------------------------------------------------------------------
     # Logout
     # ------------------------------------------------------------------
 

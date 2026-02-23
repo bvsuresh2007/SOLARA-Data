@@ -1,0 +1,88 @@
+name: Scraper — Zepto
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 11:30 AM IST daily
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Date to scrape (YYYY-MM-DD). Defaults to yesterday."
+        required: false
+        default: ""
+
+jobs:
+  run-scraper:
+    name: Run Zepto scraper
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r scrapers/requirements.txt
+          pip install pyotp google-auth google-auth-oauthlib google-api-python-client python-dotenv
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Restore Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON }}" | base64 -d > token.json
+
+      - name: Create data directories
+        run: mkdir -p data/raw/zepto
+
+      - name: Run Zepto scraper
+        env:
+          ZEPTO_LINK: ${{ secrets.ZEPTO_LINK }}
+          ZEPTO_EMAIL: ${{ secrets.ZEPTO_EMAIL }}
+          ZEPTO_PASSWORD: ${{ secrets.ZEPTO_PASSWORD }}
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          PROFILE_STORAGE_DRIVE_FOLDER_ID: ${{ secrets.PROFILE_STORAGE_DRIVE_FOLDER_ID }}
+          RAW_DATA_PATH: ./data/raw
+        run: |
+          python - <<'EOF'
+          import sys, os
+          from datetime import date, timedelta
+          sys.path.insert(0, '.')
+
+          report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
+          if report_date_str:
+              from datetime import datetime
+              report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
+          else:
+              report_date = date.today() - timedelta(days=1)
+
+          from scrapers.zepto_scraper import ZeptoScraper
+          result = ZeptoScraper(headless=True).run(report_date=report_date)
+          print("Result:", result)
+          if result.get("status") == "error":
+              sys.exit(1)
+          EOF
+        env:
+          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
+
+      - name: Upload data artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zepto-data-${{ github.run_id }}
+          path: data/raw/zepto/
+          retention-days: 7
+
+      - name: Upload debug screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: zepto-debug-${{ github.run_id }}
+          path: data/raw/zepto/debug_*.png
+          retention-days: 3

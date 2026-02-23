@@ -103,11 +103,7 @@ class BlinkitScraper:
     def _init_browser(self):
         from playwright.sync_api import sync_playwright
         profile = _profile_dir()
-        if not profile.exists():
-            raise RuntimeError(
-                f"Blinkit Chrome profile not found at {profile}. "
-                "Run auth_blinkit.py first to perform the one-time OTP login."
-            )
+        profile.mkdir(parents=True, exist_ok=True)  # create fresh dir on first run
         self._pw = sync_playwright().__enter__()
         self._ctx = self._pw.chromium.launch_persistent_context(
             user_data_dir=str(profile),
@@ -121,7 +117,8 @@ class BlinkitScraper:
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
         )
-        self._page = self._ctx.new_page()
+        pages = self._ctx.pages
+        self._page = pages[0] if pages else self._ctx.new_page()
         self._page.set_default_timeout(30_000)
 
     def _close_browser(self):
@@ -139,6 +136,47 @@ class BlinkitScraper:
             path = self.out_dir / f"debug_blinkit_{label}_{int(time.time())}.png"
             self._page.screenshot(path=str(path))
             self._log.debug("[Blinkit] Screenshot: %s", path)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Modal dismissal
+    # ------------------------------------------------------------------
+
+    def _dismiss_modals(self) -> None:
+        """
+        Dismiss any open Ant Design modals or onboarding overlays.
+        Called before any page interaction to clear blocking overlays.
+        """
+        try:
+            # "Skip for now" onboarding modal (seen on /app/sales)
+            skip_btn = self._page.locator('button:has-text("Skip for now"), button:has-text("Skip")')
+            if skip_btn.first.is_visible(timeout=2_000):
+                self._log.info("[Blinkit] Dismissing onboarding modal ('Skip for now')")
+                skip_btn.first.click()
+                self._page.wait_for_timeout(1000)
+                return
+        except Exception:
+            pass
+
+        try:
+            # Generic Ant Design modal close button
+            close_btn = self._page.locator('.ant-modal-close, .ant-modal-close-x, button.ant-modal-close')
+            if close_btn.first.is_visible(timeout=1_000):
+                self._log.info("[Blinkit] Dismissing modal via close button")
+                close_btn.first.click()
+                self._page.wait_for_timeout(1000)
+                return
+        except Exception:
+            pass
+
+        try:
+            # Press Escape as last resort
+            modal = self._page.locator('.ant-modal-wrap')
+            if modal.first.is_visible(timeout=500):
+                self._log.info("[Blinkit] Dismissing modal via Escape")
+                self._page.keyboard.press("Escape")
+                self._page.wait_for_timeout(1000)
         except Exception:
             pass
 
@@ -199,55 +237,77 @@ class BlinkitScraper:
         """
         Handle the 'Access dashboard as' company selector.
 
-        After OTP is verified, PartnersBiz shows a list of companies/roles
-        associated with the email. We click the first visible option.
-
-        TODO: If the account has multiple companies (e.g. different brands),
-              update this to select by name using BLINKIT_COMPANY env var.
+        After OTP is verified, PartnersBiz shows a 'Login as <Company Name>'
+        button for each company linked to the account. Click the first one.
         """
         if not self._is_on_company_selector():
             return
 
-        self._log.info("[Blinkit] 'Access dashboard as' company selector visible — selecting first option")
+        self._log.info("[Blinkit] Company selector visible — looking for 'Login as' button")
         self._shot("company_selector")
 
+        # The selector is an Ant Design list — each company is a list row with
+        # company name + "manufacturer" badge and a chevron ">".
+        # Strategy 1: Ant Design list item
         clicked = self._page.evaluate("""
             () => {
-                // The company list: each item is a clickable block with company name + role tag.
-                // From blinkit_post_submit.png: items contain a name and "manufacturer" badge.
-                // Strategy: find all list-like elements that are NOT the heading itself.
-                const candidates = Array.from(document.querySelectorAll('*')).filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    const txt  = (el.innerText || '').trim();
-                    return (
-                        rect.width > 100 && rect.height > 20 && rect.height < 150
-                        && txt.length > 2 && txt.length < 200
-                        && !txt.startsWith('Access dashboard')
-                        && ['LI', 'A', 'BUTTON', 'DIV'].includes(el.tagName)
-                        && !el.querySelector('ul, ol')   // not a container
-                    );
+                // Try Ant Design list items first
+                const antItems = Array.from(document.querySelectorAll(
+                    '.ant-list-item, [class*="list-item"], [class*="company-item"], [class*="companyItem"]'
+                )).filter(el => el.getBoundingClientRect().width > 0);
+
+                if (antItems.length > 0) {
+                    antItems[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    return antItems[0].innerText.trim().substring(0, 80);
+                }
+
+                // Strategy 2: find the "manufacturer" badge and click its ancestor row
+                const mfr = Array.from(document.querySelectorAll('*')).find(el => {
+                    const txt = (el.innerText || '').trim().toLowerCase();
+                    return txt === 'manufacturer' && el.getBoundingClientRect().width > 0;
                 });
-
-                // Sort by vertical position (topmost = first item in list)
-                candidates.sort((a, b) =>
-                    a.getBoundingClientRect().top - b.getBoundingClientRect().top
-                );
-
-                // Click the topmost candidate that appears to be inside the scrollable list
-                for (const el of candidates) {
-                    const txt = (el.innerText || '').trim();
-                    if (txt && !txt.toLowerCase().includes('access dashboard')) {
-                        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                        return txt.substring(0, 80);
+                if (mfr) {
+                    let el = mfr.parentElement;
+                    for (let i = 0; i < 6; i++) {
+                        if (!el) break;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 100 && rect.height > 30 && rect.height < 200) {
+                            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                            return el.innerText.trim().substring(0, 80);
+                        }
+                        el = el.parentElement;
                     }
                 }
+
+                // Strategy 3: any clickable row below the "Access dashboard as" heading
+                const heading = Array.from(document.querySelectorAll('*')).find(el =>
+                    (el.innerText || '').trim() === 'Access dashboard as' &&
+                    el.getBoundingClientRect().width > 0
+                );
+                if (heading) {
+                    const headingBottom = heading.getBoundingClientRect().bottom;
+                    const candidates = Array.from(document.querySelectorAll('div, li, a')).filter(el => {
+                        const rect = el.getBoundingClientRect();
+                        const txt  = (el.innerText || '').trim();
+                        return rect.top > headingBottom && rect.width > 100
+                            && rect.height > 20 && rect.height < 150
+                            && txt.length > 2 && !el.querySelector('ul, ol, nav');
+                    }).sort((a, b) =>
+                        a.getBoundingClientRect().top - b.getBoundingClientRect().top
+                    );
+                    if (candidates.length > 0) {
+                        candidates[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        return candidates[0].innerText.trim().substring(0, 80);
+                    }
+                }
+
                 return null;
             }
         """)
         if clicked:
             self._log.info("[Blinkit] Selected company: %s", clicked)
         else:
-            self._log.warning("[Blinkit] Could not auto-select company — manual action needed")
+            self._log.warning("[Blinkit] Could not find company row — manual action needed")
         self._page.wait_for_timeout(3000)
 
     # ------------------------------------------------------------------
@@ -288,7 +348,7 @@ class BlinkitScraper:
         self._page.locator('button:has-text("Request OTP")').click()
         self._page.wait_for_timeout(2000)
 
-        # Wait for OTP boxes
+        # Wait for OTP boxes to appear
         try:
             self._page.locator('input[maxlength="1"]').first.wait_for(
                 state="visible", timeout=15_000
@@ -297,7 +357,9 @@ class BlinkitScraper:
             self._shot("reauth_otp_boxes_missing")
             raise RuntimeError("[Blinkit] OTP input boxes did not appear after requesting OTP")
 
-        # Fetch OTP from Gmail
+        self._shot("reauth_otp_boxes_visible")
+
+        # Fetch OTP from Gmail (only ONE OTP was requested above)
         otp = self._get_otp_from_gmail(after_epoch=otp_requested_at)
         if not otp:
             self._shot("reauth_otp_timeout")
@@ -306,15 +368,47 @@ class BlinkitScraper:
                 "Check token.json and that email is delivered to pavan.kumar@solara.in"
             )
 
-        # Type OTP
+        # Enter OTP — click each individual box and type one digit at a time.
+        # This is necessary because individual-character OTP inputs use JS listeners
+        # that don't fire reliably with keyboard.type() on the first box alone.
         self._log.info("[Blinkit] Entering OTP: %s", otp)
-        otp_first = self._page.locator('input[maxlength="1"]').first
-        otp_first.click()
-        self._page.keyboard.type(otp)
-        self._page.wait_for_timeout(1000)
+        otp_boxes = self._page.locator('input[maxlength="1"]').all()
+        self._log.info("[Blinkit] OTP boxes found: %d", len(otp_boxes))
+
+        if len(otp_boxes) >= len(otp):
+            # Per-box entry: click → press digit → move to next
+            for i, digit in enumerate(otp):
+                box = otp_boxes[i]
+                box.click()
+                box.press_sequentially(digit, delay=80)
+                self._page.wait_for_timeout(80)
+        else:
+            # Fallback: press_sequentially on the first box (relies on auto-advance)
+            self._log.warning(
+                "[Blinkit] Fewer boxes (%d) than OTP digits (%d) — using press_sequentially",
+                len(otp_boxes), len(otp),
+            )
+            otp_boxes[0].click()
+            otp_boxes[0].press_sequentially(otp, delay=150)
+
+        self._page.wait_for_timeout(800)
+
+        # Verify fill
+        filled = self._page.evaluate(
+            "() => Array.from(document.querySelectorAll('input[maxlength=\"1\"]'))"
+            ".map(i => i.value).join('')"
+        )
+        self._log.info("[Blinkit] OTP boxes after fill: '%s' (expected: '%s')", filled, otp)
+        self._shot("reauth_otp_filled")
 
         # Submit OTP
-        self._page.locator('button:has-text("Submit OTP")').click()
+        try:
+            submit_btn = self._page.locator('button:has-text("Submit OTP")')
+            submit_btn.wait_for(state="visible", timeout=5_000)
+            submit_btn.click()
+        except Exception:
+            # Fallback: any enabled submit-like button
+            self._page.locator('button[type="submit"], button:has-text("Verify")').first.click()
         self._page.wait_for_timeout(3000)
         self._shot("reauth_post_submit")
 
@@ -373,45 +467,256 @@ class BlinkitScraper:
     # ------------------------------------------------------------------
 
     def _go_to_soh(self) -> None:
-        """
-        Navigate to the SOH (Sales Order History) dashboard page.
-
-        From .env BLINKIT_LINK = https://partnersbiz.com/app/soh
-        This is the main data page for Blinkit. The exact URL path was
-        confirmed from the .env configuration.
-
-        TODO: After successful auth, inspect this page to find:
-          - The date picker selectors
-          - The download/export button selectors
-          - Whether the data is paginated or directly downloadable
-        """
+        """Navigate to the SOH page and verify session is active."""
         self._log.info("[Blinkit] Navigating to SOH page: %s", SOH_URL)
         self._page.goto(SOH_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(4000)
         self._shot("soh_page")
 
-        # Verify we're on the right page (not redirected to login)
         if not self._is_logged_in():
             raise RuntimeError(
                 f"[Blinkit] Redirected to login when navigating to SOH. URL: {self._page.url}"
             )
+        self._log.info("[Blinkit] SOH page loaded. URL: %s", self._page.url)
 
-        body_text = ""
+    # ------------------------------------------------------------------
+    # Report download flow (confirmed steps):
+    #   1. /app/sales → "Download Sales Data" button
+    #   2. Set start date = end date = yesterday
+    #   3. Click "Request Data"
+    #   4. Poll /app/report-requests until row is ready → download
+    # ------------------------------------------------------------------
+
+    def _request_sales_report(self, report_date: date) -> None:
+        """
+        Navigate to /app/sales, click Download Sales Data,
+        set date = report_date for both start and end, click Request Data.
+        Only ONE request is made — no retries that would generate extra data.
+        """
+        date_str = report_date.strftime("%Y-%m-%d")
+        self._log.info("[Blinkit] Navigating to /app/sales")
+        self._page.goto("https://partnersbiz.com/app/sales", wait_until="domcontentloaded")
+        self._page.wait_for_timeout(3000)
+        self._shot("sales_page")
+
+        # Dismiss any onboarding/blocking modal before interacting
+        self._dismiss_modals()
+
+        # Click "Download Sales Data" button
+        self._log.info("[Blinkit] Looking for 'Download Sales Data' button")
         try:
-            body_text = self._page.inner_text("body")
+            dl_btn = self._page.get_by_text("Download Sales Data", exact=True)
+            dl_btn.wait_for(state="visible", timeout=10_000)
+            dl_btn.click()
+            self._page.wait_for_timeout(2000)
+            self._shot("after_download_sales_click")
+        except Exception as e:
+            self._shot("download_sales_btn_missing")
+            raise RuntimeError(f"[Blinkit] 'Download Sales Data' button not found: {e}")
+
+        # Set date range using the Ant Design RangePicker.
+        # The picker shows a calendar — click the correct day cell twice
+        # (once for start, once for end) which auto-closes the picker.
+        day        = report_date.day
+        month_name = report_date.strftime("%b %Y")   # e.g. "Feb 2026"
+        self._log.info("[Blinkit] Setting date range to %s (day %d)", date_str, day)
+
+        # Open the range picker (click the first date input in the modal)
+        try:
+            date_input = self._page.locator('.ant-picker-input input').first
+            date_input.wait_for(state="visible", timeout=8_000)
+            date_input.click()
+            self._page.wait_for_timeout(1000)
+        except Exception as e:
+            self._log.warning("[Blinkit] Could not click date input: %s", e)
+
+        # Click the day cell in the calendar matching report_date.
+        # Ant Design cells have title="YYYY-MM-DD" on the td element.
+        # Click twice: once selects start date, second click selects end date.
+        cell_clicked = self._page.evaluate("""
+            (dateStr) => {
+                // Ant Design date cells: td[title="YYYY-MM-DD"] or td with data-date
+                const cell = document.querySelector(
+                    `td[title="${dateStr}"], td[data-date="${dateStr}"], ` +
+                    `td.ant-picker-cell[title*="${dateStr}"]`
+                );
+                if (cell && cell.getBoundingClientRect().width > 0) {
+                    cell.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return true;
+                }
+                return false;
+            }
+        """, date_str)
+
+        self._page.wait_for_timeout(600)
+
+        if cell_clicked:
+            # Click the same cell again to set end date = start date
+            self._page.evaluate("""
+                (dateStr) => {
+                    const cell = document.querySelector(
+                        `td[title="${dateStr}"], td[data-date="${dateStr}"], ` +
+                        `td.ant-picker-cell[title*="${dateStr}"]`
+                    );
+                    if (cell) cell.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                }
+            """, date_str)
+            self._page.wait_for_timeout(600)
+            self._log.info("[Blinkit] Clicked date cell %s (start + end)", date_str)
+        else:
+            # Fallback: type into inputs directly and press Enter to close picker
+            self._log.warning("[Blinkit] Date cell not found, falling back to text input")
+            inputs = self._page.locator('.ant-picker-input input').all()
+            if len(inputs) >= 1:
+                inputs[0].click()
+                inputs[0].fill(date_str)
+                self._page.keyboard.press("Enter")
+                self._page.wait_for_timeout(400)
+            if len(inputs) >= 2:
+                inputs[1].click()
+                inputs[1].fill(date_str)
+                self._page.keyboard.press("Enter")
+                self._page.wait_for_timeout(400)
+
+        # If picker is still open, press Escape to close it
+        try:
+            if self._page.locator('.ant-picker-dropdown:not(.ant-picker-dropdown-hidden)').is_visible(timeout=1_000):
+                self._log.info("[Blinkit] Picker still open — pressing Escape")
+                self._page.keyboard.press("Escape")
+                self._page.wait_for_timeout(500)
         except Exception:
             pass
 
-        if "login" in self._page.url.lower():
-            raise RuntimeError(
-                "[Blinkit] Session expired when navigating to SOH — run auth_blinkit.py again."
-            )
+        self._shot("after_date_set")
+        self._log.info("[Blinkit] Date range set. Clicking 'Request Data'")
 
-        self._log.info("[Blinkit] SOH page loaded. URL: %s", self._page.url)
-        self._log.debug("[Blinkit] Page text preview: %s", body_text[:200])
+        # Click "Request Data"
+        try:
+            req_btn = self._page.get_by_text("Request Data", exact=True)
+            req_btn.wait_for(state="visible", timeout=8_000)
+            req_btn.click()
+            self._page.wait_for_timeout(2000)
+            self._shot("after_request_data")
+            self._log.info("[Blinkit] Report requested successfully")
+        except Exception as e:
+            self._shot("request_data_btn_missing")
+            raise RuntimeError(f"[Blinkit] 'Request Data' button not found: {e}")
+
+    def _download_from_report_requests(self, report_date: date) -> "Path | None":
+        """
+        Navigate to /app/report-requests, poll until the report for
+        report_date is ready, then download it.
+        Returns the saved file path or None on timeout.
+        """
+        date_str = report_date.strftime("%Y-%m-%d")
+        output_path = self.out_dir / f"blinkit_sales_{date_str}.xlsx"
+
+        # Date format used in the Filters column of Report Requests table: DD-MM-YYYY
+        date_str_filter = f"{report_date.day:02d}-{report_date.month:02d}-{report_date.year}"
+
+        self._log.info("[Blinkit] Navigating to /app/report-requests")
+        self._page.goto("https://partnersbiz.com/app/report-requests", wait_until="domcontentloaded")
+        self._page.wait_for_timeout(3000)
+        self._shot("report_requests_page")
+
+        # Poll up to 10 minutes (20 × 30s) for the report to reach "success"
+        max_polls = 20
+        for poll in range(max_polls):
+            self._log.info("[Blinkit] Polling report-requests (attempt %d/%d)", poll + 1, max_polls)
+
+            # Check the table for a "Sales Details Excel" row matching our date with status "success"
+            row_info = self._page.evaluate("""
+                (dateFilter) => {
+                    const rows = Array.from(document.querySelectorAll('tr'));
+                    for (const row of rows) {
+                        const cells = Array.from(row.querySelectorAll('td'));
+                        if (cells.length < 4) continue;
+                        const reportType = (cells[1]?.innerText || '').trim();
+                        const status     = (cells[2]?.innerText || '').trim().toLowerCase();
+                        const filters    = (cells[5]?.innerText || cells[4]?.innerText || '').trim();
+
+                        if (!reportType.toLowerCase().includes('sales')) continue;
+                        if (!filters.includes(dateFilter)) continue;
+
+                        if (status === 'success') {
+                            // Click the download icon in the Actions column (last td)
+                            const actionsTd = cells[cells.length - 1];
+                            const icon = actionsTd.querySelector('a, button, svg, [class*="action"], [class*="download"]');
+                            if (icon && icon.getBoundingClientRect().width > 0) {
+                                icon.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                return {status: 'clicked', text: actionsTd.innerHTML.substring(0, 100)};
+                            }
+                            // Fallback: click any visible element in actions column
+                            const anyEl = Array.from(actionsTd.querySelectorAll('*')).find(
+                                el => el.getBoundingClientRect().width > 0
+                            );
+                            if (anyEl) {
+                                anyEl.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                return {status: 'clicked_fallback', text: anyEl.outerHTML.substring(0, 100)};
+                            }
+                            return {status: 'success_no_button'};
+                        }
+
+                        return {status: status};  // still processing / failed
+                    }
+                    return {status: 'not_found'};
+                }
+            """, date_str_filter)
+
+            self._log.info("[Blinkit] Row status: %s", row_info)
+            self._shot(f"report_poll_{poll + 1}")
+
+            if row_info and row_info.get("status") in ("clicked", "clicked_fallback"):
+                try:
+                    with self._page.expect_download(timeout=30_000) as dl_info:
+                        pass  # download was already triggered by JS above
+                    dl = dl_info.value
+                    dl.save_as(str(output_path))
+                    self._log.info("[Blinkit] Downloaded: %s", output_path)
+                    return output_path
+                except Exception:
+                    # JS click may have triggered download already — retry with explicit click
+                    self._log.info("[Blinkit] expect_download missed — retrying download click")
+                    try:
+                        with self._page.expect_download(timeout=15_000) as dl_info:
+                            self._page.evaluate("""
+                                (dateFilter) => {
+                                    const rows = Array.from(document.querySelectorAll('tr'));
+                                    for (const row of rows) {
+                                        const cells = Array.from(row.querySelectorAll('td'));
+                                        if (cells.length < 4) continue;
+                                        if (!(cells[5]?.innerText || cells[4]?.innerText || '').includes(dateFilter)) continue;
+                                        const actionsTd = cells[cells.length - 1];
+                                        const icon = actionsTd.querySelector('a, button, svg, [class*="action"]');
+                                        if (icon) { icon.dispatchEvent(new MouseEvent('click', {bubbles: true})); return true; }
+                                    }
+                                    return false;
+                                }
+                            """, date_str_filter)
+                        dl = dl_info.value
+                        dl.save_as(str(output_path))
+                        self._log.info("[Blinkit] Downloaded (retry): %s", output_path)
+                        return output_path
+                    except Exception as e2:
+                        self._log.warning("[Blinkit] Download click failed: %s", e2)
+
+            if row_info and row_info.get("status") == "success_no_button":
+                self._log.warning("[Blinkit] Row is success but no download button found")
+                self._shot("success_no_button")
+                break
+
+            if poll < max_polls - 1:
+                self._log.info("[Blinkit] Waiting 30s before next poll...")
+                self._page.wait_for_timeout(30_000)
+                self._page.reload(wait_until="domcontentloaded")
+                self._page.wait_for_timeout(2000)
+
+        self._shot("report_requests_timeout")
+        self._log.warning("[Blinkit] Report not ready after %d polls", max_polls)
+        return None
 
     # ------------------------------------------------------------------
-    # Date selection
+    # Legacy stubs kept for backward-compat (not used in main flow)
     # ------------------------------------------------------------------
 
     def _set_date_to_yesterday(self, report_date: date) -> None:
@@ -753,8 +1058,17 @@ class BlinkitScraper:
             self._init_browser()
             self.login()
             self._go_to_soh()
-            self._set_date_to_yesterday(report_date)
-            file_path = self._download_report(report_date)
+
+            # Snapshot session cookies to disk immediately after reaching SOH.
+            # This acts as a checkpoint — if the download flow crashes, the session
+            # is preserved on disk so the next run can reuse it without OTP.
+            session_path = _HERE / "sessions" / "blinkit_session.json"
+            session_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ctx.storage_state(path=str(session_path))
+            self._log.info("[Blinkit] Session snapshot saved to %s", session_path)
+
+            self._request_sales_report(report_date)
+            file_path = self._download_from_report_requests(report_date)
             result.update({"file": file_path, "status": "success"})
 
             # Upload to Google Drive: SolaraDashboard Reports / YYYY-MM / Blinkit /

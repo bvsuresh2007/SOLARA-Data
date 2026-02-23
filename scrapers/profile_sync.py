@@ -66,30 +66,29 @@ def _zip_profile(profile_dir: Path, zip_path: Path) -> None:
     logger.info("[ProfileSync] Zipped %s → %s (%.1f MB)", profile_dir.name, zip_path.name, size_mb)
 
 
-def _drive_upload(service, zip_path: Path, folder_id: str) -> None:
-    """Upload zip to Drive folder, replacing any existing file with the same name."""
+def _drive_upload(service, file_path: Path, folder_id: str, mime: str = "application/zip") -> None:
+    """Upload a file to Drive folder, replacing any existing file with the same name."""
     from googleapiclient.http import MediaFileUpload
-    MIME_ZIP = "application/zip"
 
     existing = (
         service.files()
         .list(
-            q=f"name='{zip_path.name}' and '{folder_id}' in parents and trashed=false",
+            q=f"name='{file_path.name}' and '{folder_id}' in parents and trashed=false",
             fields="files(id)",
         )
         .execute()
         .get("files", [])
     )
 
-    media = MediaFileUpload(str(zip_path), mimetype=MIME_ZIP, resumable=True)
+    media = MediaFileUpload(str(file_path), mimetype=mime, resumable=True)
 
     if existing:
         service.files().update(fileId=existing[0]["id"], media_body=media).execute()
-        logger.info("[ProfileSync] Replaced Drive file: %s", zip_path.name)
+        logger.info("[ProfileSync] Replaced Drive file: %s", file_path.name)
     else:
-        meta = {"name": zip_path.name, "parents": [folder_id]}
+        meta = {"name": file_path.name, "parents": [folder_id]}
         service.files().create(body=meta, media_body=media, fields="id").execute()
-        logger.info("[ProfileSync] Uploaded new Drive file: %s", zip_path.name)
+        logger.info("[ProfileSync] Uploaded new Drive file: %s", file_path.name)
 
 
 def _drive_download(service, zip_name: str, folder_id: str, dest: Path) -> bool:
@@ -203,4 +202,60 @@ def upload_profile(portal_name: str) -> bool:
     except Exception as exc:
         logger.warning("[ProfileSync] upload_profile(%s) failed: %s", portal_name, exc)
         zip_path.unlink(missing_ok=True)
+        return False
+
+
+def download_session_file(portal_name: str) -> bool:
+    """
+    Download <portal_name>_session.json from the Profiles Drive folder
+    into scrapers/sessions/.
+
+    Call BEFORE launching the browser so _init_browser() can load it.
+    No-op if PROFILE_STORAGE_DRIVE_FOLDER_ID is not set.
+    Returns True if file was updated from Drive, False if skipped or not found.
+    """
+    fid = _folder_id()
+    if not fid:
+        logger.debug("[ProfileSync] PROFILE_STORAGE_DRIVE_FOLDER_ID not set — skipping session download.")
+        return False
+
+    sessions_dir = Path(__file__).resolve().parent / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    dest = sessions_dir / f"{portal_name}_session.json"
+
+    try:
+        service = _get_drive_service()
+        found = _drive_download(service, dest.name, fid, dest)
+        if found:
+            logger.info("[ProfileSync] Session file refreshed: %s", dest)
+        return found
+    except Exception as exc:
+        logger.warning("[ProfileSync] download_session_file(%s) failed: %s", portal_name, exc)
+        return False
+
+
+def upload_session_file(portal_name: str) -> bool:
+    """
+    Upload scrapers/sessions/<portal_name>_session.json to the Profiles Drive folder.
+
+    Call AFTER a successful login so the refreshed session is persisted for
+    future CI runs. No-op if PROFILE_STORAGE_DRIVE_FOLDER_ID is not set.
+    Returns True on success, False if skipped or failed (non-fatal).
+    """
+    fid = _folder_id()
+    if not fid:
+        logger.debug("[ProfileSync] PROFILE_STORAGE_DRIVE_FOLDER_ID not set — skipping session upload.")
+        return False
+
+    src = Path(__file__).resolve().parent / "sessions" / f"{portal_name}_session.json"
+    if not src.exists():
+        logger.warning("[ProfileSync] Session file not found, cannot upload: %s", src)
+        return False
+
+    try:
+        service = _get_drive_service()
+        _drive_upload(service, src, fid, mime="application/json")
+        return True
+    except Exception as exc:
+        logger.warning("[ProfileSync] upload_session_file(%s) failed: %s", portal_name, exc)
         return False
