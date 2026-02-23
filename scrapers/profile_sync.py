@@ -63,7 +63,7 @@ def _zip_profile(profile_dir: Path, zip_path: Path) -> None:
             if item.is_file():
                 zf.write(item, item.relative_to(profile_dir))
     size_mb = zip_path.stat().st_size / 1_048_576
-    logger.info("[ProfileSync] Zipped %s → %s (%.1f MB)", profile_dir.name, zip_path.name, size_mb)
+    logger.info("[ProfileSync] Zipped %s -> %s (%.1f MB)", profile_dir.name, zip_path.name, size_mb)
 
 
 def _drive_upload(service, file_path: Path, folder_id: str, mime: str = "application/zip") -> None:
