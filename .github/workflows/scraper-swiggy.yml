@@ -1,6 +1,8 @@
 name: Scraper — Swiggy
 
 on:
+  push:
+    branches: [main]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
     - cron: "30 8 * * *"  # 2:00 PM IST daily
   workflow_dispatch:
@@ -15,6 +17,7 @@ jobs:
     name: Run Swiggy scraper
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4

@@ -1,6 +1,8 @@
 name: Scraper — Amazon PI
 
 on:
+  push:
+    branches: [main]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
     - cron: "30 6 * * *"  # 12:00 PM IST daily
   workflow_dispatch:
@@ -15,6 +17,7 @@ jobs:
     name: Run Amazon PI scraper
     runs-on: ubuntu-latest
     timeout-minutes: 90  # report generation can take up to 15 min per poll cycle
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
