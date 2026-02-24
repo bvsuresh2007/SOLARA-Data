@@ -79,34 +79,50 @@ def _strip_html(raw: str) -> str:
     return html_module.unescape(raw)
 
 
+def _collect_parts(part) -> list:
+    """Recursively collect all leaf parts from a MIME tree."""
+    mime = part.get("mimeType", "")
+    if mime.startswith("multipart/"):
+        result = []
+        for sub in part.get("parts", []):
+            result.extend(_collect_parts(sub))
+        return result
+    return [part]
+
+
 def _get_message_body(service, message_id: str) -> str:
     message = service.users().messages().get(
         userId="me", id=message_id, format="full"
     ).execute()
 
     payload = message.get("payload", {})
-    parts = payload.get("parts", [])
 
-    if not parts:
-        data = payload.get("body", {}).get("data", "")
-        raw = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore") if data else ""
-        # HTML-only emails: strip markup before OTP extraction
-        if raw.lstrip().startswith("<"):
-            return _strip_html(raw)
-        return raw
+    # Collect all leaf MIME parts (handles arbitrary nesting depth)
+    if payload.get("parts"):
+        leaf_parts = []
+        for p in payload["parts"]:
+            leaf_parts.extend(_collect_parts(p))
+    else:
+        leaf_parts = [payload]
 
-    for part in parts:
+    def _decode(part):
+        data = part.get("body", {}).get("data", "")
+        if not data:
+            return ""
+        return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+
+    # Prefer plain text
+    for part in leaf_parts:
         if part.get("mimeType") == "text/plain":
-            data = part.get("body", {}).get("data", "")
-            if data:
-                return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+            text = _decode(part)
+            if text.strip():
+                return text
 
-    # Fallback: find any HTML part and strip it
-    for part in parts:
+    # Fallback: any HTML part
+    for part in leaf_parts:
         if part.get("mimeType") == "text/html":
-            data = part.get("body", {}).get("data", "")
-            if data:
-                raw = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+            raw = _decode(part)
+            if raw.strip():
                 return _strip_html(raw)
 
     return ""

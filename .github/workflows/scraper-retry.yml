@@ -1,0 +1,139 @@
+name: Scraper — Retry Failed Runs
+
+# Runs once daily at 3:00 PM IST (09:30 UTC) — 30 minutes after the last
+# scheduled scraper (Blinkit at 12:30 PM IST) has a full 90 minutes to finish.
+#
+# What it does:
+#   1. Checks the GitHub API for today's SCHEDULED run of each scraper workflow.
+#   2. Re-triggers any that failed — exactly once.
+#   3. Posts a Slack summary (retried / already OK / still running / no run found).
+#
+# "Retry only once" guarantee:
+#   - We filter by --event=schedule, so retry-triggered runs (event=workflow_dispatch)
+#     are invisible to this workflow. A re-triggered run that fails again will NOT
+#     be picked up by this workflow today.
+#   - This workflow itself runs once per day. A second automatic retry cannot happen.
+#   - Individual scraper workflows still post their own Slack failure alert, so the
+#     team is notified if a retry run also fails.
+#
+# Manual use:
+#   Trigger via workflow_dispatch to force a re-check at any time.
+#   Optionally supply report_date to override the date passed to retried scrapers.
+
+on:
+  schedule:
+    - cron: "30 9 * * *"   # 3:00 PM IST = 09:30 UTC
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Date to pass to retried scrapers (YYYY-MM-DD). Empty = yesterday."
+        required: false
+        default: ""
+
+permissions:
+  actions: write   # required to trigger workflow_dispatch on other workflows
+
+jobs:
+  retry:
+    name: Detect failures and retry once
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check today's scheduled scraper runs and retry failures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          REPORT_DATE: ${{ inputs.report_date }}
+        run: |
+          set -uo pipefail
+          TODAY=$(date -u +%Y-%m-%d)
+          echo "Checking scheduled scraper runs for: $TODAY"
+
+          # Workflow file | Portal display name
+          WORKFLOWS=(
+            "scraper-easyecom.yml|EasyEcom"
+            "scraper-zepto.yml|Zepto"
+            "scraper-amazon-pi.yml|Amazon PI"
+            "scraper-blinkit.yml|Blinkit"
+          )
+
+          # Build comma-separated summary strings
+          RETRIED=""
+          ALREADY_OK=""
+          STILL_RUNNING=""
+          NO_RUN_FOUND=""
+
+          for ENTRY in "${WORKFLOWS[@]}"; do
+            WORKFLOW="${ENTRY%%|*}"
+            PORTAL="${ENTRY##*|}"
+
+            # Fetch the conclusion of today's scheduled run (not workflow_dispatch runs).
+            # Returns "success", "failure", "timed_out", "cancelled", "in_progress",
+            # "queued", or "none" if no scheduled run exists yet today.
+            CONCLUSION=$(gh run list \
+              --repo "$REPO" \
+              --workflow "$WORKFLOW" \
+              --event schedule \
+              --created "$TODAY" \
+              --limit 1 \
+              --json conclusion \
+              --jq '.[0].conclusion // "none"' 2>/dev/null || echo "none")
+
+            echo "$PORTAL [$WORKFLOW]: $CONCLUSION"
+
+            case "$CONCLUSION" in
+              failure|timed_out|cancelled|startup_failure)
+                echo "  → Triggering retry..."
+                gh workflow run "$WORKFLOW" \
+                  --repo "$REPO" \
+                  --field "report_date=${REPORT_DATE}"
+                RETRIED="${RETRIED:+${RETRIED}, }${PORTAL}"
+                ;;
+              success)
+                ALREADY_OK="${ALREADY_OK:+${ALREADY_OK}, }${PORTAL}"
+                ;;
+              in_progress|queued|waiting|requested|pending)
+                STILL_RUNNING="${STILL_RUNNING:+${STILL_RUNNING}, }${PORTAL}"
+                ;;
+              *)
+                NO_RUN_FOUND="${NO_RUN_FOUND:+${NO_RUN_FOUND}, }${PORTAL}"
+                ;;
+            esac
+          done
+
+          # Normalise empty strings → "none"
+          RETRIED="${RETRIED:-none}"
+          ALREADY_OK="${ALREADY_OK:-none}"
+          STILL_RUNNING="${STILL_RUNNING:-none}"
+          NO_RUN_FOUND="${NO_RUN_FOUND:-none}"
+
+          echo ""
+          echo "=== Summary ==="
+          echo "Retried:       $RETRIED"
+          echo "Already OK:    $ALREADY_OK"
+          echo "Still running: $STILL_RUNNING"
+          echo "No run found:  $NO_RUN_FOUND"
+
+          # ── Slack notification ─────────────────────────────────────────────
+          if [ "$RETRIED" = "none" ]; then
+            COLOR="good"
+            TITLE=":white_check_mark: Scraper Retry — nothing to retry"
+            BODY="All scheduled scrapers completed successfully today."
+          else
+            COLOR="warning"
+            TITLE=":arrows_counterclockwise: Scraper Retry — re-triggered: ${RETRIED}"
+            BODY="*Re-triggered (had failed):* ${RETRIED}\n*Already OK:* ${ALREADY_OK}\n*Still running at check time:* ${STILL_RUNNING}\n*No scheduled run found:* ${NO_RUN_FOUND}\n\n_This is a one-time retry. If the retried runs fail again, each scraper workflow will send its own Slack alert — but no further automatic retry will occur today._"
+          fi
+
+          curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"${COLOR}\",
+                \"title\": \"${TITLE}\",
+                \"text\": \"${BODY}\",
+                \"footer\": \"<https://github.com/${REPO}/actions/runs/${{ github.run_id }}|View retry run #${{ github.run_number }}>\"
+              }]
+            }" || echo "Warning: Slack notification failed (non-critical)"
