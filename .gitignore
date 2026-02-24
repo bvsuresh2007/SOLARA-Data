@@ -85,3 +85,4 @@ htmlcov/
 # ── Alembic ──────────────────────────────────────────────────────────────────
 database/alembic/versions/__pycache__/
 .claude/settings.local.json
+frontend/next-env.d.ts
