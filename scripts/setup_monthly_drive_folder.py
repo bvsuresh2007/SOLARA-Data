@@ -30,7 +30,7 @@ PORTAL_FOLDERS = [
     "EasyEcom",
     "Zepto",
     "Blinkit",
-    "Amazon",
+    "Amazon PI",
     "Swiggy",
     "Myntra",
     "Flipkart",
