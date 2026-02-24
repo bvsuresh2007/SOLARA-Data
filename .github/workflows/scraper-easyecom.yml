@@ -2,7 +2,7 @@ name: Scraper — EasyEcom
 
 on:
   push:
-    branches: [main]  # suppresses phantom push-failure records; job is skipped on push
+    branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
     - cron: "30 5 * * *"  # 11:00 AM IST daily
   workflow_dispatch:

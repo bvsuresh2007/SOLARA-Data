@@ -2,7 +2,7 @@ name: Scraper — Amazon PI
 
 on:
   push:
-    branches: [main]  # suppresses phantom push-failure records; job is skipped on push
+    branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
     - cron: "30 6 * * *"  # 12:00 PM IST daily
   workflow_dispatch:

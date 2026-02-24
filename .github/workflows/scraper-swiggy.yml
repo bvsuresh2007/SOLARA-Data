@@ -2,7 +2,7 @@ name: Scraper — Swiggy
 
 on:
   push:
-    branches: [main]  # suppresses phantom push-failure records; job is skipped on push
+    branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
     - cron: "30 8 * * *"  # 2:00 PM IST daily
   workflow_dispatch:
