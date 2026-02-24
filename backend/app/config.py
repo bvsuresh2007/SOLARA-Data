@@ -1,6 +1,9 @@
-import os
+from pathlib import Path
 from functools import lru_cache
 from pydantic_settings import BaseSettings
+
+# .env lives at the project root (two levels above this file: app/config.py → backend/ → root/)
+_ENV_FILE = str(Path(__file__).parent.parent.parent / ".env")
 
 
 class Settings(BaseSettings):
@@ -33,7 +36,7 @@ class Settings(BaseSettings):
         )
 
     class Config:
-        env_file = ".env"
+        env_file = _ENV_FILE
         case_sensitive = False
         extra = "ignore"  # silently ignore any extra env vars not defined as fields
 
