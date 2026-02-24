@@ -1,0 +1,85 @@
+name: Seed Product Mappings
+
+on:
+  workflow_dispatch:
+    inputs:
+      master_excel_drive_id:
+        description: 'Google Drive File ID of the master Excel workbook'
+        required: true
+        type: string
+      skip_master_seed:
+        description: 'Skip seeding from master Excel (only run seed_missing_portals)'
+        required: false
+        default: 'false'
+        type: string
+
+jobs:
+  seed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            sqlalchemy psycopg2-binary python-dotenv \
+            pandas openpyxl xlrd \
+            google-api-python-client google-auth google-auth-httplib2
+
+      - name: Restore Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON }}" | base64 -d > token.json
+
+      - name: Download master Excel from Drive
+        if: ${{ github.event.inputs.skip_master_seed != 'true' }}
+        env:
+          MASTER_EXCEL_FILE_ID: ${{ github.event.inputs.master_excel_drive_id }}
+        run: |
+          python - <<'EOF'
+          import os
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaIoBaseDownload
+          from google.oauth2.credentials import Credentials
+          import io
+
+          creds = Credentials.from_authorized_user_file("token.json")
+          service = build("drive", "v3", credentials=creds)
+
+          file_id = os.environ["MASTER_EXCEL_FILE_ID"]
+          request = service.files().get_media(fileId=file_id)
+
+          os.makedirs("data/source", exist_ok=True)
+          dest = "data/source/master_sales.xlsx"
+          with open(dest, "wb") as fh:
+              downloader = MediaIoBaseDownload(fh, request)
+              done = False
+              while not done:
+                  status, done = downloader.next_chunk()
+          print(f"Downloaded master Excel to {dest}")
+          EOF
+
+      - name: Seed products and portal mappings from master Excel
+        if: ${{ github.event.inputs.skip_master_seed != 'true' }}
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          python scripts/seed_master_data.py \
+            --file "data/source/master_sales.xlsx"
+
+      - name: Add missing portals and seed easyecom/amazon_pi mappings
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          python scripts/seed_missing_portals.py

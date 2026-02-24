@@ -82,46 +82,41 @@ def _i(val: Any, default=0) -> int:
 
 class SwiggyParser:
     """
-    Swiggy sales & inventory Excel parser.
-    Expected columns: date, ITEM_CODE, L1, L2, L3, BASE_MRP, GMV, area_name, ...
+    Swiggy sales CSV parser.
+    Actual columns: ORDERED_DATE, ITEM_CODE, CITY, AREA_NAME, L1_CATEGORY,
+    L2_CATEGORY, L3_CATEGORY, BASE_MRP, GMV, UNITS_SOLD, ...
     """
 
     def parse_sales(self, path: Path) -> list[dict]:
         df = _clean(_read_file(path))
         rows = []
         for _, row in df.iterrows():
+            gmv = _f(row.get("GMV"))
             rows.append({
                 "portal": "swiggy",
-                "sale_date": _parse_date_ymd(row.get("date")),
+                # Swiggy CSV uses "ORDERED_DATE" (YYYY-MM-DD), not "date"
+                "sale_date": _parse_date_ymd(row.get("ORDERED_DATE", row.get("date"))),
                 "portal_product_id": str(row.get("ITEM_CODE", "")).strip(),
-                "city": str(row.get("area_name", "")).strip(),
-                "l1_category": str(row.get("L1", "")).strip(),
-                "l2_category": str(row.get("L2", "")).strip(),
-                "l3_category": str(row.get("L3", "")).strip(),
-                "revenue": _f(row.get("GMV")),
+                # Swiggy CSV uses "CITY" (not "area_name")
+                "city": str(row.get("CITY", row.get("area_name", ""))).strip(),
+                # Swiggy CSV uses "L1_CATEGORY" etc. (not "L1")
+                "l1_category": str(row.get("L1_CATEGORY", row.get("L1", ""))).strip(),
+                "l2_category": str(row.get("L2_CATEGORY", row.get("L2", ""))).strip(),
+                "l3_category": str(row.get("L3_CATEGORY", row.get("L3", ""))).strip(),
+                "revenue": gmv,
                 "base_mrp": _f(row.get("BASE_MRP")),
-                "quantity_sold": _f(row.get("quantity_sold", row.get("qty", 0))),
+                # Swiggy CSV uses "UNITS_SOLD" (not "quantity_sold")
+                "quantity_sold": _f(row.get("UNITS_SOLD", row.get("quantity_sold", row.get("qty", 0)))),
                 "order_count": _i(row.get("order_count", 0)),
                 "discount_amount": 0.0,
-                "net_revenue": _f(row.get("GMV")),
+                "net_revenue": gmv,
             })
         return rows
 
     def parse_inventory(self, path: Path) -> list[dict]:
-        df = _clean(_read_file(path))
-        rows = []
-        for _, row in df.iterrows():
-            rows.append({
-                "portal": "swiggy",
-                "snapshot_date": _parse_date_ymd(row.get("date")),
-                "portal_product_id": str(row.get("ITEM_CODE", "")).strip(),
-                "warehouse_name": str(row.get("facility_name", "")).strip(),
-                "city": str(row.get("area_name", "")).strip(),
-                "stock_quantity": _f(row.get("backend_inv_qty", 0)),
-                "available_quantity": _f(row.get("frontend_inv_qty", 0)),
-                "reserved_quantity": 0.0,
-            })
-        return rows
+        # The daily Swiggy sales CSV does not contain inventory columns.
+        # A separate inventory export would be needed.
+        return []
 
 
 # =============================================================================
@@ -176,7 +171,9 @@ class ZeptoParser:
             rows.append({
                 "portal": "zepto",
                 "sale_date": _parse_date_dmy(row.get("Date")),
-                "portal_product_id": str(row.get("SKU Number", "")).strip(),
+                # Zepto CSV uses "EAN" as the stable product identifier;
+                # "SKU Number" is a UUID that changes and is NOT in product_portal_mapping.
+                "portal_product_id": str(row.get("EAN", row.get("SKU Number", ""))).strip(),
                 "city": str(row.get("City", "")).strip(),
                 # Zepto CSV uses "SKU Category" / "SKU Sub Category"
                 "l1_category": str(row.get("SKU Category", row.get("Category", ""))).strip(),
@@ -294,10 +291,42 @@ class ShopifyParser:
 # =============================================================================
 
 class EasyEcomParser:
-    # TODO: Map real columns once a sample CSV is available.
-    # EasyEcom miniSalesReport columns are unknown until a file is inspected.
+    """
+    EasyEcom mini sales report parser.
+    Key columns: SKU, Order Date, Shipping City, Selling Price, Item Quantity,
+                 Order Status, Category, MP Name.
+    portal_product_id = SKU (SOL-prefixed internal code = self-mapping).
+    Cancelled orders are excluded.
+    """
+    _CANCELLED = {"cancelled", "CANCELLED"}
+
     def parse_sales(self, path: Path) -> list[dict]:
-        return []
+        df = _clean(_read_file(path))
+        rows = []
+        for _, row in df.iterrows():
+            status = str(row.get("Order Status", "")).strip()
+            if status in self._CANCELLED:
+                continue
+            sku = str(row.get("SKU", "")).strip().lstrip("`")
+            if not sku:
+                continue
+            # Selling Price is already the line-item total (not per-unit)
+            revenue = _f(row.get("Selling Price", 0))
+            rows.append({
+                "portal": "easyecom",
+                "sale_date": _parse_iso(row.get("Order Date")),
+                "portal_product_id": sku,
+                "city": str(row.get("Shipping City", "")).strip(),
+                "l1_category": str(row.get("Category", "")).strip(),
+                "l2_category": "",
+                "l3_category": "",
+                "revenue": revenue,
+                "quantity_sold": _f(row.get("Item Quantity", 1)),
+                "order_count": 1,
+                "discount_amount": 0.0,
+                "net_revenue": revenue,
+            })
+        return rows
 
     def parse_inventory(self, path: Path) -> list[dict]:
         return []
@@ -308,11 +337,48 @@ class EasyEcomParser:
 # =============================================================================
 
 class AmazonPIParser:
-    # TODO: Map real columns once a sample XLSX is available.
-    # Amazon PI "ASIN wise revenue and unit sales" report columns are unknown
-    # until a file is inspected.
+    """
+    Amazon PI (Vendor/PI dashboard) ASIN revenue report parser.
+    Actual columns: asin, itemName, lbrBrandName, orderMonth, orderDay,
+                    orderYear, orderAmt, orderQuantity, category, subcategory,
+                    stateName, postalCode.
+    City-level data is not available; stateName is used as a location proxy.
+    portal_product_id = asin.
+    """
+
     def parse_sales(self, path: Path) -> list[dict]:
-        return []
+        df = _clean(_read_file(path))
+        rows = []
+        for _, row in df.iterrows():
+            asin = str(row.get("asin", "")).strip()
+            if not asin or asin.lower() == "nan":
+                continue
+            try:
+                sale_date = date(
+                    int(float(str(row.get("orderYear", 2000)))),
+                    int(float(str(row.get("orderMonth", 1)))),
+                    int(float(str(row.get("orderDay", 1)))),
+                )
+            except Exception:
+                sale_date = None
+            revenue = _f(row.get("orderAmt", 0))
+            qty = _f(row.get("orderQuantity", 0))
+            rows.append({
+                "portal": "amazon_pi",
+                "sale_date": sale_date,
+                "portal_product_id": asin,
+                # stateName (e.g. "GUJARAT") used as location; no city-level data
+                "city": str(row.get("stateName", "")).strip(),
+                "l1_category": str(row.get("category", "")).strip(),
+                "l2_category": str(row.get("subcategory", "")).strip(),
+                "l3_category": "",
+                "revenue": revenue,
+                "quantity_sold": qty,
+                "order_count": _i(row.get("orderQuantity", 1)),
+                "discount_amount": 0.0,
+                "net_revenue": revenue,
+            })
+        return rows
 
     def parse_inventory(self, path: Path) -> list[dict]:
         return []
