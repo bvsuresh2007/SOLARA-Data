@@ -1,0 +1,3 @@
+# Zepto Product URLs (one per line)
+# Lines starting with # are ignored
+https://www.zepto.com/pn/solara-digital-1500-watts-air-fryer-45l-capacity-10-preset-modes-for-indian-cooking-90-less-oil-digital-touch-control-360degree-air-circulation-adjustable-temp-black/pvid/4d5ccc28-3b2d-4f36-996d-f100ce542542
