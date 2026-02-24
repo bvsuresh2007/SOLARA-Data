@@ -54,6 +54,7 @@ jobs:
           PROFILE_STORAGE_DRIVE_FOLDER_ID: ${{ secrets.PROFILE_STORAGE_DRIVE_FOLDER_ID }}
           GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER_ID }}
           RAW_DATA_PATH: ./data/raw
+          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
           python - <<'EOF'
           import sys, os
@@ -73,8 +74,6 @@ jobs:
           if result.get("status") == "failed":
               sys.exit(1)
           EOF
-        env:
-          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
 
       - name: Upload data artifacts
         uses: actions/upload-artifact@v4
