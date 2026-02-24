@@ -38,20 +38,21 @@ def _load_env(project_root: str) -> None:
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _load_env(_PROJECT_ROOT)
 
-_pg_password = os.environ.get("POSTGRES_PASSWORD")
-if not _pg_password:
-    raise RuntimeError(
-        "POSTGRES_PASSWORD is not set. Add it to your .env file or environment."
+_DB_URL = os.environ.get("DATABASE_URL", "").strip()
+if not _DB_URL:
+    _pg_password = os.environ.get("POSTGRES_PASSWORD")
+    if not _pg_password:
+        raise RuntimeError(
+            "POSTGRES_PASSWORD is not set. Add it to your .env file or environment."
+        )
+    _DB_URL = (
+        f"postgresql://"
+        f"{os.environ.get('POSTGRES_USER', 'solara_user')}:"
+        f"{_pg_password}@"
+        f"{os.environ.get('POSTGRES_HOST', 'localhost')}:"
+        f"{os.environ.get('POSTGRES_PORT', '5432')}/"
+        f"{os.environ.get('POSTGRES_DB', 'solara_dashboard')}"
     )
-
-_DB_URL = (
-    f"postgresql://"
-    f"{os.environ.get('POSTGRES_USER', 'solara_user')}:"
-    f"{_pg_password}@"
-    f"{os.environ.get('POSTGRES_HOST', 'localhost')}:"
-    f"{os.environ.get('POSTGRES_PORT', '5432')}/"
-    f"{os.environ.get('POSTGRES_DB', 'solara_dashboard')}"
-)
 
 engine = create_engine(_DB_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
