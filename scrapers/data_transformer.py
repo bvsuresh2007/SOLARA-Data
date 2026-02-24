@@ -85,6 +85,9 @@ class DataTransformer:
             if not portal_id:
                 continue
             city_id = self._get_or_create_city(row.get("city"))
+            if city_id is None:
+                logger.warning("Skipping row — unknown city: %r", row.get("city"))
+                continue
             product_id = self._get_product_id(portal_id, row.get("portal_product_id", ""))
             if not product_id:
                 continue

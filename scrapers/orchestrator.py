@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 from datetime import date, datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -69,6 +70,53 @@ def _upsert_sales(db, rows: list[dict]) -> int:
     return len(rows)
 
 
+def _upsert_daily_sales(db, city_rows: list[dict]) -> int:
+    """
+    Aggregate city-level sales rows to (portal_id, product_id, sale_date) grain
+    and upsert into daily_sales. This is the table the dashboard reads from.
+    """
+    from collections import defaultdict
+    from sqlalchemy.dialects.postgresql import insert
+    from backend.app.models.sales import DailySales
+    if not city_rows:
+        return 0
+
+    agg: dict[tuple, dict] = defaultdict(lambda: {"units_sold": 0.0, "revenue": 0.0})
+    for row in city_rows:
+        key = (row["portal_id"], row["product_id"], row["sale_date"])
+        agg[key]["units_sold"] += float(row.get("units_sold", 0) or 0)
+        agg[key]["revenue"]    += float(row.get("revenue", 0) or 0)
+
+    daily_rows = []
+    for (portal_id, product_id, sale_date), totals in agg.items():
+        units   = totals["units_sold"]
+        revenue = totals["revenue"]
+        asp     = round(revenue / units, 2) if units > 0 else None
+        daily_rows.append({
+            "portal_id":   portal_id,
+            "product_id":  product_id,
+            "sale_date":   sale_date,
+            "units_sold":  units,
+            "revenue":     revenue,
+            "asp":         asp,
+            "data_source": "portal_scraper",
+        })
+
+    stmt = insert(DailySales).values(daily_rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["portal_id", "product_id", "sale_date"],
+        set_={
+            "units_sold":  stmt.excluded.units_sold,
+            "revenue":     stmt.excluded.revenue,
+            "asp":         stmt.excluded.asp,
+            "data_source": stmt.excluded.data_source,
+        },
+    )
+    db.execute(stmt)
+    db.commit()
+    return len(daily_rows)
+
+
 def _upsert_inventory(db, rows: list[dict]) -> int:
     from sqlalchemy.dialects.postgresql import insert
     from backend.app.models.inventory import InventorySnapshot
@@ -107,6 +155,80 @@ def _log_scrape(db, portal_name: str, scrape_date: date, status: str, records: i
     )
     db.add(log)
     db.commit()
+
+
+def populate_portal_data(
+    portal_name: str,
+    report_date: date,
+    data_dir: Path = None,
+) -> dict:
+    """
+    Parse downloaded file(s) for a portal and upsert into Postgres.
+
+    Returns a dict with keys: status, records_imported, error, file(s).
+    Status values: "success", "failed", "no_parser", "no_file".
+
+    DB failures do NOT raise — the caller should log the result and continue.
+    """
+    if data_dir is None:
+        data_dir = Path("./data/raw")
+    data_dir = Path(data_dir)
+
+    # --- Auto-detect file(s) ---
+    portal_dir = data_dir / portal_name
+    if portal_name == "amazon_pi":
+        date_dir = portal_dir / report_date.strftime("%Y-%m-%d")
+        files = sorted(date_dir.glob("*.xlsx")) if date_dir.exists() else []
+    else:
+        files = sorted(portal_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = [f for f in files if f.is_file() and f.suffix.lower() in (".csv", ".xlsx", ".xls")]
+        files = files[:1]  # latest only
+
+    if not files:
+        logger.warning("[%s] No files found in %s", portal_name, portal_dir)
+        return {"status": "no_file", "records_imported": 0, "error": f"No files in {portal_dir}"}
+
+    # --- Get parser ---
+    try:
+        parser = get_parser(portal_name)
+    except ValueError as exc:
+        logger.warning("[%s] %s", portal_name, exc)
+        return {"status": "no_parser", "records_imported": 0, "error": str(exc)}
+
+    db = _get_db()
+    transformer = DataTransformer(db)
+    total_records = 0
+    error_msg = None
+
+    try:
+        for file in files:
+            logger.info("[%s] Parsing %s", portal_name, file.name)
+
+            sales_rows = parser.parse_sales(file)
+            transformed_sales = transformer.transform_sales_rows(sales_rows)
+            total_records += _upsert_sales(db, transformed_sales)
+            total_records += _upsert_daily_sales(db, transformed_sales)
+
+            if hasattr(parser, "parse_inventory"):
+                inv_rows = parser.parse_inventory(file)
+                transformed_inv = transformer.transform_inventory_rows(inv_rows)
+                total_records += _upsert_inventory(db, transformed_inv)
+
+        _log_scrape(db, portal_name, report_date, "success", total_records)
+        logger.info("[%s] DB populate success — %d records", portal_name, total_records)
+        return {"status": "success", "records_imported": total_records, "files": [str(f) for f in files]}
+
+    except Exception as exc:
+        error_msg = str(exc)
+        logger.error("[%s] DB populate failed: %s", portal_name, error_msg, exc_info=True)
+        try:
+            _log_scrape(db, portal_name, report_date, "failed", total_records, error_msg)
+        except Exception:
+            pass
+        return {"status": "failed", "records_imported": total_records, "error": error_msg}
+
+    finally:
+        db.close()
 
 
 def run(report_date: date):

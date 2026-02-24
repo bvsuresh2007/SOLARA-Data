@@ -70,6 +70,33 @@ jobs:
               sys.exit(1)
           EOF
 
+      - name: Populate DB from downloaded data
+        if: success()
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
+        run: |
+          python - <<'EOF'
+          import sys, os
+          from datetime import date, timedelta
+          sys.path.insert(0, '.')
+
+          report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
+          if report_date_str:
+              from datetime import datetime
+              report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
+          else:
+              report_date = date.today() - timedelta(days=1)
+
+          from scrapers.orchestrator import populate_portal_data
+          result = populate_portal_data(portal_name="easyecom", report_date=report_date)
+          print("DB populate result:", result)
+          EOF
+
       - name: Upload data artifacts
         uses: actions/upload-artifact@v4
         if: always()
