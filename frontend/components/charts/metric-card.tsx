@@ -12,17 +12,17 @@ export default function MetricCard({ label, value, highlight = false, subtext }:
     <div
       className={`rounded-xl border p-4 ${
         highlight
-          ? "bg-red-50 border-red-200"
-          : "bg-white border-gray-200"
+          ? "bg-red-950/30 border-red-800"
+          : "bg-zinc-900 border-zinc-800"
       }`}
     >
-      <p className={`text-xs font-medium uppercase tracking-wide ${highlight ? "text-red-500" : "text-gray-500"}`}>
+      <p className={`text-xs font-medium uppercase tracking-wide ${highlight ? "text-red-400" : "text-zinc-500"}`}>
         {label}
       </p>
-      <p className={`text-2xl font-bold mt-1 ${highlight ? "text-red-700" : "text-gray-900"}`}>
+      <p className={`text-2xl font-bold mt-1 ${highlight ? "text-red-400" : "text-zinc-100"}`}>
         {value}
       </p>
-      {subtext && <p className="text-xs text-gray-400 mt-1">{subtext}</p>}
+      {subtext && <p className="text-xs text-zinc-600 mt-1">{subtext}</p>}
     </div>
   );
 }
