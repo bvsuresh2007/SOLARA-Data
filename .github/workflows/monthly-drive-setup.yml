@@ -33,7 +33,8 @@ jobs:
             google-auth-httplib2 \
             google-api-python-client \
             python-dotenv \
-            requests
+            requests \
+            pydantic-settings
 
       - name: Create month folder + portal subfolders + notify Slack
         env:
