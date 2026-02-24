@@ -1,7 +1,7 @@
 name: Scraper — Retry Failed Runs
 
-# Runs once daily at 3:00 PM IST (09:30 UTC) — 30 minutes after the last
-# scheduled scraper (Blinkit at 12:30 PM IST) has a full 90 minutes to finish.
+# Runs once daily at 12:00 PM IST (06:30 UTC) — 10 minutes after the last
+# scheduled scraper (Blinkit at 11:50 AM IST) has time to complete.
 #
 # What it does:
 #   1. Checks the GitHub API for today's SCHEDULED run of each scraper workflow.
@@ -22,7 +22,7 @@ name: Scraper — Retry Failed Runs
 
 on:
   schedule:
-    - cron: "30 9 * * *"   # 3:00 PM IST = 09:30 UTC
+    - cron: "30 6 * * *"   # 12:00 PM IST = 06:30 UTC
   workflow_dispatch:
     inputs:
       report_date:
