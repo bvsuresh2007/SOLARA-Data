@@ -896,9 +896,9 @@ class SwiggyInstamartScraper:
                 if (text.length > 100 && text.length < 500000) {
                     // Look for JSON assignments
                     var patterns = [
-                        /window\.__\w+__\s*=\s*(\{.+\})\s*;/s,
-                        /window\.\w+\s*=\s*(\{.+\})\s*;/s,
-                        /__NEXT_DATA__\s*=\s*(\{.+\})/s,
+                        /window\\.__\\w+__\\s*=\\s*(\\{.+\\})\\s*;/s,
+                        /window\\.\\w+\\s*=\\s*(\\{.+\\})\\s*;/s,
+                        /__NEXT_DATA__\\s*=\\s*(\\{.+\\})/s,
                     ];
                     patterns.forEach(function(pat) {
                         var match = text.match(pat);

@@ -18,6 +18,10 @@ import argparse
 from dataclasses import asdict
 from datetime import datetime
 
+# Windows terminal: force UTF-8 so ₹ and other unicode prints correctly
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from blinkit_scraper import BlinkitScraper, BlinkitProductData
 
 
