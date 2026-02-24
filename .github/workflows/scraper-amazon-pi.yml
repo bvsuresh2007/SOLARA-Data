@@ -15,7 +15,7 @@ on:
 jobs:
   run-scraper:
     name: Run Amazon PI scraper
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90  # report generation can take up to 15 min per poll cycle
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 

@@ -36,9 +36,11 @@ jobs:
             requests \
             pydantic-settings
 
+      - name: Restore Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON }}" | base64 -d > token.json
+
       - name: Create month folder + portal subfolders + notify Slack
         env:
-          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
           GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER_ID }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
