@@ -6,6 +6,8 @@ import {
 } from "recharts";
 import { format, startOfWeek, parseISO } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { SalesTrend } from "@/lib/api";
 
 type Granularity = "day" | "week" | "month";
@@ -50,6 +52,12 @@ function fmtRevenue(v: number): string {
   return `₹${v}`;
 }
 
+const GRANULARITIES: { key: Granularity; label: string }[] = [
+  { key: "day",   label: "Day" },
+  { key: "week",  label: "Week" },
+  { key: "month", label: "Month" },
+];
+
 export function RevenueTrend({ data }: Props) {
   const [gran, setGran] = useState<Granularity>("day");
   const chartData = useMemo(() => aggregate(data, gran), [data, gran]);
@@ -59,18 +67,21 @@ export function RevenueTrend({ data }: Props) {
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-base">Revenue Trend</CardTitle>
         <div className="flex gap-1 bg-zinc-800 rounded-lg p-1">
-          {(["day", "week", "month"] as const).map((g) => (
-            <button
-              key={g}
-              onClick={() => setGran(g)}
-              className={`px-3 py-1 text-xs rounded-md capitalize transition-colors ${
-                gran === g
-                  ? "bg-orange-500 text-white"
-                  : "text-zinc-400 hover:text-zinc-200"
-              }`}
+          {GRANULARITIES.map(({ key, label }) => (
+            <Button
+              key={key}
+              variant="ghost"
+              size="sm"
+              onClick={() => setGran(key)}
+              className={cn(
+                "h-7 px-3 text-xs rounded-md transition-colors",
+                gran === key
+                  ? "bg-orange-500 text-white hover:bg-orange-400"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-transparent"
+              )}
             >
-              {g === "day" ? "Day" : g === "week" ? "Week" : "Month"}
-            </button>
+              {label}
+            </Button>
           ))}
         </div>
       </CardHeader>

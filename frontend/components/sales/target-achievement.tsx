@@ -2,7 +2,10 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { TargetAchievement } from "@/lib/api";
 
 const MONTH_NAMES = [
@@ -54,21 +57,15 @@ export function TargetAchievementPanel({ data, year, month, onMonthChange }: Pro
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-base">Target Achievement</CardTitle>
         <div className="flex items-center gap-2">
-          <button
-            onClick={prev}
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
-          >
+          <Button variant="ghost" size="icon" onClick={prev} className="h-7 w-7 text-zinc-400 hover:text-zinc-200">
             <ChevronLeft size={16} />
-          </button>
+          </Button>
           <span className="text-sm text-zinc-300 min-w-[80px] text-center">
             {MONTH_NAMES[month - 1]} {year}
           </span>
-          <button
-            onClick={next}
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
-          >
+          <Button variant="ghost" size="icon" onClick={next} className="h-7 w-7 text-zinc-400 hover:text-zinc-200">
             <ChevronRight size={16} />
-          </button>
+          </Button>
         </div>
       </CardHeader>
       <CardContent>
@@ -78,7 +75,6 @@ export function TargetAchievementPanel({ data, year, month, onMonthChange }: Pro
           </p>
         ) : (
           <div className="space-y-4">
-            {/* Header row */}
             <div className="grid grid-cols-[130px_1fr_90px_90px_70px] gap-3 text-xs text-zinc-500 uppercase tracking-wider pb-1 border-b border-zinc-800">
               <span>Portal</span>
               <span>Progress</span>
@@ -98,28 +94,21 @@ export function TargetAchievementPanel({ data, year, month, onMonthChange }: Pro
                   key={row.portal_name}
                   className="grid grid-cols-[130px_1fr_90px_90px_70px] gap-3 items-center"
                 >
-                  {/* Portal badge */}
-                  <span
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium truncate ${portalColor}`}
-                  >
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium truncate ${portalColor}`}>
                     {row.portal_name}
                   </span>
 
-                  {/* Progress bar */}
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          pct >= 100
-                            ? "bg-green-500"
-                            : pct >= 75
-                            ? "bg-yellow-500"
-                            : "bg-red-500"
-                        }`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
+                  <Progress
+                    value={pct}
+                    className={cn(
+                      "h-2",
+                      pct >= 100
+                        ? "[&>div]:bg-green-500"
+                        : pct >= 75
+                        ? "[&>div]:bg-yellow-500"
+                        : "[&>div]:bg-red-500"
+                    )}
+                  />
 
                   <span className="text-right text-xs text-zinc-400">
                     {fmtRevenue(row.target_revenue)}

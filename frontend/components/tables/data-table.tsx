@@ -1,12 +1,18 @@
 "use client";
 
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import type { ScrapingLog } from "@/lib/api";
 
-const STATUS_CLASSES: Record<string, string> = {
-  success: "bg-green-900/40 text-green-400",
-  failed:  "bg-red-900/40  text-red-400",
-  partial: "bg-yellow-900/40 text-yellow-400",
-  running: "bg-blue-900/40  text-blue-400",
+type StatusVariant = "success" | "danger" | "warning" | "default";
+
+const STATUS_VARIANT: Record<string, StatusVariant> = {
+  success: "success",
+  failed:  "danger",
+  partial: "warning",
+  running: "default",
 };
 
 export function ScrapingStatusTable({ logs }: { logs: ScrapingLog[] }) {
@@ -14,35 +20,37 @@ export function ScrapingStatusTable({ logs }: { logs: ScrapingLog[] }) {
     return <p className="text-sm text-zinc-500">No scraping logs found.</p>;
   }
   return (
-    <table className="w-full text-sm">
-      <thead className="text-left border-b border-zinc-800">
-        <tr>
-          <th className="pb-2 text-zinc-500 font-medium">Source</th>
-          <th className="pb-2 text-zinc-500 font-medium">Date</th>
-          <th className="pb-2 text-zinc-500 font-medium">Status</th>
-          <th className="pb-2 text-right text-zinc-500 font-medium">Records</th>
-          <th className="pb-2 text-zinc-500 font-medium">Error</th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table>
+      <TableHeader>
+        <TableRow className="border-zinc-800">
+          <TableHead className="h-9 px-2 text-zinc-500 font-medium">Source</TableHead>
+          <TableHead className="h-9 px-2 text-zinc-500 font-medium">Date</TableHead>
+          <TableHead className="h-9 px-2 text-zinc-500 font-medium">Status</TableHead>
+          <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Records</TableHead>
+          <TableHead className="h-9 px-2 text-zinc-500 font-medium">Error</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {logs.map(log => (
-          <tr key={log.id} className="border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30">
-            <td className="py-2 text-xs text-zinc-400 max-w-[200px] truncate" title={log.sheet_name ?? log.file_name ?? String(log.portal_id ?? "—")}>
+          <TableRow key={log.id} className="border-zinc-800/50">
+            <TableCell className="py-2 px-2 text-xs text-zinc-400 max-w-[200px] truncate" title={log.sheet_name ?? log.file_name ?? String(log.portal_id ?? "—")}>
               {log.sheet_name ?? log.file_name ?? `Portal ${log.portal_id ?? "—"}`}
-            </td>
-            <td className="py-2 text-zinc-400">{log.import_date ?? "—"}</td>
-            <td className="py-2">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_CLASSES[log.status] ?? "bg-zinc-800 text-zinc-400"}`}>
+            </TableCell>
+            <TableCell className="py-2 px-2 text-xs text-zinc-400">{log.import_date ?? "—"}</TableCell>
+            <TableCell className="py-2 px-2">
+              <Badge variant={STATUS_VARIANT[log.status] ?? "default"}>
                 {log.status}
-              </span>
-            </td>
-            <td className="py-2 text-right text-zinc-300">{(log.records_imported ?? 0).toLocaleString("en-IN")}</td>
-            <td className="py-2 text-xs text-red-400 truncate max-w-xs" title={log.error_message ?? ""}>
+              </Badge>
+            </TableCell>
+            <TableCell className="py-2 px-2 text-right text-xs text-zinc-300">
+              {(log.records_imported ?? 0).toLocaleString("en-IN")}
+            </TableCell>
+            <TableCell className="py-2 px-2 text-xs text-red-400 truncate max-w-xs" title={log.error_message ?? ""}>
               {log.error_message ?? "—"}
-            </td>
-          </tr>
+            </TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }

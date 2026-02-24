@@ -2,6 +2,12 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { format, subDays, subMonths } from "date-fns";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import type { Portal } from "@/lib/api";
 
 const PRESETS = [
@@ -21,8 +27,8 @@ export function SalesFilters({ portals }: Props) {
   const params = useSearchParams();
   const today = new Date();
 
-  const startDate = params.get("start_date");
-  const endDate   = params.get("end_date");
+  const startDate   = params.get("start_date");
+  const endDate     = params.get("end_date");
   const activePortal = params.get("portal_id") ?? "all";
 
   function push(updates: Record<string, string | null>) {
@@ -63,53 +69,58 @@ export function SalesFilters({ portals }: Props) {
                 return startDate === expectedStart;
               })();
           return (
-            <button
+            <Button
               key={preset.label}
+              variant="ghost"
+              size="sm"
               onClick={() => applyPreset(preset)}
-              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+              className={cn(
+                "h-7 px-3 text-sm rounded-md transition-colors",
                 isActive
-                  ? "bg-orange-500 text-white"
+                  ? "bg-orange-500 text-white hover:bg-orange-400"
                   : "text-zinc-300 hover:bg-zinc-700 hover:text-zinc-50"
-              }`}
+              )}
             >
               {preset.label}
-            </button>
+            </Button>
           );
         })}
       </div>
 
       {/* Date range inputs */}
-      <div className="flex items-center gap-2 text-sm text-zinc-400">
-        <input
+      <div className="flex items-center gap-2">
+        <Input
           type="date"
           value={startDate ?? ""}
           onChange={(e) => push({ start_date: e.target.value || null })}
-          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 text-xs [color-scheme:dark]"
+          className="h-8 w-36 bg-zinc-800 border-zinc-700 text-zinc-300 text-xs [color-scheme:dark]"
         />
-        <span className="text-zinc-600">→</span>
-        <input
+        <span className="text-zinc-600">to</span>
+        <Input
           type="date"
           value={endDate ?? ""}
           onChange={(e) => push({ end_date: e.target.value || null })}
-          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-300 text-xs [color-scheme:dark]"
+          className="h-8 w-36 bg-zinc-800 border-zinc-700 text-zinc-300 text-xs [color-scheme:dark]"
         />
       </div>
 
       {/* Portal selector */}
-      <select
+      <Select
         value={activePortal}
-        onChange={(e) =>
-          push({ portal_id: e.target.value === "all" ? null : e.target.value })
-        }
-        className="bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-zinc-300 cursor-pointer"
+        onValueChange={(v) => push({ portal_id: v === "all" ? null : v })}
       >
-        <option value="all">All Portals</option>
-        {portals.map((p) => (
-          <option key={p.id} value={String(p.id)}>
-            {p.display_name}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger className="h-8 w-40 bg-zinc-800 border-zinc-700 text-zinc-300 text-sm">
+          <SelectValue placeholder="All Portals" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All Portals</SelectItem>
+          {portals.map((p) => (
+            <SelectItem key={p.id} value={String(p.id)}>
+              {p.display_name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

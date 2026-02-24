@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ChevronUp, ChevronDown, Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import type { SalesByDimension } from "@/lib/api";
 
 type SortKey = "total_revenue" | "total_quantity" | "asp" | "share";
@@ -33,7 +34,6 @@ export function ProductTable({ data, totalRevenue }: Props) {
     let filtered = data.filter((d) =>
       d.dimension_name.toLowerCase().includes(search.toLowerCase())
     );
-
     filtered = [...filtered].sort((a, b) => {
       let av = 0, bv = 0;
       if (sortKey === "total_revenue") { av = a.total_revenue; bv = b.total_revenue; }
@@ -41,13 +41,9 @@ export function ProductTable({ data, totalRevenue }: Props) {
       else if (sortKey === "asp") {
         av = a.total_quantity > 0 ? a.total_revenue / a.total_quantity : 0;
         bv = b.total_quantity > 0 ? b.total_revenue / b.total_quantity : 0;
-      } else if (sortKey === "share") {
-        av = a.total_revenue;
-        bv = b.total_revenue;
-      }
+      } else { av = a.total_revenue; bv = b.total_revenue; }
       return sortDir === "desc" ? bv - av : av - bv;
     });
-
     return filtered;
   }, [data, sortKey, sortDir, search]);
 
@@ -83,13 +79,13 @@ export function ProductTable({ data, totalRevenue }: Props) {
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-base">Top Products by Revenue</CardTitle>
         <div className="relative">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+          <Input
             type="text"
             placeholder="Search products…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded pl-8 pr-3 py-1.5 text-xs text-zinc-300 placeholder-zinc-600 w-48 focus:outline-none focus:border-zinc-500"
+            className="h-8 w-48 pl-8 bg-zinc-800 border-zinc-700 text-zinc-300 text-xs placeholder:text-zinc-600 focus-visible:ring-0"
           />
         </div>
       </CardHeader>
@@ -108,40 +104,23 @@ export function ProductTable({ data, totalRevenue }: Props) {
             </thead>
             <tbody className="divide-y divide-zinc-800/50">
               {rows.slice(0, 50).map((p, i) => {
-                const asp =
-                  p.total_quantity > 0
-                    ? p.total_revenue / p.total_quantity
-                    : 0;
-                const share =
-                  totalRevenue > 0
-                    ? (p.total_revenue / totalRevenue) * 100
-                    : 0;
+                const asp = p.total_quantity > 0 ? p.total_revenue / p.total_quantity : 0;
+                const share = totalRevenue > 0 ? (p.total_revenue / totalRevenue) * 100 : 0;
                 return (
                   <tr key={p.dimension_id} className="hover:bg-zinc-800/40 transition-colors">
                     <td className="py-2.5 text-zinc-600 text-xs">{i + 1}</td>
                     <td className="py-2.5 text-zinc-200 max-w-xs">
                       <span className="line-clamp-1">{p.dimension_name}</span>
                     </td>
-                    <td className="py-2.5 text-right text-zinc-100 font-medium font-mono text-xs">
-                      {fmtRevenue(p.total_revenue)}
-                    </td>
-                    <td className="py-2.5 text-right text-zinc-400 text-xs">
-                      {fmtNum(p.total_quantity)}
-                    </td>
-                    <td className="py-2.5 text-right text-zinc-400 text-xs">
-                      {fmtRevenue(asp)}
-                    </td>
+                    <td className="py-2.5 text-right text-zinc-100 font-medium font-mono text-xs">{fmtRevenue(p.total_revenue)}</td>
+                    <td className="py-2.5 text-right text-zinc-400 text-xs">{fmtNum(p.total_quantity)}</td>
+                    <td className="py-2.5 text-right text-zinc-400 text-xs">{fmtRevenue(asp)}</td>
                     <td className="py-2.5 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-orange-500/60 rounded-full"
-                            style={{ width: `${Math.min(share * 3, 100)}%` }}
-                          />
+                          <div className="h-full bg-orange-500/60 rounded-full" style={{ width: `${Math.min(share * 3, 100)}%` }} />
                         </div>
-                        <span className="text-zinc-500 text-xs w-10 text-right">
-                          {share.toFixed(1)}%
-                        </span>
+                        <span className="text-zinc-500 text-xs w-10 text-right">{share.toFixed(1)}%</span>
                       </div>
                     </td>
                   </tr>
