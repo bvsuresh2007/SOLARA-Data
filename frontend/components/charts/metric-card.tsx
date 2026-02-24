@@ -1,5 +1,8 @@
 "use client";
 
+import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
 interface MetricCardProps {
   label: string;
   value: string;
@@ -9,20 +12,22 @@ interface MetricCardProps {
 
 export default function MetricCard({ label, value, highlight = false, subtext }: MetricCardProps) {
   return (
-    <div
-      className={`rounded-xl border p-4 ${
-        highlight
-          ? "bg-red-50 border-red-200"
-          : "bg-white border-gray-200"
-      }`}
-    >
-      <p className={`text-xs font-medium uppercase tracking-wide ${highlight ? "text-red-500" : "text-gray-500"}`}>
-        {label}
-      </p>
-      <p className={`text-2xl font-bold mt-1 ${highlight ? "text-red-700" : "text-gray-900"}`}>
-        {value}
-      </p>
-      {subtext && <p className="text-xs text-gray-400 mt-1">{subtext}</p>}
-    </div>
+    <Card className={cn(highlight && "border-red-800 bg-red-950/30")}>
+      <CardContent className="pt-6">
+        <p className={cn(
+          "text-xs font-medium uppercase tracking-wide",
+          highlight ? "text-red-400" : "text-zinc-500"
+        )}>
+          {label}
+        </p>
+        <p className={cn(
+          "text-2xl font-bold mt-1",
+          highlight ? "text-red-400" : "text-zinc-100"
+        )}>
+          {value}
+        </p>
+        {subtext && <p className="text-xs text-zinc-600 mt-1">{subtext}</p>}
+      </CardContent>
+    </Card>
   );
 }

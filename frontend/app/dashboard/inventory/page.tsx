@@ -1,37 +1,38 @@
 import { api } from "@/lib/api";
-import { formatNumber } from "@/lib/utils";
 import MetricCard from "@/components/charts/metric-card";
+import { NavTabs } from "@/components/ui/nav-tabs";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import Link from "next/link";
 
 export const revalidate = 300;
 
+const LOW_STOCK_PREVIEW = 20;
+
 export default async function InventoryDashboardPage() {
   const [inventory, lowStock] = await Promise.all([
-    api.currentInventory(),
-    api.lowStock(100),
+    api.currentInventory().catch(() => []),
+    api.lowStock(100).catch(() => []),
   ]);
 
-  const totalStock     = inventory.reduce((s, r) => s + r.stock_quantity, 0);
-  const totalAvailable = inventory.reduce((s, r) => s + r.available_quantity, 0);
-  const totalReserved  = inventory.reduce((s, r) => s + r.reserved_quantity, 0);
+  const productCount = new Set(inventory.map(r => r.product_id)).size;
+  const portalCount  = new Set(inventory.map(r => r.portal_id)).size;
 
   return (
-    <main className="p-6 space-y-8">
-      <header className="flex items-center justify-between">
+    <main className="min-h-screen bg-zinc-950 p-6 space-y-8">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Inventory Management</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Stock levels, low-stock alerts, and warehouse snapshots</p>
+          <h1 className="text-2xl font-bold text-zinc-50">Inventory Management</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">Stock levels, low-stock alerts, and warehouse snapshots</p>
         </div>
-        <nav className="flex gap-4 text-sm font-medium">
-          <a href="/dashboard"           className="text-gray-500 hover:text-gray-900">Overview</a>
-          <a href="/dashboard/sales"     className="text-gray-500 hover:text-gray-900">Sales</a>
-          <a href="/dashboard/inventory" className="text-brand-600">Inventory</a>
-        </nav>
+        <NavTabs />
       </header>
 
       <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard label="Total Stock"      value={formatNumber(totalStock)} />
-        <MetricCard label="Available Stock"  value={formatNumber(totalAvailable)} />
-        <MetricCard label="Reserved Stock"   value={formatNumber(totalReserved)} />
+        <MetricCard label="Snapshot Records" value={String(inventory.length)} />
+        <MetricCard label="Products Tracked" value={String(productCount)} />
+        <MetricCard label="Portals Covered"  value={String(portalCount)} />
         <MetricCard
           label="Low Stock Alerts"
           value={String(lowStock.length)}
@@ -40,63 +41,76 @@ export default async function InventoryDashboardPage() {
       </section>
 
       {lowStock.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <h2 className="font-semibold text-red-800 mb-4">
-            Low Stock Alert ({lowStock.length} products below threshold)
+        <div className="bg-red-950/30 border border-red-800 rounded-xl p-4">
+          <h2 className="font-semibold text-red-400 mb-4">
+            Low Stock Alert — {lowStock.length} products at zero portal stock
           </h2>
-          <table className="w-full text-sm">
-            <thead className="text-left text-red-600 border-b border-red-200">
-              <tr>
-                <th className="pb-2">Product</th>
-                <th className="pb-2">SKU</th>
-                <th className="pb-2 text-right">Available</th>
-                <th className="pb-2 text-right">Total Stock</th>
-                <th className="pb-2 text-right">Portals</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lowStock.map(item => (
-                <tr key={item.product_id} className="border-b border-red-100 last:border-0">
-                  <td className="py-2 font-medium text-red-900">{item.product_name}</td>
-                  <td className="py-2 font-mono text-xs text-red-600">{item.sku_code}</td>
-                  <td className="py-2 text-right text-red-700 font-bold">{formatNumber(item.total_available)}</td>
-                  <td className="py-2 text-right text-gray-600">{formatNumber(item.total_stock)}</td>
-                  <td className="py-2 text-right text-gray-600">{item.portal_count}</td>
-                </tr>
+          <Table>
+            <TableHeader>
+              <TableRow className="border-red-800/50">
+                <TableHead className="h-9 px-2 text-red-500 font-medium">Product</TableHead>
+                <TableHead className="h-9 px-2 text-red-500 font-medium">SKU</TableHead>
+                <TableHead className="h-9 px-2 text-right text-red-500 font-medium">Portal Stock</TableHead>
+                <TableHead className="h-9 px-2 text-right text-red-500 font-medium">Portals</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {lowStock.slice(0, LOW_STOCK_PREVIEW).map(item => (
+                <TableRow key={item.product_id} className="border-red-900/50">
+                  <TableCell className="py-2 px-2 font-medium text-red-300">{item.product_name}</TableCell>
+                  <TableCell className="py-2 px-2 font-mono text-xs text-red-500">{item.sku_code ?? "—"}</TableCell>
+                  <TableCell className="py-2 px-2 text-right text-red-400 font-bold font-mono">{item.total_portal_stock ?? "0"}</TableCell>
+                  <TableCell className="py-2 px-2 text-right text-zinc-400">{item.portal_count}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
+          {lowStock.length > LOW_STOCK_PREVIEW && (
+            <p className="mt-3 text-xs text-red-600">
+              Showing {LOW_STOCK_PREVIEW} of {lowStock.length} products.{" "}
+              <Link href="/dashboard/upload" className="underline hover:text-red-400 transition-colors">
+                Upload updated stock data
+              </Link>{" "}
+              to resolve.
+            </p>
+          )}
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold mb-4">Current Inventory Snapshot</h2>
-        <table className="w-full text-sm">
-          <thead className="text-left text-gray-500 border-b">
-            <tr>
-              <th className="pb-2">Portal ID</th>
-              <th className="pb-2">Product ID</th>
-              <th className="pb-2">Date</th>
-              <th className="pb-2 text-right">Stock</th>
-              <th className="pb-2 text-right">Available</th>
-              <th className="pb-2 text-right">Reserved</th>
-            </tr>
-          </thead>
-          <tbody>
-            {inventory.slice(0, 50).map(row => (
-              <tr key={row.id} className="border-b last:border-0 hover:bg-gray-50">
-                <td className="py-2 text-gray-500 text-xs">{row.portal_id}</td>
-                <td className="py-2 text-gray-500 text-xs">{row.product_id}</td>
-                <td className="py-2 text-gray-600 text-xs">{row.snapshot_date}</td>
-                <td className="py-2 text-right">{formatNumber(row.stock_quantity)}</td>
-                <td className={`py-2 text-right font-medium ${row.available_quantity < 50 ? "text-red-600" : "text-green-600"}`}>
-                  {formatNumber(row.available_quantity)}
-                </td>
-                <td className="py-2 text-right text-gray-500">{formatNumber(row.reserved_quantity)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+        <h2 className="font-semibold text-zinc-100 mb-4">Current Inventory Snapshot</h2>
+        <Table>
+          <TableHeader>
+            <TableRow className="border-zinc-800">
+              <TableHead className="h-9 px-2 text-zinc-500 font-medium">Portal</TableHead>
+              <TableHead className="h-9 px-2 text-zinc-500 font-medium">Product</TableHead>
+              <TableHead className="h-9 px-2 text-zinc-500 font-medium">Date</TableHead>
+              <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Portal Stock</TableHead>
+              <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Backend Stock</TableHead>
+              <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Solara Stock</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {inventory.slice(0, 50).map(row => {
+              const portalStockNum = parseFloat(row.portal_stock ?? "0");
+              return (
+                <TableRow key={row.id} className="border-zinc-800/50">
+                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">#{row.portal_id}</TableCell>
+                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">#{row.product_id}</TableCell>
+                  <TableCell className="py-2 px-2 text-zinc-600 text-xs">{row.snapshot_date}</TableCell>
+                  <TableCell className={`py-2 px-2 text-right font-mono text-xs font-medium ${portalStockNum === 0 ? "text-red-400" : "text-green-400"}`}>
+                    {row.portal_stock ?? "—"}
+                  </TableCell>
+                  <TableCell className="py-2 px-2 text-right font-mono text-xs text-zinc-500">{row.backend_stock ?? "—"}</TableCell>
+                  <TableCell className="py-2 px-2 text-right font-mono text-xs text-zinc-500">{row.solara_stock ?? "—"}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        {inventory.length > 50 && (
+          <p className="mt-3 text-xs text-zinc-600">Showing 50 of {inventory.length} records.</p>
+        )}
       </div>
     </main>
   );

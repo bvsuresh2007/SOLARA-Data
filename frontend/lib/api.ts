@@ -36,33 +36,77 @@ export interface SalesByDimension {
   record_count: number;
 }
 
+export interface SalesTrend {
+  date: string;
+  total_revenue: number;
+  total_quantity: number;
+  avg_asp: number;
+}
+
+export interface SalesByCategory {
+  category: string;
+  total_revenue: number;
+  total_quantity: number;
+  product_count: number;
+}
+
+export interface TargetAchievement {
+  portal_name: string;
+  target_revenue: number;
+  actual_revenue: number;
+  achievement_pct: number;
+  target_units: number;
+  actual_units: number;
+}
+
 export interface InventoryItem {
   id: number;
   portal_id: number;
   product_id: number;
   snapshot_date: string;
-  stock_quantity: number;
-  available_quantity: number;
-  reserved_quantity: number;
-  oos_percentage?: number;
+  portal_stock: string | null;
+  backend_stock: string | null;
+  frontend_stock: string | null;
+  solara_stock: string | null;
+  open_po: string | null;
+  doc: string | null;
+  imported_at: string;
 }
 
 export interface InventorySummary {
   product_id: number;
   product_name: string;
   sku_code: string;
-  total_stock: number;
-  total_available: number;
-  total_reserved: number;
+  total_portal_stock: string;
   portal_count: number;
+}
+
+export interface PortalDailyRow {
+  sku_code: string;
+  product_name: string;
+  category: string;
+  portal_sku: string;
+  bau_asp: number | null;
+  wh_stock: number | null;
+  daily_units: Record<string, number | null>;
+  mtd_units: number;
+  mtd_value: number;
+}
+
+export interface PortalDailyResponse {
+  portal_name: string;
+  dates: string[];
+  rows: PortalDailyRow[];
 }
 
 export interface ScrapingLog {
   id: number;
   portal_id?: number;
-  scrape_date: string;
+  sheet_name?: string;
+  file_name?: string;
+  import_date: string;
   status: string;
-  records_processed: number;
+  records_imported: number | null;
   error_message?: string;
   start_time: string;
   end_time?: string;
@@ -78,13 +122,25 @@ export const api = {
   salesSummary: (params?: Record<string, string | number | undefined>) =>
     get<SalesSummary>("/api/sales/summary", params),
 
-  salesByPortal:  (params?: Record<string, string>) => get<SalesByDimension[]>("/api/sales/by-portal",  params),
-  salesByCity:    (params?: Record<string, string>) => get<SalesByDimension[]>("/api/sales/by-city",    params),
-  salesByProduct: (params?: Record<string, string>) => get<SalesByDimension[]>("/api/sales/by-product", params),
+  salesByPortal:  (params?: Record<string, string | number | undefined>) => get<SalesByDimension[]>("/api/sales/by-portal",  params),
+  salesByCity:    (params?: Record<string, string | number | undefined>) => get<SalesByDimension[]>("/api/sales/by-city",    params),
+  salesByProduct: (params?: Record<string, string | number | undefined>) => get<SalesByDimension[]>("/api/sales/by-product", params),
+
+  salesTrend: (params?: Record<string, string | number | undefined>) =>
+    get<SalesTrend[]>("/api/sales/trend", params),
+
+  salesByCategory: (params?: Record<string, string | number | undefined>) =>
+    get<SalesByCategory[]>("/api/sales/by-category", params),
+
+  salesTargets: (params?: Record<string, string | number | undefined>) =>
+    get<TargetAchievement[]>("/api/sales/targets", params),
 
   currentInventory: (params?: Record<string, string | number>) =>
     get<InventoryItem[]>("/api/inventory/current", params),
 
   lowStock: (threshold = 100) =>
     get<InventorySummary[]>("/api/inventory/low-stock", { threshold }),
+
+  portalDaily: (params: { portal?: string; start_date?: string; end_date?: string }) =>
+    get<PortalDailyResponse>("/api/sales/portal-daily", params),
 };

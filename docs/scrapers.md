@@ -1,6 +1,6 @@
 # Scrapers — How They Work
 
-**Last updated:** 2026-02-23
+**Last updated:** 2026-02-24
 
 ---
 
@@ -13,9 +13,9 @@ The scraper service downloads daily sales and inventory reports from each portal
 | Mode | Where | Trigger |
 |------|--------|---------|
 | **Docker cron** | `scrapers` container via `orchestrator.py` | 11:00 AM IST daily (all portals) |
-| **GitHub Actions** | `ubuntu-latest` runner | 11 AM–12 PM IST daily (per-portal) |
+| **GitHub Actions** | `ubuntu-latest` runner | 11 AM–2 PM IST daily (per-portal) |
 
-GitHub Actions workflows (`.github/workflows/scraper-*.yml`) run EasyEcom, Zepto, and Amazon PI individually. They use headless Chromium, sync Chrome profiles via Google Drive (`PROFILE_STORAGE_DRIVE_FOLDER_ID`), and upload downloaded files as run artifacts (7-day retention). Each workflow also supports `workflow_dispatch` for manual runs with an optional custom date.
+GitHub Actions workflows (`.github/workflows/scraper-*.yml`) run EasyEcom, Zepto, Amazon PI, Blinkit, and Swiggy individually. They use headless Chromium, sync Chrome profiles via Google Drive (`PROFILE_STORAGE_DRIVE_FOLDER_ID`), and upload downloaded files as run artifacts (7-day retention). Each workflow also supports `workflow_dispatch` for manual runs with an optional custom date.
 
 ```
 orchestrator.py
@@ -65,6 +65,8 @@ Add these in **GitHub → Settings → Secrets and variables → Actions**:
 | `AMAZON_PI_EMAIL` | amazon-pi | Seller email |
 | `AMAZON_PI_PASSWORD` | amazon-pi | Seller password |
 | `AMAZON_PI_TOTP_SECRET` | amazon-pi | Base32 TOTP secret for 2FA |
+| `SWIGGY_LINK` | swiggy | Portal URL (`https://partner.swiggy.com/instamart/sales`) |
+| `SWIGGY_EMAIL` | swiggy | Vendor email (OTP sent here via Gmail) |
 
 To encode `token.json` for the secret:
 ```bash
@@ -111,7 +113,7 @@ These conventions are shared by every scraper. New scrapers should follow them.
 | Blinkit | `launch_persistent_context()` | OTP-based session; avoids re-auth per run |
 | Amazon PI | `launch_persistent_context()` | TOTP 2FA session; avoids re-auth per run |
 | Zepto | Regular context + JSON storage state | Lighter; session saved as cookies/localStorage |
-| Swiggy | Regular context (no session) | Credentials-only login; no session persistence |
+| Swiggy | `launch_persistent_context()` | OTP-based session; avoids re-auth per run |
 | Shopify | None (HTTP API) | No browser needed |
 
 **Rule of thumb:** use `launch_persistent_context()` when the portal uses OTP or OAuth (session is expensive to obtain). Use JSON storage state or plain context when you have a password you can re-use each run.
@@ -182,10 +184,10 @@ The dual try/except import handles both `python -m scrapers.X` (relative import 
 | EasyEcom | Google OAuth (not OTP) | Persistent Chrome profile auto-selects the Google account — no code entry needed |
 | Zepto | Email OTP from `mailer@zeptonow.com` | `scrapers/gmail_otp.py` reads Gmail inbox of `automation@solara.in` |
 | Blinkit | Email OTP from `noreply@partnersbiz.com` | `scrapers/gmail_otp.py` — same mechanism as Zepto |
-| Swiggy | None | Password-only |
+| Swiggy | Email OTP from `no-reply@swiggy.in` | `scrapers/gmail_otp.py` — same mechanism as Zepto/Blinkit |
 | Shopify | None | API key |
 
-**Gmail OTP pattern (Zepto / Blinkit):** Record a timestamp before triggering OTP → poll Gmail for the OTP email from the expected sender that arrived after that timestamp → parse the code → fill the OTP input. Retries up to 3–5 times with ~10-second intervals.
+**Gmail OTP pattern (Zepto / Blinkit / Swiggy):** Record a timestamp before triggering OTP → poll Gmail for the OTP email from the expected sender that arrived after that timestamp → parse the code → fill the OTP input. Retries up to 3–5 times with ~10-second intervals.
 
 ### 5. Dual import pattern
 
@@ -354,6 +356,8 @@ Every Playwright scraper calls `self._shot(label)` / `self._screenshot(label)` b
 | Drive upload | Yes — `"Zepto"` |
 | Download format | XLSX |
 
+**Standalone CLI:** Run `python scrapers/zepto_scraper.py` (or `python scrapers/zepto_scraper.py --date 2026-02-20`) to trigger a single visible-browser run. Useful for refreshing the session JSON interactively.
+
 **Login flow:** Email → password → "Log In" → OTP screen → fetch from Gmail (`mailer@zeptonow.com` → `automation@solara.in`) → fill `#otp` → confirm. Saves session state to JSON; skips login if session is still valid on the next run.
 
 **Date picker:** MUI drawer modal. Select `Sales_F` from dropdown → fill two `input[type="tel"][placeholder="mm/dd/yyyy"]` fields → Submit.
@@ -392,17 +396,33 @@ Every Playwright scraper calls `self._shot(label)` / `self._screenshot(label)` b
 
 ---
 
-### Swiggy (`scrapers/swiggy_scraper.py`) — **Stub (selectors unverified)**
+### Swiggy (`scrapers/swiggy_scraper.py`) — **Working**
 
 | Detail | Value |
 |--------|-------|
-| URL | `vendor.swiggy.com` |
-| Auth | Email + password (no OTP) |
-| Profile sync | No |
-| Drive upload | Not yet implemented |
-| Download format | XLSX |
+| URL | `partner.swiggy.com/instamart/sales` (env: `SWIGGY_LINK`) |
+| Auth | Persistent Chrome profile (Email + Gmail OTP) |
+| Profile dir | `scrapers/sessions/swiggy_profile/` |
+| Profile sync | Yes — `"swiggy"` |
+| Drive upload | Yes — `"Swiggy"` |
+| Download format | CSV |
 
-Uses `data-testid` attributes for all locators. Structurally correct but selectors need live verification against the portal. Simplest scraper — no OTP, no modals, no profile management.
+**Login flow:** Navigate to `SWIGGY_LINK` → fill email (`SWIGGY_EMAIL`) → click "Send OTP" (`[data-testid="submit-phone-number"]`, waits for button to become enabled) → fetch OTP from Gmail (`no-reply@swiggy.in` → `automation@solara.in`) → fill individual digit inputs → auto-submits on last digit → may redirect to `/instamart/account-select` (handled automatically by `_handle_account_select()`).
+
+**Date picker:** Custom React dropdown. Trigger: `[data-testid*="date" i]` (the "This Week" button). Opens a preset list; click "Custom Date Range" → fill start/end inputs with DD/MM/YYYY via nativeSetter → click "Select Range" to confirm → press Escape to dismiss any remaining overlay.
+
+**Report flow:**
+1. Click "Generate Report" via JS `dispatchEvent` — Playwright's native `click()` is blocked by the floating calendar overlay that remains open after date selection.
+2. **Phase 1** (up to 60s): Wait for the new report name (`IMSales_MMDDYY_HHMM`) to appear in the "Available Reports" section with "Generation in progress" status — confirms the portal accepted the request.
+3. **Phase 2** (up to 10 min): Reload every 30s and read section text line-by-line. Report is ready when the line immediately after the report name starts with "Generated on".
+4. Download via `[data-testid="download-icon"]` Playwright locator wrapped in `page.expect_download()` context manager.
+
+**Key quirks:**
+- OTP sender is `no-reply@swiggy.in` (not `.com`). OTP is in the email **body** (nested HTML), not the subject line.
+- `gmail_otp.py` required a fix for deeply nested MIME: `multipart/mixed → multipart/alternative → text/html`. Fixed via recursive `_collect_parts()` descent.
+- Report generation takes **2–10 minutes** on the portal side — the 30s reload loop tracks the specific named report card so it does not confuse earlier completed reports with the new one.
+- Download format is CSV (not XLSX). The download button is `[data-testid="download-icon"]` SVG inside `div.imads__Ri7gC`.
+- `expect_download` must wrap the locator `.click()` call — do **not** trigger via JS `dispatchEvent` before entering the context manager, or the download event fires before Playwright starts listening.
 
 ---
 
@@ -438,7 +458,7 @@ No browser required. Fetches orders for the target date via the REST API with pa
 | `base_scraper.py` | Abstract base: browser lifecycle, `_screenshot()`, `run()` with 3-retry backoff |
 | `profile_sync.py` | `download_profile(portal)` / `upload_profile(portal)` — Drive ↔ local Chrome profile sync. No-op when `PROFILE_STORAGE_DRIVE_FOLDER_ID` is unset |
 | `google_drive_upload.py` | `upload_to_drive(portal, report_date, file_path)` — uploads to `SolaraDashboard Reports / YYYY-MM / <Portal> /`. Uses same OAuth token as Gmail (`token.json` or `GMAIL_TOKEN_JSON` env) |
-| `gmail_otp.py` | Reads Gmail inbox of `automation@solara.in` to fetch OTP codes sent by portals (Zepto, Blinkit) |
+| `gmail_otp.py` | Reads Gmail inbox of `automation@solara.in` to fetch OTP codes sent by portals (Zepto, Blinkit, Swiggy). Handles nested MIME structures via recursive `_collect_parts()`. |
 | `totp_helper.py` | `get_totp_code(env_var)` — reads a Base32 TOTP secret from an env var and returns the current 6-digit code via `pyotp` (used by Amazon PI) |
 | `excel_parser.py` | Portal-specific parsers. `get_parser(portal_name)` returns the right parser. Each parser implements `parse_sales(file)` and optionally `parse_inventory(file)`, returning a list of raw row dicts |
 | `data_transformer.py` | Normalises raw rows: resolves city name aliases (e.g. "BLR" → "Bangalore"), looks up portal/product/warehouse IDs from DB, returns DB-ready dicts |
@@ -453,6 +473,7 @@ scrapers/sessions/
   ├── easyecom_profile/     ← Chromium persistent profile (Google OAuth)
   ├── blinkit_profile/      ← Chromium persistent profile (OTP session)
   ├── amazon_pi_profile/    ← Chromium persistent profile (TOTP session)
+  ├── swiggy_profile/       ← Chromium persistent profile (OTP session)
   └── zepto_session.json    ← Playwright storage state (cookies + localStorage)
 ```
 

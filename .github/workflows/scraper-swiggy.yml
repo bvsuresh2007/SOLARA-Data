@@ -1,0 +1,123 @@
+name: Scraper — Swiggy
+
+on:
+  push:
+    branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
+  schedule:
+    - cron: "5 6 * * *"  # 11:35 AM IST daily
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Date to scrape (YYYY-MM-DD). Defaults to yesterday."
+        required: false
+        default: ""
+
+jobs:
+  run-scraper:
+    name: Run Swiggy scraper
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r scrapers/requirements.txt
+          pip install pyotp google-auth google-auth-oauthlib google-api-python-client python-dotenv
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Restore Google token
+        run: echo "${{ secrets.GOOGLE_TOKEN_JSON }}" | base64 -d > token.json
+
+      - name: Create data directories
+        run: mkdir -p data/raw/swiggy
+
+      - name: Run Swiggy scraper
+        env:
+          SWIGGY_LINK: ${{ secrets.SWIGGY_LINK }}
+          SWIGGY_EMAIL: ${{ secrets.SWIGGY_EMAIL }}
+          PROFILE_STORAGE_DRIVE_FOLDER_ID: ${{ secrets.PROFILE_STORAGE_DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER_ID }}
+          RAW_DATA_PATH: ./data/raw
+          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
+        run: |
+          python - <<'EOF'
+          import sys, os
+          from datetime import date, timedelta
+          sys.path.insert(0, '.')
+
+          report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
+          if report_date_str:
+              from datetime import datetime
+              report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
+          else:
+              report_date = date.today() - timedelta(days=1)
+
+          from scrapers.swiggy_scraper import SwiggyScraper
+          result = SwiggyScraper(headless=True).run(report_date=report_date)
+          print("Result:", result)
+          if result.get("status") == "failed":
+              sys.exit(1)
+          EOF
+
+      - name: Populate DB from downloaded data
+        if: success()
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
+        run: |
+          python - <<'EOF'
+          import sys, os
+          from datetime import date, timedelta
+          sys.path.insert(0, '.')
+
+          report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
+          if report_date_str:
+              from datetime import datetime
+              report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
+          else:
+              report_date = date.today() - timedelta(days=1)
+
+          from scrapers.orchestrator import populate_portal_data
+          result = populate_portal_data(portal_name="swiggy", report_date=report_date)
+          print("DB populate result:", result)
+          EOF
+
+      - name: Upload data artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swiggy-data-${{ github.run_id }}
+          path: data/raw/swiggy/
+          retention-days: 7
+
+      - name: Upload debug screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: swiggy-debug-${{ github.run_id }}
+          path: data/raw/swiggy/debug_swiggy_*.png
+          retention-days: 3
+
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":warning: *Swiggy scraper failed* — OTP session may have expired.\n\n*Action needed:*\n1. Run locally in visible mode: `python scrapers/swiggy_scraper.py`\n2. Complete the OTP login in the browser window\n3. Profile will auto-upload to Drive\n4. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-swiggy.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
+            }'

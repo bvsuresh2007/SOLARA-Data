@@ -17,10 +17,18 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def _read_file(path: Path, sheet_name=0, skiprows=0) -> pd.DataFrame:
+    # Detect real format by magic bytes (portals sometimes save CSVs with .xlsx extension)
+    with open(path, "rb") as fh:
+        magic = fh.read(4)
+    is_real_xlsx = magic[:2] == b"PK"           # ZIP container → real xlsx
+    is_real_xls  = magic[:2] == b"\xd0\xcf"    # BIFF container → legacy xls
+
     suffix = path.suffix.lower()
-    if suffix in (".xlsx", ".xls"):
-        return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows, dtype=str)
-    elif suffix == ".csv":
+    if is_real_xlsx or is_real_xls:
+        engine = "openpyxl" if is_real_xlsx else "xlrd"
+        return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows, dtype=str, engine=engine)
+    elif suffix == ".csv" or not (is_real_xlsx or is_real_xls):
+        # Treat as CSV (handles the case where portal serves CSV with .xlsx extension)
         return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -130,33 +138,24 @@ class BlinkitParser:
                 "portal": "blinkit",
                 "sale_date": _parse_date_ymd(row.get("date")),
                 "portal_product_id": str(row.get("item_id", "")).strip(),
-                "city": str(row.get("city", "")).strip(),
-                "l1_category": str(row.get("l1_category", "")).strip(),
+                # Blinkit CSV uses "city_name" (not "city")
+                "city": str(row.get("city_name", row.get("city", ""))).strip(),
+                "l1_category": str(row.get("category", row.get("l1_category", ""))).strip(),
                 "l2_category": str(row.get("l2_category", "")).strip(),
                 "l3_category": "",
                 "revenue": revenue,
-                "quantity_sold": _f(row.get("quantity", 0)),
-                "order_count": _i(row.get("orders", 0)),
+                # Blinkit CSV uses "qty_sold" (not "quantity")
+                "quantity_sold": _f(row.get("qty_sold", row.get("quantity", 0))),
+                "order_count": _i(row.get("orders", row.get("qty_sold", 0))),
                 "discount_amount": 0.0,
                 "net_revenue": revenue,
             })
         return rows
 
     def parse_inventory(self, path: Path) -> list[dict]:
-        df = _clean(_read_file(path))
-        rows = []
-        for _, row in df.iterrows():
-            rows.append({
-                "portal": "blinkit",
-                "snapshot_date": _parse_date_ymd(row.get("date")),
-                "portal_product_id": str(row.get("item_id", "")).strip(),
-                "warehouse_name": str(row.get("facility_name", "")).strip(),
-                "city": str(row.get("city", "")).strip(),
-                "stock_quantity": _f(row.get("backend_inv_qty", 0)),
-                "available_quantity": _f(row.get("frontend_inv_qty", 0)),
-                "reserved_quantity": 0.0,
-            })
-        return rows
+        # The daily Blinkit sales CSV does not contain inventory columns.
+        # A separate inventory export would be needed.
+        return []
 
 
 # =============================================================================
@@ -170,40 +169,32 @@ class ZeptoParser:
         for _, row in df.iterrows():
             mrp = _f(row.get("MRP", 0))
             selling_price = _f(row.get("Selling Price", mrp))
-            gmv = _f(row.get("GMV", 0))
+            # Zepto CSV uses full names: "Gross Merchandise Value" / "Gross Selling Value"
+            gmv = _f(row.get("Gross Merchandise Value", row.get("GMV", 0)))
+            gsv = _f(row.get("Gross Selling Value", row.get("GSV", gmv)))
             discount = round(mrp - selling_price, 2) if mrp > selling_price else 0.0
             rows.append({
                 "portal": "zepto",
                 "sale_date": _parse_date_dmy(row.get("Date")),
                 "portal_product_id": str(row.get("SKU Number", "")).strip(),
                 "city": str(row.get("City", "")).strip(),
-                "l1_category": str(row.get("Category", "")).strip(),
-                "l2_category": str(row.get("Sub Category", "")).strip(),
+                # Zepto CSV uses "SKU Category" / "SKU Sub Category"
+                "l1_category": str(row.get("SKU Category", row.get("Category", ""))).strip(),
+                "l2_category": str(row.get("SKU Sub Category", row.get("Sub Category", ""))).strip(),
                 "l3_category": "",
                 "revenue": gmv,
-                "quantity_sold": _f(row.get("Units", 0)),
+                # Zepto CSV uses "Sales (Qty) - Units" (not "Units")
+                "quantity_sold": _f(row.get("Sales (Qty) - Units", row.get("Units", 0))),
                 "order_count": _i(row.get("Orders", 0)),
                 "discount_amount": discount,
-                "net_revenue": _f(row.get("GSV", gmv)),
+                "net_revenue": gsv,
             })
         return rows
 
     def parse_inventory(self, path: Path) -> list[dict]:
-        df = _clean(_read_file(path))
-        rows = []
-        for _, row in df.iterrows():
-            stock = _f(row.get("Units", 0))
-            rows.append({
-                "portal": "zepto",
-                "snapshot_date": _parse_date_dmy(row.get("Date")),
-                "portal_product_id": str(row.get("SKU Number", "")).strip(),
-                "city": str(row.get("City", "")).strip(),
-                "warehouse_name": "",
-                "stock_quantity": stock,
-                "available_quantity": stock,
-                "reserved_quantity": 0.0,
-            })
-        return rows
+        # The Zepto daily sales CSV does not contain inventory/stock columns.
+        # A separate inventory export would be needed.
+        return []
 
 
 # =============================================================================
@@ -299,15 +290,46 @@ class ShopifyParser:
 
 
 # =============================================================================
+# EasyEcom
+# =============================================================================
+
+class EasyEcomParser:
+    # TODO: Map real columns once a sample CSV is available.
+    # EasyEcom miniSalesReport columns are unknown until a file is inspected.
+    def parse_sales(self, path: Path) -> list[dict]:
+        return []
+
+    def parse_inventory(self, path: Path) -> list[dict]:
+        return []
+
+
+# =============================================================================
+# Amazon PI
+# =============================================================================
+
+class AmazonPIParser:
+    # TODO: Map real columns once a sample XLSX is available.
+    # Amazon PI "ASIN wise revenue and unit sales" report columns are unknown
+    # until a file is inspected.
+    def parse_sales(self, path: Path) -> list[dict]:
+        return []
+
+    def parse_inventory(self, path: Path) -> list[dict]:
+        return []
+
+
+# =============================================================================
 # Registry
 # =============================================================================
 
 PARSERS: dict[str, type] = {
-    "swiggy":   SwiggyParser,
-    "blinkit":  BlinkitParser,
-    "zepto":    ZeptoParser,
-    "amazon":   AmazonParser,
-    "shopify":  ShopifyParser,
+    "swiggy":    SwiggyParser,
+    "blinkit":   BlinkitParser,
+    "zepto":     ZeptoParser,
+    "amazon":    AmazonParser,
+    "shopify":   ShopifyParser,
+    "easyecom":  EasyEcomParser,
+    "amazon_pi": AmazonPIParser,
 }
 
 

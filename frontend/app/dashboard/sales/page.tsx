@@ -1,96 +1,162 @@
+"use client";
+
+import { useEffect, useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { formatCurrency, formatNumber } from "@/lib/utils";
-import MetricCard from "@/components/charts/metric-card";
-import SalesBarChart from "@/components/charts/bar-chart";
+import type {
+  SalesSummary, SalesByDimension, SalesTrend,
+  SalesByCategory, TargetAchievement, Portal, PortalDailyResponse,
+} from "@/lib/api";
 
-export const revalidate = 300;
+import { SalesFilters }           from "@/components/sales/sales-filters";
+import { KpiStrip }               from "@/components/sales/kpi-strip";
+import { RevenueTrend }           from "@/components/sales/revenue-trend";
+import { PortalBreakdown }        from "@/components/sales/portal-breakdown";
+import { CategoryChart }          from "@/components/sales/category-chart";
+import { TargetAchievementPanel } from "@/components/sales/target-achievement";
+import { ProductTable }           from "@/components/sales/product-table";
+import { PortalDailyTable }       from "@/components/sales/portal-daily-table";
+import { Skeleton }               from "@/components/ui/skeleton";
+import { NavTabs }                from "@/components/ui/nav-tabs";
 
-export default async function SalesDashboardPage() {
-  const [summary, byPortal, byCity, byProduct] = await Promise.all([
-    api.salesSummary(),
-    api.salesByPortal(),
-    api.salesByCity(),
-    api.salesByProduct({ limit: "20" }),
-  ]);
+function KpiSkeleton() {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {[...Array(4)].map((_, i) => (
+        <Skeleton key={i} className="h-28 rounded-xl" />
+      ))}
+    </div>
+  );
+}
+function ChartSkeleton({ h = 300 }: { h?: number }) {
+  return <Skeleton className="rounded-xl w-full" style={{ height: h }} />;
+}
+
+function SalesContent() {
+  const params = useSearchParams();
+
+  const startDate   = params.get("start_date")  ?? undefined;
+  const endDate     = params.get("end_date")    ?? undefined;
+  const portalIdStr = params.get("portal_id")   ?? undefined;
+  const portalId    = portalIdStr ? Number(portalIdStr) : undefined;
+
+  const today = new Date();
+  const [targetYear,  setTargetYear]  = useState(today.getFullYear());
+  const [targetMonth, setTargetMonth] = useState(today.getMonth() + 1);
+
+  const [portals,    setPortals]    = useState<Portal[]>([]);
+  const [summary,    setSummary]    = useState<SalesSummary | null>(null);
+  const [byPortal,   setByPortal]   = useState<SalesByDimension[]>([]);
+  const [trend,      setTrend]      = useState<SalesTrend[]>([]);
+  const [byCategory, setByCategory] = useState<SalesByCategory[]>([]);
+  const [byProduct,  setByProduct]  = useState<SalesByDimension[]>([]);
+  const [targets,    setTargets]    = useState<TargetAchievement[]>([]);
+
+  const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
+  const [dailyLoading,   setDailyLoading]   = useState(false);
+  const [loading,        setLoading]        = useState(true);
+  const [targetsLoading, setTargetsLoading] = useState(true);
+  const [error,          setError]          = useState<string | null>(null);
+
+  const fetchMain = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const fp = {
+        ...(startDate ? { start_date: startDate } : {}),
+        ...(endDate   ? { end_date: endDate }      : {}),
+        ...(portalId  ? { portal_id: portalId }    : {}),
+      };
+      const [portalsData, summaryData, byPortalData, trendData, byCatData, byProdData] =
+        await Promise.all([
+          api.portals(),
+          api.salesSummary(fp),
+          api.salesByPortal(fp),
+          api.salesTrend(fp),
+          api.salesByCategory(fp),
+          api.salesByProduct({ ...fp, limit: 50 }),
+        ]);
+      setPortals(portalsData); setSummary(summaryData); setByPortal(byPortalData);
+      setTrend(trendData); setByCategory(byCatData); setByProduct(byProdData);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load data");
+    } finally { setLoading(false); }
+  }, [startDate, endDate, portalId]);
+
+  const fetchTargets = useCallback(async () => {
+    setTargetsLoading(true);
+    try { setTargets(await api.salesTargets({ year: targetYear, month: targetMonth })); }
+    catch { setTargets([]); }
+    finally { setTargetsLoading(false); }
+  }, [targetYear, targetMonth]);
+
+  const fetchPortalDaily = useCallback(async () => {
+    if (!portalId) { setDailyData(null); return; }
+    setDailyLoading(true);
+    try {
+      const portalName = portals.find(p => p.id === portalId)?.name;
+      setDailyData(await api.portalDaily({
+        ...(portalName ? { portal: portalName }    : {}),
+        ...(startDate  ? { start_date: startDate } : {}),
+        ...(endDate    ? { end_date: endDate }     : {}),
+      }));
+    } catch { setDailyData(null); }
+    finally { setDailyLoading(false); }
+  }, [portalId, portals, startDate, endDate]);
+
+  useEffect(() => { fetchMain(); },        [fetchMain]);
+  useEffect(() => { fetchTargets(); },     [fetchTargets]);
+  useEffect(() => { fetchPortalDaily(); }, [fetchPortalDaily]);
 
   return (
-    <main className="p-6 space-y-8">
-      <header className="flex items-center justify-between">
+    <main className="min-h-screen bg-zinc-950 p-6 space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Sales Analytics</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Revenue, quantity, and order breakdown across all portals</p>
+          <h1 className="text-2xl font-bold text-zinc-50">Sales Analytics</h1>
+          <p className="text-sm text-zinc-500 mt-0.5">Revenue, units, and category breakdown across all portals</p>
         </div>
-        <nav className="flex gap-4 text-sm font-medium">
-          <a href="/dashboard"           className="text-gray-500 hover:text-gray-900">Overview</a>
-          <a href="/dashboard/sales"     className="text-brand-600">Sales</a>
-          <a href="/dashboard/inventory" className="text-gray-500 hover:text-gray-900">Inventory</a>
-        </nav>
+        <NavTabs />
       </header>
 
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard label="Gross Revenue"   value={formatCurrency(summary.total_revenue)} />
-        <MetricCard label="Net Revenue"     value={formatCurrency(summary.total_net_revenue)} />
-        <MetricCard label="Total Discounts" value={formatCurrency(summary.total_discount)} />
-        <MetricCard label="Total Orders"    value={formatNumber(summary.total_orders)} />
-      </section>
+      <SalesFilters portals={portals} />
 
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h2 className="font-semibold mb-4">Revenue by Portal</h2>
-          <SalesBarChart
-            data={byPortal.map(d => ({ name: d.dimension_name, value: d.total_revenue }))}
-            dataKey="value"
-            label="Revenue (₹)"
-          />
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h2 className="font-semibold mb-4">Orders by Portal</h2>
-          <SalesBarChart
-            data={byPortal.map(d => ({ name: d.dimension_name, value: d.total_orders }))}
-            dataKey="value"
-            label="Orders"
-            color="#6366f1"
-          />
-        </div>
-      </section>
+      {error && (
+        <div className="rounded-lg border border-red-800 bg-red-950/30 px-4 py-3 text-sm text-red-400">{error}</div>
+      )}
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold mb-4">Top 15 Cities</h2>
-        <SalesBarChart
-          data={byCity.slice(0, 15).map(d => ({ name: d.dimension_name, value: d.total_revenue }))}
-          dataKey="value"
-          label="Revenue (₹)"
-          horizontal
+      {loading || !summary ? <KpiSkeleton /> : <KpiStrip summary={summary} productCount={byProduct.length} />}
+      {loading ? <ChartSkeleton h={320} /> : <RevenueTrend data={trend} />}
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <ChartSkeleton h={360} /><ChartSkeleton h={360} />
+        </div>
+      ) : <PortalBreakdown data={byPortal} />}
+      {loading ? <ChartSkeleton h={260} /> : <CategoryChart data={byCategory} />}
+      {targetsLoading ? <ChartSkeleton h={220} /> : (
+        <TargetAchievementPanel
+          data={targets} year={targetYear} month={targetMonth}
+          onMonthChange={(y, m) => { setTargetYear(y); setTargetMonth(m); }}
         />
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold mb-4">Top 20 Products</h2>
-        <table className="w-full text-sm">
-          <thead className="text-left text-gray-500 border-b">
-            <tr>
-              <th className="pb-2">#</th>
-              <th className="pb-2">Product</th>
-              <th className="pb-2 text-right">Gross Revenue</th>
-              <th className="pb-2 text-right">Net Revenue</th>
-              <th className="pb-2 text-right">Qty Sold</th>
-              <th className="pb-2 text-right">Orders</th>
-            </tr>
-          </thead>
-          <tbody>
-            {byProduct.map((p, i) => (
-              <tr key={p.dimension_id} className="border-b last:border-0 hover:bg-gray-50">
-                <td className="py-2 text-gray-400 text-xs">{i + 1}</td>
-                <td className="py-2 font-medium">{p.dimension_name}</td>
-                <td className="py-2 text-right font-mono text-sm">{formatCurrency(p.total_revenue)}</td>
-                <td className="py-2 text-right font-mono text-sm text-green-600">{formatCurrency(p.total_net_revenue)}</td>
-                <td className="py-2 text-right text-gray-600">{formatNumber(p.total_quantity)}</td>
-                <td className="py-2 text-right text-gray-600">{formatNumber(p.total_orders)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      )}
+      {loading ? <ChartSkeleton h={400} /> : <ProductTable data={byProduct} totalRevenue={summary?.total_revenue ?? 0} />}
+      <PortalDailyTable data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
     </main>
+  );
+}
+
+export default function SalesDashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-zinc-950 p-6 space-y-6">
+          <div className="h-8 w-48 rounded bg-zinc-800 animate-pulse" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[...Array(4)].map((_, i) => <div key={i} className="h-28 rounded-xl bg-zinc-800 animate-pulse" />)}
+          </div>
+          <div className="h-72 rounded-xl bg-zinc-800 animate-pulse" />
+        </main>
+      }
+    >
+      <SalesContent />
+    </Suspense>
   );
 }
