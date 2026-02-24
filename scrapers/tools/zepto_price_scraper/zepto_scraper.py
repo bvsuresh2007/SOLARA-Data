@@ -1,38 +1,52 @@
 """
-Zepto Product Scraper
+Zepto Product Price Scraper — Playwright
 
-Scrapes product data from Zepto product pages.
-Supports two modes:
-  - Browser mode (Selenium): Renders the full SPA, most reliable
-  - Requests mode: Direct HTTP + BeautifulSoup, faster but may get less data
+Scrapes live price, MRP, discount and availability from Zepto product pages.
+
+Strategies (in order):
+  1. API response interception — Zepto BFF product endpoints (when available)
+  2. Meta tags + og:title      — SSR metadata (reliable for name, price, rating)
+  3. DOM                       — rendered H1, price elements, body text
 """
 
 import re
-import json
 import time
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
-import requests as http_requests
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, BrowserContext, Response
 
-# Selenium imports (optional)
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
+
+# ── Stealth ───────────────────────────────────────────────────────────────────
+_STEALTH = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-IN','en-US','en']});
+    window.chrome = {runtime: {}};
+    const origQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = p =>
+        p.name === 'notifications'
+            ? Promise.resolve({state: Notification.permission})
+            : origQuery(p);
+"""
+
+# ── Pincode → coordinates ─────────────────────────────────────────────────────
+_PINCODE_COORDS = {
+    "400001": {"lat": "18.9387", "lng": "72.8353"},
+    "400093": {"lat": "19.1136", "lng": "72.8697"},
+    "560001": {"lat": "12.9716", "lng": "77.5946"},
+    "560103": {"lat": "12.9784", "lng": "77.6408"},
+    "110001": {"lat": "28.6139", "lng": "77.2090"},
+    "122009": {"lat": "28.4595", "lng": "77.0266"},
+    "411001": {"lat": "18.5204", "lng": "73.8567"},
+    "600001": {"lat": "13.0827", "lng": "80.2707"},
+    "700001": {"lat": "22.5726", "lng": "88.3639"},
+}
+_DEFAULT_COORDS = _PINCODE_COORDS["400093"]  # Mumbai
 
 
 @dataclass
 class ZeptoProductData:
-    """Data class for Zepto product information."""
     url: str
     product_id: Optional[str] = None
     name: Optional[str] = None
@@ -54,754 +68,404 @@ class ZeptoProductData:
 
 
 class ZeptoScraper:
-    """Scraper for Zepto product pages. Supports Selenium (browser) and requests modes."""
+    """
+    Playwright-based Zepto product price scraper.
 
-    HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-    }
+    One browser process is shared across scrape() calls; each call
+    uses a fresh isolated browser context. Call close() when done.
+    """
 
-    def __init__(self, headless: bool = True, debug: bool = False, use_browser: bool = True,
-                 pincode: Optional[str] = None):
-        """
-        Initialize the Zepto scraper.
+    _UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    )
 
-        Args:
-            headless: Run Chrome in headless mode (default True)
-            debug: Save page source to file for inspection
-            use_browser: Use Selenium browser (default True). Falls back to requests if False
-                         or if Selenium/Chrome is not available.
-            pincode: Delivery pincode to set location (e.g. '400093')
-        """
-        self.headless = headless
-        self.debug = debug
-        self.use_browser = use_browser
+    # File-like names that are obviously not product names
+    _BAD_NAME_PATTERNS = re.compile(
+        r'\.(svg|png|jpg|jpeg|webp|gif|ico|woff|ttf)$'
+        r'|^https?://'
+        r'|^[a-z0-9-]+\.(js|css|json)$',
+        re.IGNORECASE,
+    )
+
+    def __init__(self, pincode: Optional[str] = None, debug: bool = False, headless: bool = True):
         self.pincode = pincode
-        self.driver = None
-        self.session = http_requests.Session()
-        self._location_set = False
+        self.debug = debug
+        self.headless = headless
+        self._pw = None
+        self._browser = None
+        coords = _PINCODE_COORDS.get(pincode or "", _DEFAULT_COORDS)
+        self._lat = coords["lat"]
+        self._lng = coords["lng"]
 
-        if use_browser:
-            if not SELENIUM_AVAILABLE:
-                print("Warning: Selenium not available, falling back to requests mode.")
-                print("  Install with: pip install selenium webdriver-manager")
-                self.use_browser = False
-            else:
-                try:
-                    self._init_browser()
-                except Exception as e:
-                    print(f"Warning: Could not start browser ({e}), falling back to requests mode.")
-                    self.use_browser = False
+    # ── Browser lifecycle ─────────────────────────────────────────────────────
 
-    def _init_browser(self):
-        """Initialize Chrome browser with anti-detection options."""
-        options = Options()
-        if self.headless:
-            options.add_argument("--headless=new")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--disable-infobars")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=options)
-        self.driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    def _launch(self):
+        self._pw = sync_playwright().__enter__()
+        self._browser = self._pw.chromium.launch(
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"],
         )
 
-    def _set_pincode_browser(self):
-        """Set delivery pincode on Zepto via browser interaction."""
-        if not self.pincode or self._location_set:
-            return
-
-        print(f"  Setting delivery pincode to {self.pincode}...")
+    def close(self):
         try:
-            # Go to Zepto homepage first to trigger location modal
-            self.driver.get("https://www.zepto.com")
-            time.sleep(3)
-
-            # Strategy 1: Look for location/pincode input in modal
-            input_selectors = [
-                "input[placeholder*='pincode' i]",
-                "input[placeholder*='area' i]",
-                "input[placeholder*='location' i]",
-                "input[placeholder*='delivery' i]",
-                "input[placeholder*='search' i]",
-                "input[data-testid*='location' i]",
-                "input[data-testid*='pincode' i]",
-                "input[data-testid*='address' i]",
-                "input[type='text']",
-                "input[type='search']",
-            ]
-
-            input_elem = None
-            for selector in input_selectors:
-                try:
-                    elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elems:
-                        if elem.is_displayed():
-                            input_elem = elem
-                            break
-                    if input_elem:
-                        break
-                except Exception:
-                    continue
-
-            # Strategy 2: Click a location button first to open modal
-            if not input_elem:
-                location_btn_selectors = [
-                    "[data-testid*='location' i]",
-                    "[data-testid*='address' i]",
-                    "button[aria-label*='location' i]",
-                    "button[aria-label*='address' i]",
-                    ".location-button",
-                    ".address-button",
-                ]
-                for selector in location_btn_selectors:
-                    try:
-                        btn = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        if btn.is_displayed():
-                            btn.click()
-                            time.sleep(2)
-                            # Now look for input again
-                            for inp_sel in input_selectors:
-                                try:
-                                    elems = self.driver.find_elements(By.CSS_SELECTOR, inp_sel)
-                                    for elem in elems:
-                                        if elem.is_displayed():
-                                            input_elem = elem
-                                            break
-                                    if input_elem:
-                                        break
-                                except Exception:
-                                    continue
-                            break
-                    except Exception:
-                        continue
-
-            if input_elem:
-                input_elem.clear()
-                input_elem.send_keys(self.pincode)
-                time.sleep(2)
-
-                # Try to click the first suggestion/result
-                suggestion_selectors = [
-                    "[data-testid*='suggestion']",
-                    "[data-testid*='result']",
-                    ".pac-item",                     # Google Places autocomplete
-                    "[role='option']",
-                    "[role='listbox'] > *",
-                    ".suggestion",
-                    ".search-result",
-                    "ul[role='listbox'] li",
-                    "li[data-testid]",
-                ]
-                clicked = False
-                for selector in suggestion_selectors:
-                    try:
-                        suggestions = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for sug in suggestions:
-                            if sug.is_displayed() and sug.text.strip():
-                                sug.click()
-                                clicked = True
-                                break
-                        if clicked:
-                            break
-                    except Exception:
-                        continue
-
-                if clicked:
-                    time.sleep(2)
-                    # Look for confirm/continue button
-                    confirm_selectors = [
-                        "button[data-testid*='confirm' i]",
-                        "button[data-testid*='continue' i]",
-                        "button[data-testid*='save' i]",
-                        "button[data-testid*='deliver' i]",
-                        "button:not([disabled])",
-                    ]
-                    for selector in confirm_selectors:
-                        try:
-                            btns = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                            for btn in btns:
-                                text = btn.text.strip().lower()
-                                if btn.is_displayed() and text and any(
-                                    kw in text for kw in
-                                    ["confirm", "continue", "save", "deliver here", "yes", "done"]
-                                ):
-                                    btn.click()
-                                    time.sleep(2)
-                                    break
-                        except Exception:
-                            continue
-
-                self._location_set = True
-                print(f"  Pincode {self.pincode} set successfully")
-            else:
-                # Fallback: set pincode via localStorage/cookie
-                self.driver.execute_script(f"""
-                    try {{
-                        localStorage.setItem('pincode', '{self.pincode}');
-                        localStorage.setItem('userPincode', '{self.pincode}');
-                        localStorage.setItem('deliveryPincode', '{self.pincode}');
-                    }} catch(e) {{}}
-                """)
-                self._location_set = True
-                print(f"  Pincode {self.pincode} set via localStorage (modal not found)")
-
-        except Exception as e:
-            print(f"  Warning: Could not set pincode ({e}), continuing without it")
-
-    def _extract_product_id(self, url: str) -> Optional[str]:
-        """Extract product variant ID from URL."""
-        match = re.search(r'/pvid/([a-f0-9-]+)', url)
-        return match.group(1) if match else None
-
-    def _try_next_data(self) -> Optional[dict]:
-        """Try to extract product data from __NEXT_DATA__ script tag."""
-        try:
-            script = self.driver.find_element(By.ID, "__NEXT_DATA__")
-            if script:
-                data = json.loads(script.get_attribute("innerHTML"))
-                return data
+            self._browser.close()
         except Exception:
             pass
-        return None
-
-    def _try_json_ld(self) -> Optional[dict]:
-        """Try to extract structured data from JSON-LD script tags."""
         try:
-            scripts = self.driver.find_elements(
-                By.CSS_SELECTOR, 'script[type="application/ld+json"]'
-            )
-            for script in scripts:
-                try:
-                    data = json.loads(script.get_attribute("innerHTML"))
-                    if isinstance(data, dict) and data.get("@type") == "Product":
-                        return data
-                    if isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict) and item.get("@type") == "Product":
-                                return item
-                except (json.JSONDecodeError, Exception):
-                    continue
+            self._pw.__exit__(None, None, None)
         except Exception:
             pass
-        return None
+        self._pw = self._browser = None
 
-    def _extract_from_json_ld(self, ld_data: dict, result: ZeptoProductData) -> None:
-        """Populate result from JSON-LD structured data."""
-        result.name = ld_data.get("name")
-        result.description = ld_data.get("description")
-        result.brand = ld_data.get("brand", {}).get("name") if isinstance(
-            ld_data.get("brand"), dict
-        ) else ld_data.get("brand")
-        result.image_url = ld_data.get("image")
-        if isinstance(result.image_url, list) and result.image_url:
-            result.image_url = result.image_url[0]
+    # ── Utility helpers ───────────────────────────────────────────────────────
 
-        # Price from offers
-        offers = ld_data.get("offers")
-        if isinstance(offers, dict):
-            price = offers.get("price")
-            if price:
-                result.price_value = float(price)
-                currency = offers.get("priceCurrency", "INR")
-                symbol = "₹" if currency == "INR" else currency
-                result.price = f"{symbol}{result.price_value:,.2f}"
-            availability = offers.get("availability", "")
-            if "InStock" in availability:
-                result.availability = "In Stock"
-            elif "OutOfStock" in availability:
-                result.availability = "Out of Stock"
-        elif isinstance(offers, list) and offers:
-            offer = offers[0]
-            price = offer.get("price")
-            if price:
-                result.price_value = float(price)
-                currency = offer.get("priceCurrency", "INR")
-                symbol = "₹" if currency == "INR" else currency
-                result.price = f"{symbol}{result.price_value:,.2f}"
+    @staticmethod
+    def _extract_product_id(url: str) -> Optional[str]:
+        m = re.search(r'/pvid/([a-f0-9-]+)', url)
+        return m.group(1) if m else None
 
-        # Rating
-        rating_data = ld_data.get("aggregateRating")
-        if rating_data:
-            result.rating = str(rating_data.get("ratingValue", ""))
-            result.rating_count = str(rating_data.get("ratingCount", ""))
-
-    def _extract_from_next_data(self, next_data: dict, result: ZeptoProductData) -> bool:
-        """Try to extract product info from __NEXT_DATA__. Returns True if data found."""
+    @staticmethod
+    def _parse_price(val) -> Optional[float]:
+        if val is None:
+            return None
         try:
-            props = next_data.get("props", {}).get("pageProps", {})
-            product = props.get("product") or props.get("productData") or props.get("data")
-            if not product:
-                # Search deeper
-                for key, val in props.items():
-                    if isinstance(val, dict) and ("name" in val or "productName" in val):
-                        product = val
-                        break
-
-            if not product:
-                return False
-
-            result.name = product.get("name") or product.get("productName")
-            result.brand = product.get("brand") or product.get("brandName")
-            result.description = product.get("description")
-            result.category = product.get("category") or product.get("categoryName")
-            result.quantity = product.get("quantity") or product.get("packSize")
-
-            # Price
-            price = product.get("sellingPrice") or product.get("price") or product.get("salePrice")
-            if price:
-                result.price_value = float(price)
-                result.price = f"₹{result.price_value:,.2f}"
-
-            mrp = product.get("mrp") or product.get("maxRetailPrice") or product.get("originalPrice")
-            if mrp:
-                result.mrp_value = float(mrp)
-                result.mrp = f"₹{result.mrp_value:,.2f}"
-
-            # Discount
-            discount = product.get("discount") or product.get("discountPercent")
-            if discount:
-                result.discount = f"{discount}%"
-            elif result.price_value and result.mrp_value and result.mrp_value > result.price_value:
-                pct = ((result.mrp_value - result.price_value) / result.mrp_value) * 100
-                result.discount = f"{pct:.0f}%"
-
-            # Image
-            images = product.get("images") or product.get("imageUrls")
-            if images and isinstance(images, list) and images:
-                result.image_url = images[0] if isinstance(images[0], str) else images[0].get("url")
-            elif product.get("image") or product.get("imageUrl"):
-                result.image_url = product.get("image") or product.get("imageUrl")
-
-            return True
-        except Exception:
-            return False
-
-    def _extract_from_dom(self, result: ZeptoProductData) -> None:
-        """Extract product data by parsing the rendered DOM."""
-        # Product name - try multiple selectors
-        name_selectors = [
-            "h1",
-            "[data-testid='product-title']",
-            "[data-testid='pdp-product-name']",
-            ".product-title",
-            ".product-name",
-        ]
-        for selector in name_selectors:
-            try:
-                elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                text = elem.text.strip()
-                if text and len(text) > 3:
-                    result.name = text
-                    break
-            except Exception:
-                continue
-
-        # Price - try multiple selectors
-        price_selectors = [
-            "[data-testid='product-price']",
-            "[data-testid='selling-price']",
-            "[data-testid='pdp-product-price']",
-            ".selling-price",
-            ".product-price",
-        ]
-        for selector in price_selectors:
-            try:
-                elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                text = elem.text.strip()
-                if text and "₹" in text:
-                    result.price = text
-                    result.price_value = self._parse_price_value(text)
-                    break
-            except Exception:
-                continue
-
-        # If price not found, search for ₹ patterns in the page
-        if not result.price:
-            try:
-                page_text = self.driver.find_element(By.TAG_NAME, "body").text
-                # Find price patterns like ₹4,599 or ₹ 4,599
-                prices = re.findall(r'₹\s?([\d,]+(?:\.\d{1,2})?)', page_text)
-                if prices:
-                    # First price is usually selling price
-                    result.price = f"₹{prices[0]}"
-                    result.price_value = self._parse_price_value(result.price)
-                    if len(prices) > 1:
-                        # Second distinct price is usually MRP
-                        mrp_val = self._parse_price_value(f"₹{prices[1]}")
-                        if mrp_val and result.price_value and mrp_val > result.price_value:
-                            result.mrp = f"₹{prices[1]}"
-                            result.mrp_value = mrp_val
-            except Exception:
-                pass
-
-        # MRP
-        if not result.mrp:
-            mrp_selectors = [
-                "[data-testid='product-mrp']",
-                "[data-testid='mrp']",
-                ".mrp",
-                ".original-price",
-                "del",  # strikethrough price
-            ]
-            for selector in mrp_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    text = elem.text.strip()
-                    if text and "₹" in text:
-                        result.mrp = text
-                        result.mrp_value = self._parse_price_value(text)
-                        break
-                except Exception:
-                    continue
-
-        # Discount
-        if not result.discount:
-            discount_selectors = [
-                "[data-testid='discount']",
-                "[data-testid='discount-percentage']",
-                ".discount",
-                ".discount-tag",
-            ]
-            for selector in discount_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    text = elem.text.strip()
-                    if text and "%" in text:
-                        result.discount = text
-                        break
-                except Exception:
-                    continue
-
-        # Calculate discount if we have both prices but no discount
-        if not result.discount and result.price_value and result.mrp_value:
-            if result.mrp_value > result.price_value:
-                pct = ((result.mrp_value - result.price_value) / result.mrp_value) * 100
-                result.discount = f"{pct:.0f}% off"
-
-        # Brand
-        if not result.brand:
-            brand_selectors = [
-                "[data-testid='product-brand']",
-                "[data-testid='brand-name']",
-                ".brand-name",
-                ".brand",
-            ]
-            for selector in brand_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    text = elem.text.strip()
-                    if text:
-                        result.brand = text
-                        break
-                except Exception:
-                    continue
-
-        # Quantity / Pack size
-        if not result.quantity:
-            qty_selectors = [
-                "[data-testid='product-quantity']",
-                "[data-testid='pack-size']",
-                ".pack-size",
-                ".quantity",
-            ]
-            for selector in qty_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    text = elem.text.strip()
-                    if text:
-                        result.quantity = text
-                        break
-                except Exception:
-                    continue
-
-        # Description
-        if not result.description:
-            desc_selectors = [
-                "[data-testid='product-description']",
-                "[data-testid='pdp-description']",
-                ".product-description",
-                ".description",
-            ]
-            for selector in desc_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    text = elem.text.strip()
-                    if text and len(text) > 10:
-                        result.description = text
-                        break
-                except Exception:
-                    continue
-
-        # Highlights / Key features
-        if not result.highlights:
-            highlight_selectors = [
-                "[data-testid='product-highlights'] li",
-                "[data-testid='key-features'] li",
-                ".highlights li",
-                ".key-features li",
-            ]
-            for selector in highlight_selectors:
-                try:
-                    elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elems:
-                        text = elem.text.strip()
-                        if text:
-                            result.highlights.append(text)
-                    if result.highlights:
-                        break
-                except Exception:
-                    continue
-
-        # Image
-        if not result.image_url:
-            img_selectors = [
-                "[data-testid='product-image'] img",
-                "[data-testid='pdp-image'] img",
-                ".product-image img",
-                "img[alt*='product']",
-                "picture img",
-            ]
-            for selector in img_selectors:
-                try:
-                    elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    src = elem.get_attribute("src")
-                    if src and not src.startswith("data:"):
-                        result.image_url = src
-                        break
-                except Exception:
-                    continue
-
-    def _parse_price_value(self, text: str) -> Optional[float]:
-        """Extract numeric value from price string like ₹4,599."""
-        cleaned = re.sub(r'[^\d.,]', '', text)
-        cleaned = cleaned.replace(",", "")
-        match = re.search(r'[\d]+\.?\d*', cleaned)
-        if match:
-            try:
-                return float(match.group())
-            except ValueError:
-                pass
-        return None
-
-    def _fetch_page_requests(self, url: str) -> Optional[str]:
-        """Fetch page HTML using requests library."""
-        try:
-            response = self.session.get(url, headers=self.HEADERS, timeout=15)
-            response.raise_for_status()
-            return response.text
-        except http_requests.RequestException as e:
-            print(f"  Request error: {e}")
+            return float(str(val).replace(",", "").replace("₹", "").strip())
+        except ValueError:
             return None
 
-    def _extract_from_soup(self, soup: BeautifulSoup, result: ZeptoProductData) -> None:
-        """Extract product data from BeautifulSoup parsed HTML (requests mode)."""
-        # Try JSON-LD
-        for script in soup.find_all("script", {"type": "application/ld+json"}):
-            try:
-                data = json.loads(script.string or "")
-                if isinstance(data, dict) and data.get("@type") == "Product":
-                    self._extract_from_json_ld(data, result)
-                    if result.name:
-                        print("  [Source: JSON-LD]")
-                        return
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict) and item.get("@type") == "Product":
-                            self._extract_from_json_ld(item, result)
-                            if result.name:
-                                print("  [Source: JSON-LD]")
-                                return
-            except (json.JSONDecodeError, Exception):
-                continue
+    @staticmethod
+    def _fmt(val: float) -> str:
+        return f"₹{val:,.0f}"
 
-        # Try __NEXT_DATA__
-        next_script = soup.find("script", {"id": "__NEXT_DATA__"})
-        if next_script and next_script.string:
-            try:
-                next_data = json.loads(next_script.string)
-                if self._extract_from_next_data(next_data, result) and result.name:
-                    print("  [Source: __NEXT_DATA__]")
-                    return
-            except (json.JSONDecodeError, Exception):
-                pass
+    def _calc_discount(self, result: ZeptoProductData):
+        if (not result.discount and result.price_value
+                and result.mrp_value and result.mrp_value > result.price_value):
+            pct = (result.mrp_value - result.price_value) / result.mrp_value * 100
+            result.discount = f"{pct:.0f}% off"
 
-        # Fallback: parse HTML elements
-        # Title from h1
-        h1 = soup.find("h1")
-        if h1:
-            text = h1.get_text(strip=True)
-            if text and len(text) > 3:
-                result.name = text
+    # ── Extraction helpers ────────────────────────────────────────────────────
 
-        # Title from meta
-        if not result.name:
-            meta_title = soup.find("meta", {"property": "og:title"})
-            if meta_title and meta_title.get("content"):
-                result.name = meta_title["content"]
+    def _is_bad_name(self, name: str) -> bool:
+        """Return True if the name looks like a file/asset path, not a product name."""
+        return bool(self._BAD_NAME_PATTERNS.search(name)) or len(name.strip()) < 3
 
-        # Description from meta
-        if not result.description:
-            meta_desc = soup.find("meta", {"property": "og:description"})
-            if meta_desc and meta_desc.get("content"):
-                result.description = meta_desc["content"]
+    def _populate_from_dict(self, obj: dict, result: ZeptoProductData) -> bool:
+        """Try to fill result from a single dict. Returns True if valid data found."""
+        name = (
+            obj.get("name") or obj.get("product_name") or obj.get("itemName")
+            or obj.get("productName") or obj.get("displayName")
+        )
+        price = (
+            obj.get("sellingPrice") or obj.get("price") or obj.get("salePrice")
+            or obj.get("selling_price") or obj.get("offerPrice") or obj.get("offer_price")
+        )
+        if not name and not price:
+            return False
 
-        # Image from meta
-        if not result.image_url:
-            meta_img = soup.find("meta", {"property": "og:image"})
-            if meta_img and meta_img.get("content"):
-                result.image_url = meta_img["content"]
+        # Reject file/asset names
+        if name and self._is_bad_name(str(name)):
+            return False
 
-        # Price from page text
-        if not result.price:
-            page_text = soup.get_text()
-            prices = re.findall(r'₹\s?([\d,]+(?:\.\d{1,2})?)', page_text)
-            if prices:
-                result.price = f"₹{prices[0]}"
-                result.price_value = self._parse_price_value(result.price)
-                if len(prices) > 1:
-                    mrp_val = self._parse_price_value(f"₹{prices[1]}")
-                    if mrp_val and result.price_value and mrp_val > result.price_value:
-                        result.mrp = f"₹{prices[1]}"
-                        result.mrp_value = mrp_val
+        # Must have at least a price to be considered a valid product dict
+        if not price:
+            return False
 
-        if result.name:
-            print("  [Source: HTML]")
+        if name:
+            result.name = str(name)
+        result.brand = obj.get("brand") or obj.get("brandName") or obj.get("brand_name")
+        result.description = obj.get("description")
+        result.category = obj.get("category") or obj.get("categoryName") or obj.get("category_name")
+        result.quantity = (
+            obj.get("quantity") or obj.get("packSize") or obj.get("unit")
+            or obj.get("pack_size") or obj.get("weight")
+        )
 
-    def _scrape_requests(self, url: str, result: ZeptoProductData) -> None:
-        """Scrape using requests + BeautifulSoup."""
-        html = self._fetch_page_requests(url)
-        if not html:
-            result.error = "Failed to fetch page (HTTP request failed)"
-            return
+        result.price_value = self._parse_price(price)
+        if result.price_value:
+            result.price = self._fmt(result.price_value)
 
-        if self.debug:
-            debug_file = f"debug_zepto_{result.product_id or 'page'}.html"
-            with open(debug_file, "w", encoding="utf-8") as f:
-                f.write(html)
-            print(f"  Debug HTML saved to: {debug_file}")
+        mrp = (
+            obj.get("mrp") or obj.get("maxRetailPrice") or obj.get("originalPrice")
+            or obj.get("max_retail_price") or obj.get("original_price")
+        )
+        if mrp:
+            result.mrp_value = self._parse_price(mrp)
+            if result.mrp_value:
+                result.mrp = self._fmt(result.mrp_value)
 
-        soup = BeautifulSoup(html, "lxml")
-        self._extract_from_soup(soup, result)
+        discount = obj.get("discount") or obj.get("discountPercent") or obj.get("discount_percentage")
+        if discount:
+            result.discount = f"{discount}%"
+        self._calc_discount(result)
 
-        if not result.name:
-            result.error = "Could not extract product data - page may require browser mode"
+        images = obj.get("images") or obj.get("imageUrls") or []
+        if images and isinstance(images, list):
+            first = images[0]
+            result.image_url = first if isinstance(first, str) else (first or {}).get("url")
+        result.image_url = result.image_url or obj.get("image") or obj.get("imageUrl")
 
-    def _scrape_browser(self, url: str, result: ZeptoProductData) -> None:
-        """Scrape using Selenium browser."""
+        avail = obj.get("availability") or obj.get("isAvailable") or obj.get("is_available")
+        if avail is not None:
+            result.availability = "In Stock" if avail else "Out of Stock"
+        elif result.price_value:
+            result.availability = "In Stock"
+
+        if r := (obj.get("rating") or obj.get("averageRating") or obj.get("average_rating")):
+            result.rating = str(r)
+        if rc := (obj.get("ratingCount") or obj.get("reviewCount") or obj.get("rating_count")):
+            result.rating_count = str(rc)
+
+        return bool(result.name or result.price)
+
+    def _search_json(self, data, result: ZeptoProductData, depth: int = 0) -> bool:
+        """Recursively search any JSON structure for product data."""
+        if depth > 8 or not data:
+            return False
+        if isinstance(data, dict):
+            if self._populate_from_dict(data, result):
+                return True
+            for key in ("product", "productData", "data", "item", "detail", "result", "payload"):
+                sub = data.get(key)
+                if sub:
+                    if isinstance(sub, list) and sub:
+                        sub = sub[0]
+                    if isinstance(sub, dict) and self._search_json(sub, result, depth + 1):
+                        return True
+            for val in data.values():
+                if isinstance(val, dict) and self._search_json(val, result, depth + 1):
+                    return True
+        elif isinstance(data, list):
+            for item in data[:5]:
+                if isinstance(item, dict) and self._search_json(item, result, depth + 1):
+                    return True
+        return False
+
+    def _extract_meta(self, page, result: ZeptoProductData) -> bool:
+        """Extract from meta tags and og:title — reliable for Zepto's SSR content."""
         try:
-            # Set pincode/location before first scrape
-            if self.pincode and not self._location_set:
-                self._set_pincode_browser()
+            data = page.evaluate("""() => {
+                const meta = (name) =>
+                    document.querySelector(`meta[name="${name}"]`)?.content ||
+                    document.querySelector(`meta[property="${name}"]`)?.content ||
+                    document.querySelector(`meta[itemprop="${name}"]`)?.content || '';
 
-            self.driver.get(url)
-            time.sleep(3)
-            self.driver.execute_script("window.scrollTo(0, 300);")
-            time.sleep(1)
+                const h1 = document.querySelector('h1')?.textContent?.trim() || '';
+                const ogTitle = meta('og:title');
+                const description = meta('description');
+                const image = meta('og:image');
+                const ratingValue = meta('ratingValue');
+                const reviewCount = meta('reviewCount');
+                const pageTitle = document.title || '';
 
-            if self.debug:
-                page_source = self.driver.page_source
-                debug_file = f"debug_zepto_{result.product_id or 'page'}.html"
-                with open(debug_file, "w", encoding="utf-8") as f:
-                    f.write(page_source)
-                print(f"  Debug HTML saved to: {debug_file}")
+                // Brand: Zepto has 2x meta[itemprop="name"] — first is product, second is brand.
+                // The shorter value is the brand.
+                const nameMetas = [...document.querySelectorAll("meta[itemprop='name']")]
+                    .map(m => m.content).filter(Boolean).sort((a, b) => a.length - b.length);
+                const brand = nameMetas.length > 1 ? nameMetas[0] : '';
 
-            # Strategy 1: JSON-LD
-            ld_data = self._try_json_ld()
-            if ld_data:
-                self._extract_from_json_ld(ld_data, result)
-                if result.name:
-                    print("  [Source: JSON-LD]")
+                return { h1, ogTitle, description, image, ratingValue, reviewCount, brand, pageTitle };
+            }""")
 
-            # Strategy 2: __NEXT_DATA__
-            if not result.name:
-                next_data = self._try_next_data()
-                if next_data:
-                    if self._extract_from_next_data(next_data, result) and result.name:
-                        print("  [Source: __NEXT_DATA__]")
+            # Product name: prefer H1, fall back to cleaned og:title
+            name = data.get("h1") or ""
+            if not name:
+                og = data.get("ogTitle", "")
+                name = re.sub(r"^Buy\s+", "", og, flags=re.IGNORECASE)
+                name = re.sub(r"\s+Online\s*[-–].*$", "", name, flags=re.IGNORECASE)
+                name = re.sub(r"\s*\|.*$", "", name).strip()
 
-            # Strategy 3: DOM
-            if not result.name:
-                self._extract_from_dom(result)
-                if result.name:
-                    print("  [Source: DOM]")
+            if name and len(name) > 3:
+                result.name = name
 
-            # Supplement missing price from DOM
-            if result.name and not result.price:
-                self._extract_from_dom(result)
+            # Price: parse from og:title  ("... Price @ ₹3499 ...")
+            # or from page title
+            for src in [data.get("ogTitle", ""), data.get("pageTitle", "")]:
+                m = re.search(r"₹\s*([\d,]+)", src)
+                if m:
+                    val = float(m.group(1).replace(",", ""))
+                    if val > 10:  # sanity check
+                        result.price_value = val
+                        result.price = self._fmt(val)
+                        break
 
-            if not result.name:
-                result.error = "Could not extract product data - page may not have loaded"
+            # Brand from itemprop:name meta (e.g. "Solara Appliances")
+            brand = data.get("brand", "")
+            if brand and brand.lower() not in ("zepto", ""):
+                result.brand = brand
 
-        except Exception as e:
-            result.error = f"Browser scraping failed: {str(e)}"
+            # Image
+            if data.get("image") and not result.image_url:
+                result.image_url = data["image"]
+
+            # Rating + review count
+            if data.get("ratingValue"):
+                result.rating = str(data["ratingValue"])
+            if data.get("reviewCount"):
+                result.rating_count = str(data["reviewCount"])
+
+            if result.name:
+                if result.price_value:
+                    result.availability = "In Stock"
+                return True
+
+        except Exception:
+            pass
+        return False
+
+    def _extract_dom(self, page, result: ZeptoProductData) -> bool:
+        """DOM fallback: reads rendered price elements."""
+        try:
+            data = page.evaluate(r"""() => {
+                const get = s => document.querySelector(s)?.textContent?.trim() || '';
+                const name = get('h1')
+                    || get("[data-testid='product-title']")
+                    || get("[data-testid='pdp-product-name']")
+                    || get("[class*='product-title']")
+                    || get("[class*='productTitle']");
+
+                // Collect prices from elements that look like product prices
+                // (avoid tiny values like ratings/specs)
+                const priceEls = [];
+                for (const el of document.querySelectorAll('span, div, p')) {
+                    const t = el.textContent?.trim() || '';
+                    const m = t.match(/^₹\s*([\d,]{3,}(?:\.\d{1,2})?)$/);
+                    if (m) priceEls.push(parseFloat(m[1].replace(/,/g, '')));
+                }
+                const prices = [...new Set(priceEls)].sort((a, b) => a - b);
+
+                const avail = /out.of.stock|coming.soon|notify.me/i.test(document.body?.innerText || '')
+                    ? 'Out of Stock' : 'In Stock';
+                return { name, prices, availability: avail };
+            }""")
+
+            if data.get("name") and len(data["name"]) > 2 and not result.name:
+                result.name = data["name"]
+            prices = data.get("prices") or []
+            if prices and not result.price:
+                result.price_value = prices[0]
+                result.price = self._fmt(prices[0])
+                if len(prices) > 1 and prices[1] > prices[0]:
+                    result.mrp_value = prices[1]
+                    result.mrp = self._fmt(prices[1])
+                    self._calc_discount(result)
+            if not result.availability:
+                result.availability = data.get("availability")
+            return bool(result.name)
+        except Exception:
+            pass
+        return False
+
+    # ── Public scrape ─────────────────────────────────────────────────────────
 
     def scrape(self, url: str) -> ZeptoProductData:
         """
         Scrape a Zepto product page.
 
         Args:
-            url: Full Zepto product URL
+            url: Full Zepto product URL (must include /pvid/UUID)
 
         Returns:
-            ZeptoProductData with scraped information
+            ZeptoProductData with all available fields populated
         """
         result = ZeptoProductData(url=url)
         result.product_id = self._extract_product_id(url)
 
-        if self.use_browser:
-            self._scrape_browser(url, result)
-        else:
-            self._scrape_requests(url, result)
+        if not self._browser:
+            self._launch()
+
+        captured: list[dict] = []
+
+        ctx: BrowserContext = self._browser.new_context(
+            user_agent=self._UA,
+            viewport={"width": 1440, "height": 900},
+            locale="en-IN",
+            timezone_id="Asia/Kolkata",
+        )
+
+        try:
+            page = ctx.new_page()
+            page.set_default_timeout(30_000)
+            page.add_init_script(_STEALTH)
+
+            # Inject location into localStorage before page JS runs
+            if self.pincode:
+                page.add_init_script(f"""
+                    try {{
+                        localStorage.setItem('userLatLng',
+                            JSON.stringify({{lat: {self._lat}, lng: {self._lng}}}));
+                        localStorage.setItem('pincode', '{self.pincode}');
+                        localStorage.setItem('userPincode', '{self.pincode}');
+                        localStorage.setItem('deliveryPincode', '{self.pincode}');
+                    }} catch(e) {{}}
+                """)
+
+            # Response interception — only capture specific product endpoints
+            def on_response(resp: Response):
+                if "json" not in resp.headers.get("content-type", ""):
+                    return
+                u = resp.url
+                # Only capture product-specific API calls (pvid or known product patterns)
+                if not any(k in u for k in ["pvid", "product_variant", "/product/detail", "/pdp/"]):
+                    return
+                try:
+                    body = resp.json()
+                    captured.append(body)
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(3_000)
+
+            if self.debug:
+                fname = f"debug_zepto_{result.product_id or 'page'}.html"
+                with open(fname, "w", encoding="utf-8") as f:
+                    f.write(page.content())
+                print(f"  Debug HTML → {fname}")
+
+            # Strategy 1: API response interception
+            for body in captured:
+                if self._search_json(body, result):
+                    print("  [Source: API response]")
+                    break
+
+            # Strategy 2: Meta tags + og:title (most reliable for Zepto SSR)
+            if not result.name:
+                if self._extract_meta(page, result):
+                    print("  [Source: meta tags]")
+
+            # Strategy 3: DOM
+            if not result.name:
+                if self._extract_dom(page, result):
+                    print("  [Source: DOM]")
+
+            # Supplement missing image
+            if not result.image_url:
+                try:
+                    result.image_url = page.evaluate(
+                        '() => document.querySelector(\'meta[property="og:image"]\')?.content || null'
+                    )
+                except Exception:
+                    pass
+
+            if not result.name:
+                result.error = "Could not extract product data"
+
+        except Exception as e:
+            result.error = str(e)
+        finally:
+            ctx.close()
 
         return result
 
     def scrape_multiple(self, urls: list[str], delay: float = 3.0) -> list[ZeptoProductData]:
-        """
-        Scrape multiple Zepto product URLs.
-
-        Args:
-            urls: List of Zepto product URLs
-            delay: Delay between requests in seconds
-
-        Returns:
-            List of ZeptoProductData objects
-        """
         results = []
         for i, url in enumerate(urls, 1):
             print(f"\n[{i}/{len(urls)}] Scraping: {url[:80]}...")
-            result = self.scrape(url)
-            results.append(result)
+            results.append(self.scrape(url))
             if i < len(urls):
                 time.sleep(delay)
         return results
-
-    def close(self):
-        """Close the browser."""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
