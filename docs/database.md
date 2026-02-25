@@ -345,6 +345,34 @@ All lookup-heavy columns have indexes. Key performance indexes:
 
 ---
 
+## Scripts
+
+Utility scripts in `scripts/` that interact with the database directly (bypassing the API).
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/seed_from_portal_files.py` | Seeds `product_portal_mapping` by reading portal CSV/XLSX files in `data/raw/`. Auto-detects portal from filename, resolves SKUs, and inserts missing mappings. Entry point for initial product setup. |
+| `scripts/seed_missing_portals.py` | Ensures all portals defined in `shared/constants.py` exist in the `portals` table. Run once after schema setup or when adding a new portal. |
+| `scripts/db_utils.py` | Shared DB connection helpers used by the other scripts: engine construction from env vars, session factory, table reflection. |
+| `scripts/replicate_to_supabase.py` | One-off script to copy data from a local PostgreSQL instance to the Supabase cloud DB. Used for initial data migration. Not part of the daily pipeline. |
+
+**When to use scripts vs. the API:**
+
+| Task | Use |
+|------|-----|
+| Seeding product master data for the first time | `scripts/seed_from_portal_files.py` |
+| Bulk inserting historical sales data | `POST /api/uploads/file` (handles partial success) |
+| Strict all-or-nothing batch import | `POST /api/imports/sales` |
+| Inspecting or fixing DB state ad-hoc | `scripts/db_utils.py` + a Python REPL |
+
+Scripts require `POSTGRES_*` env vars (set in `.env`). Run from the project root:
+```bash
+python scripts/seed_from_portal_files.py --portal blinkit --data-dir data/raw/blinkit
+python scripts/seed_missing_portals.py
+```
+
+---
+
 ## Schema vs. CLAUDE.md discrepancy
 
 CLAUDE.md documents a 9-table schema (`init_db.sql`). The actual deployed schema has **12 tables** because it evolved:

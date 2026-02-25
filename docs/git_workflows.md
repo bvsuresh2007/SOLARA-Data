@@ -18,6 +18,7 @@ All workflows live in `.github/workflows/`.
 | `scraper-blinkit.yml` | Scraper — Blinkit | 12:30 PM IST daily + manual | ✅ Active |
 | `scraper-swiggy.yml` | Scraper — Swiggy | 2:00 PM IST daily + manual | ✅ Active |
 | `scraper-retry.yml` | Scraper — Retry Failed Runs | 3:00 PM IST daily + manual | ✅ Active |
+| `seed-products.yml` | Seed Product Mappings | Manual only (`workflow_dispatch`) | ✅ Active |
 
 > Shopify and Amazon Seller Central do not have workflows yet — their scrapers are stubs with unverified selectors and are not part of the daily automation.
 
