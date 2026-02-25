@@ -71,6 +71,7 @@ jobs:
       - name: Populate DB from downloaded data
         if: success()
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
