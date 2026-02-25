@@ -55,6 +55,7 @@ scrapers/sessions/*_profile/
 
 # ── Scraper debug output ─────────────────────────────────────────────────────
 debug_*.html
+debug_*.json
 screenshots/
 
 # ── Database ─────────────────────────────────────────────────────────────────

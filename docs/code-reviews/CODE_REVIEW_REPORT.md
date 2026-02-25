@@ -2,6 +2,179 @@
 
 ---
 
+## Review: 2026-02-21
+
+**Branch:** `claude/merge-solara-projects-Qo5Sd`
+
+**Files reviewed:**
+
+*Modified (unstaged):*
+- `.gitignore`
+- `backend/app/config.py`
+- `backend/app/models/__init__.py`, `inventory.py`, `metadata.py`, `sales.py`
+- `backend/app/utils/slack.py`
+- `requirements.txt`
+- `scrapers/blinkit_scraper.py`, `easyecom_scraper.py`, `zepto_scraper.py`
+- `shared/constants.py`
+
+*New (untracked):*
+- `scrapers/gmail_otp.py`
+- `scrapers/totp_helper.py`
+- `scrapers/amazon_pi_scraper.py`
+- `scrapers/flipkart_email_scraper.py`
+- `scrapers/sessions/` (browser profiles + session file)
+- `scripts/db_utils.py`, `import_excel_sales.py`, `excel_reader.py`, and others
+
+*Deleted:*
+- `auth_blinkit.py` (moved into `scrapers/`)
+- `main.py`, `src/scraper.py`, `src/slack_notifier.py` (moved to `scrapers/tools/amazon_asin_scraper/`)
+
+---
+
+### Executive Summary
+
+The changes represent a significant schema alignment (v1 → v2 model renames, new tables), a full Zepto scraper implementation, new OTP/TOTP infrastructure, and importer scripts for Excel data. The overall quality is high — good docstrings, consistent patterns, proper upsert logic. Two issues require attention before committing: the browser profile directories are not gitignored (would commit auth credentials to the repo), and `gmail_otp.py` bundles a Drive scope into a module named for Gmail OTP only.
+
+---
+
+### 🔴 Critical
+
+---
+
+#### C-01 — Browser profiles not gitignored
+**Files:** `.gitignore`, `scrapers/sessions/`
+**Status:** ✅ Resolved — `scrapers/sessions/*_profile/` added to `.gitignore`; Drive-based profile sync implemented in `profile_sync.py`
+
+`scrapers/sessions/blinkit_profile/` and `scrapers/sessions/easyecom_profile/` are large Chromium persistent profiles that contain auth cookies and cached Google/Blinkit sessions. They are **not covered by `.gitignore`**. Running `git add scrapers/` would commit them, leaking auth tokens into the repository.
+
+**CI/CD solution (implemented: Option A — Google Drive storage):**
+- Profile zips stored in `SolaraDashboard Profiles` Drive folder
+- `scrapers/profile_sync.py` — `download_profile(portal)` / `upload_profile(portal)` handles sync
+- Silent no-op when `PROFILE_STORAGE_DRIVE_FOLDER_ID` is unset (local dev)
+
+---
+
+#### C-02 — `gmail_otp.py` requests Drive scope it doesn't need
+**File:** `scrapers/gmail_otp.py:29–32`
+
+```python
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/drive.file",   # ← Drive scope in OTP module
+]
+```
+
+The `drive.file` scope was added so `gmail_otp.py` and `google_drive_upload.py` can share a single `token.json`. The shared token covers both Gmail read and Drive write — this is documented but the Drive scope remains in `gmail_otp.py` for practical reasons (single token file).
+
+---
+
+### 🟡 Medium
+
+---
+
+#### M-01 — `zepto_scraper.py` uses Linux-only `%-d` date format
+**File:** `scrapers/zepto_scraper.py:207`
+**Status:** ✅ Fixed — changed to `f"{report_date.day} {report_date.strftime('%b %Y')}"`
+
+---
+
+#### M-02 — `CITY_ALIASES` in `data_transformer.py` duplicates `CITY_NAME_MAP` in `shared/constants.py`
+**Files:** `scrapers/data_transformer.py:18–39`, `shared/constants.py:44–86`
+
+Two sources of truth for city normalisation will cause inconsistencies between Excel imports (using `constants.py`) and scraper data (using `data_transformer.py`).
+
+**Suggestion:** Remove `CITY_ALIASES` from `data_transformer.py` and replace the normalisation logic with `from shared.constants import normalise_city`.
+
+---
+
+#### M-03 — `gmail_otp.py` token path is relative to CWD, not project root
+**File:** `scrapers/gmail_otp.py:42`
+**Status:** ✅ Fixed — path anchored to `Path(__file__).resolve().parent.parent / "token.json"`
+
+---
+
+#### M-04 — `amazon_pi_scraper.py` raises `NotImplementedError` in `download_report()`
+**Status:** ✅ Resolved — Amazon PI scraper fully implemented with complete download flow
+
+---
+
+#### M-05 — `scripts/import_excel_sales.py` imports private function `_clean_sku`
+**File:** `scripts/import_excel_sales.py:37`
+
+**Suggestion:** Rename `_clean_sku` to `clean_sku` in `excel_reader.py` and add it to its `__all__`.
+
+---
+
+#### M-06 — `scripts/db_utils.py` constructs DB URL at import time with no validation
+**File:** `scripts/db_utils.py:41–50`
+
+If `POSTGRES_PASSWORD` is not set, the URL becomes silently malformed. **Suggestion:** Assert required vars before building the URL.
+
+---
+
+### 🟢 Low
+
+---
+
+#### L-01 — `scrapers/sessions/` directory is untracked
+**Status:** ✅ Resolved — `sessions/__init__.py` committed; profiles gitignored
+
+---
+
+#### L-02 — `load_dotenv()` called at module level in individual scrapers
+**Suggestion:** Call `load_dotenv()` once in `orchestrator.py` at startup and remove per-module calls.
+
+---
+
+#### L-03 — `notify_monthly_drive_folder()` has no trigger
+The new `notify_monthly_drive_folder()` function is defined but never called anywhere in the codebase.
+
+---
+
+#### L-04 — `database/alembic/versions/` is untracked
+Migration files should be committed once the schema stabilises.
+
+---
+
+### Gitignore Check (untracked files)
+
+| Path | Status |
+|------|--------|
+| `scrapers/sessions/zepto_session.json` | ✅ Covered by `*_session.json` |
+| `scrapers/sessions/blinkit_profile/` | ✅ Fixed — covered by `*_profile/` |
+| `scrapers/sessions/easyecom_profile/` | ✅ Fixed — covered by `*_profile/` |
+| `scrapers/sessions/__init__.py` | ✅ Committed |
+| `database/alembic/versions/` | Should be committed once schema stabilises |
+| `scripts/` (importer tools) | ✅ Committed |
+| `docs/` | ✅ Committed |
+
+---
+
+### Positive Notes
+
+- **Model changes** are well-structured with clear grain comments, appropriate `Numeric` types, consistent `UniqueConstraint` definitions.
+- **`totp_helper.py`** handles the near-expiry edge case (waiting for the next 30-second window).
+- **`zepto_scraper.py`** session save/restore logic is solid.
+- **`shared/constants.py`** city normalisation map is comprehensive and well-commented.
+
+---
+
+### Action Plan
+
+| Priority | Action | Status |
+|----------|--------|--------|
+| 🔴 C-01 | Add `scrapers/sessions/*_profile/` to `.gitignore`; Drive profile sync | ✅ Done |
+| 🔴 C-02 | Document Drive scope in `gmail_otp.py` | ✅ Documented |
+| 🟡 M-01 | Fix `%-d` in `zepto_scraper.py` | ✅ Done |
+| 🟡 M-02 | Remove `CITY_ALIASES` from `data_transformer.py` | Open |
+| 🟡 M-03 | Anchor `token.json` path to project root in `gmail_otp.py` | ✅ Done |
+| 🟡 M-05 | Make `_clean_sku` public in `excel_reader.py` | Open |
+| 🟡 M-06 | Add env var validation in `db_utils.py` | Open |
+| 🟢 L-01 | Commit `scrapers/sessions/__init__.py` | ✅ Done |
+| 🟢 L-04 | Commit `database/alembic/versions/` once schema stabilises | Open |
+
+---
+
 ## Review: 2026-02-24
 
 **Branch**: main
@@ -612,3 +785,252 @@ No new files need to be gitignored.
 | 🟢 L-3 | Add `console.error` in upload catch block | 2 min |
 | 🟢 L-4 | Switch NavTabs to `startsWith` match | 3 min |
 | 🟢 L-5 | Add `frontend/.gitattributes` for LF normalisation | 5 min |
+
+---
+
+## Review: 2026-02-25
+
+**Branch**: `feature/consolidate-price-scrapers`
+**Reviewer**: Claude Code (automated, read-only)
+**Scope**: 12 modified files + 6 untracked new files — Actions dashboard (new) + backend metadata API + config
+
+---
+
+### Files Reviewed
+
+**Modified (12):**
+`backend/app/api/metadata.py` (+224 lines — 3 new endpoints),
+`backend/app/config.py` (DATABASE_URL support + Pydantic v2 model_config),
+`backend/app/database.py` (minor: `get_db_url()` call),
+`backend/app/main.py` (guarded `create_all`),
+`backend/app/schemas/metadata.py` (+70 lines — 6 new schemas),
+`frontend/components/ui/nav-tabs.tsx` (+1 line — Actions tab),
+`frontend/lib/api.ts` (+34 lines — 2 interfaces + `actionItems()`),
+`docs/` (4 doc files — audit-docs follow-up)
+
+**New — Untracked (6):**
+`frontend/app/dashboard/actions/page.tsx`,
+`frontend/app/dashboard/actions/pipeline-health-section.tsx`,
+`frontend/app/dashboard/actions/sku-gaps-section.tsx`,
+`frontend/app/dashboard/actions/unmapped-section.tsx`,
+`frontend/components/ui/dialog.tsx`,
+`docs/branches.md`
+
+---
+
+### Executive Summary
+
+This diff introduces the **Actions dashboard** — a new page surfacing data pipeline health, portal mapping coverage gaps, portal SKUs without product mappings, and a "link SKU" workflow that writes directly to the database. The code is well-structured with a clear server-component / client-component split, proper confirmation steps before mutations, and good error degradation patterns. The most important findings are: TypeScript interface duplication across three files (same types defined locally instead of imported from `api.ts`), a fragile multi-depth CSV path probe that should use config/env, and an accessibility gap in the custom Dialog component (no focus trap). No security issues — the mutation endpoint uses parameterised queries throughout.
+
+---
+
+## 🟡 Medium Issues
+
+---
+
+**M-1 · Interface duplication — `pipeline-health-section.tsx`, `sku-gaps-section.tsx`, `unmapped-section.tsx`**
+
+All three client components define their own local TypeScript interfaces that duplicate types already exported from `frontend/lib/api.ts`:
+
+| Component | Local interface | Already in `api.ts` |
+|-----------|----------------|----------------------|
+| `pipeline-health-section.tsx:11–21` | `PortalImportHealth`, `ImportFailure` | ✅ Exported |
+| `sku-gaps-section.tsx:14–18` | `PortalSkuGap` | ✅ Exported |
+| `unmapped-section.tsx:14–17` | `UnmappedProduct` | ✅ Exported |
+
+If a field is added to the backend schema and updated in `api.ts`, it won't automatically be reflected in the local interfaces — silent drift.
+
+*Suggestion*: Import from `@/lib/api` instead of re-declaring:
+```tsx
+import type { PortalImportHealth, ImportFailure } from "@/lib/api"
+```
+
+---
+
+**M-2 · `backend/app/api/metadata.py` — `_find_gaps_csv()` fragile depth-probe**
+
+```python
+def _find_gaps_csv() -> Path | None:
+    here = Path(__file__).resolve()
+    for depth in (2, 3, 4):
+        candidate = here.parents[depth] / "data" / "source" / "mapping_gaps.csv"
+        if candidate.exists():
+            return candidate
+    return None
+```
+
+Walking `parents[2..4]` is fragile: the correct depth changes if the file is ever moved, and the function silently returns `None` if the depth is wrong (wrong Docker volume mount, different layout). `settings.raw_data_path` already tracks the data root — a config-relative path would be more reliable and consistent with the rest of the codebase.
+
+*Suggestion*: Add a `source_data_path: str = "./data/source"` setting and use:
+```python
+from ..config import settings
+from pathlib import Path as _P
+
+def _find_gaps_csv() -> _P | None:
+    p = _P(settings.source_data_path) / "mapping_gaps.csv"
+    return p if p.exists() else None
+```
+
+---
+
+**M-3 · `sku-gaps-section.tsx:150` — Array index in React key**
+
+```tsx
+{skuGaps.map((row, i) => (
+  <TableRow key={`${row.portal}-${row.portal_sku}-${i}`} ...>
+```
+
+`portal_sku` is unique per portal (`UNIQUE (portal_id, portal_sku)` in the DB), so `${row.portal}-${row.portal_sku}` is already a stable unique key. Adding `i` makes React treat list reordering as identity changes, causing unnecessary re-renders.
+
+*Suggestion*: `key={`${row.portal}-${row.portal_sku}`}` — drop the index.
+
+---
+
+**M-4 · `pipeline-health-section.tsx:48–53` — No loading state for failure details fetch**
+
+```tsx
+useEffect(() => {
+  fetch(`${BASE}/api/metadata/import-failures`)
+    .then(r => r.ok ? r.json() : [])
+    .then(setFailures)
+    .catch(() => {})
+}, [])
+```
+
+There is no loading indicator. When a user clicks to expand a portal row with failures, the detail panel briefly shows **"No detailed failure records found."** while the data is still in-flight. This appears as a false empty state until the fetch resolves.
+
+*Suggestion*: Track a `loading` boolean; show a spinner or "Loading…" text in the expanded panel until the fetch completes.
+
+---
+
+**M-5 · `unmapped-section.tsx:87–88` — `displayName()` derives portal name from slug incorrectly**
+
+```tsx
+const displayName = (slug: string) =>
+  slug.charAt(0).toUpperCase() + slug.slice(1).replace(/_/g, " ")
+```
+
+`"amazon_pi"` → `"Amazon pi"` (lowercase `pi`). The `portals` table has a `display_name` column (`"Amazon PI"`) that is already returned by the API in `missing_portals` (the display name string). However `missing_portal_slugs` only carries slugs, so the dropdown has to derive display names from slugs — losing casing information.
+
+*Suggestion*: Return a `missing_portal_map: { slug: display_name }` from the API, or return `missing_portals` as a JSON array of `{ slug, display_name }` pairs instead of a plain comma-separated string.
+
+---
+
+**M-6 · `backend/app/api/metadata.py` — Duplicate FastAPI imports**
+
+```python
+from fastapi import APIRouter, Depends, Query   # line 5
+...
+from fastapi import HTTPException               # line 11 — separate import added later
+```
+
+Two separate `from fastapi import` statements. Minor but inconsistent with the rest of the codebase.
+
+*Suggestion*: Merge into one: `from fastapi import APIRouter, Depends, HTTPException, Query`
+
+---
+
+## 🟢 Low Issues
+
+---
+
+**L-1 · `frontend/components/ui/dialog.tsx` — No focus trap (accessibility)**
+
+The custom Dialog component handles the Escape key manually but does not trap focus. Keyboard-only users can Tab through elements behind the backdrop while the dialog is open — WCAG 2.1 SC 2.1.2 violation. The dialog also lacks `role="dialog"` and `aria-modal="true"`.
+
+Since this is an internal ops tool, the impact is limited. A quick fix would be to use the Radix `@radix-ui/react-dialog` primitive (already available as a peer dep via shadcn) rather than a custom implementation.
+
+*Suggestion (if accessibility matters)*: Replace with a `Dialog` built on `@radix-ui/react-dialog`, which provides focus trapping, scroll locking, and ARIA attributes out of the box.
+
+---
+
+**L-2 · `sku-gaps-section.tsx:51–64` — Full product list fetched client-side for search**
+
+```tsx
+useEffect(() => {
+  fetch(`${BASE}/api/sales/products`)
+    .then(r => r.ok ? r.json() : [])
+    .then(setProducts)
+    .catch(() => {})
+}, [])
+```
+
+The entire product catalogue (520+ rows) is loaded into the client once on component mount, then filtered in-browser. At 520 items this is fine (<50 KB). Flag for awareness if the product catalogue grows significantly — above ~5 000 items a server-side search endpoint would be preferable.
+
+---
+
+**L-3 · `get_import_failures` — no minimum on `limit` parameter**
+
+```python
+def get_import_failures(limit: int = Query(100, le=500), db: Session = Depends(get_db)):
+```
+
+`le=500` caps the maximum but there's no `ge=1`. `limit=0` or `limit=-1` are accepted and produce a `LIMIT 0` or `LIMIT -1` query (PostgreSQL treats negative `LIMIT` as unlimited — unbounded result set).
+
+*Suggestion*: `limit: int = Query(100, ge=1, le=500)`
+
+---
+
+**L-4 · `page.tsx:10` — `revalidate = 60` may over-query the database**
+
+```tsx
+export const revalidate = 60
+```
+
+The `action-items` endpoint runs three aggregate SQL queries including a `CROSS JOIN` on products × portals. Re-fetching every 60 seconds in production is fine for a lightly used internal dashboard but could be relaxed to `300` (5 min) — the data changes at most once per scraper run (every few hours).
+
+---
+
+**L-5 · `api.ts` — packed interface style inconsistent with rest of file**
+
+The six new interfaces use multiple properties per line:
+```typescript
+export interface PortalImportHealth {
+  portal_name: string; display_name: string
+  last_import_at: string | null; last_status: string | null
+```
+
+All prior interfaces in `api.ts` use one property per line. Inconsistent but harmless.
+
+---
+
+### ✅ Patterns Done Well
+
+| Pattern | Where | Why |
+|---------|-------|-----|
+| `catch(() => null)` page-level degradation | `actions/page.tsx:13` | API down → `noApiData=true` → informative banner instead of crash |
+| Confirmation step before mutations | `sku-gaps-section.tsx`, `unmapped-section.tsx` | Two-step review flow prevents accidental DB writes |
+| `db.flush()` → `db.commit()` ordering | `metadata.py:create_portal_mapping` | Products INSERT returns ID before the mapping INSERT references it |
+| `ON CONFLICT DO UPDATE` upsert | `metadata.py:create_portal_mapping` | Safe re-submission: idempotent, no duplicate product rows |
+| `!saving` guard on `onClose` | Both dialog components | Prevents closing dialog mid-save |
+| Parameterised queries throughout | `metadata.py` | All user-supplied values go through `{"key": value}` binding — no SQL injection |
+| Server component data fetch + client subcomponents | `actions/page.tsx` | Static data (coverage, totals) is RSC; interactive expandable rows are client components — correct App Router pattern |
+| `settings.get_db_url()` with `DATABASE_URL` override | `config.py`, `database.py` | Supabase connection string can be passed as a single URL, matching how Supabase recommends connecting |
+| `try/except` around `create_all` | `main.py` | Server starts even when DB is temporarily unreachable — avoids cold-start failures |
+
+---
+
+### Gitignore Check — New Untracked Files
+
+| File | Verdict |
+|------|---------|
+| `docs/branches.md` | ✅ Commit — project documentation |
+| `frontend/app/dashboard/actions/*.tsx` | ✅ Commit — frontend source |
+| `frontend/components/ui/dialog.tsx` | ✅ Commit — UI component |
+
+No new files should be gitignored.
+
+---
+
+### Prioritised Action Plan
+
+| Priority | Action | Effort |
+|----------|--------|--------|
+| 🟡 M-1 | Import shared types from `@/lib/api` in 3 client components (remove local re-declarations) | 10 min |
+| 🟡 M-2 | Replace `_find_gaps_csv()` depth probe with a `source_data_path` config setting | 10 min |
+| 🟡 M-3 | Remove index from `sku-gaps-section.tsx` row key | 2 min |
+| 🟡 M-4 | Add `loading` state to `PipelineHealthSection` failures fetch | 5 min |
+| 🟡 M-5 | Return `{ slug, display_name }` pairs from API instead of plain slug string | 15 min |
+| 🟡 M-6 | Merge duplicate `from fastapi import` lines in `metadata.py` | 1 min |
+| 🟢 L-1 | Add `role="dialog"` + `aria-modal` to `dialog.tsx`; consider Radix Dialog long-term | 5 min |
+| 🟢 L-3 | Add `ge=1` to `limit` in `get_import_failures` | 1 min |

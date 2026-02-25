@@ -466,6 +466,54 @@ No browser required. Fetches orders for the target date via the REST API with pa
 
 ---
 
+## Price Scraper Tools (`scrapers/tools/`)
+
+Standalone Playwright CLI tools for scraping **live product prices** from quick-commerce and e-commerce portals. Not part of the daily scraper service — run independently, on demand, without Docker.
+
+Each tool has its own `requirements.txt` containing only `playwright>=1.40.0` (plus `requests`, `beautifulsoup4`, `lxml` for the Amazon ASIN tool).
+
+| Tool | Portal | Input type | Key output |
+|------|--------|-----------|------------|
+| `blinkit_price_scraper/` | Blinkit | Product IDs or URLs | Price, MRP, discount, in-stock status |
+| `swiggy_price_scraper/` | Swiggy Instamart | Product URLs | Price, MRP, discount, availability |
+| `zepto_price_scraper/` | Zepto | Product URLs | Price, MRP, discount, rating |
+| `amazon_asin_scraper/` | Amazon.in | ASINs | Price, BSR, seller, ships-from |
+
+### Common flags (all tools)
+
+| Flag | Effect |
+|------|--------|
+| `--no-headless` | Show the browser window (default: headless) |
+| `-f <file>` | Read inputs from a text or CSV file (one per line) |
+| `-o results.csv` | Export results to CSV |
+| `-p <pincode>` | Set delivery pincode for location-aware pricing |
+
+### Usage examples
+
+```bash
+# Blinkit — single product by ID, specific pincode
+cd scrapers/tools/blinkit_price_scraper
+pip install -r requirements.txt
+playwright install chromium
+python main.py -p 122009 627046
+
+# Swiggy Instamart — bulk from file, batched to avoid rate limits
+cd scrapers/tools/swiggy_price_scraper
+python main.py -p 560103 -f urls.txt -o results.csv --batch-size 3 --batch-pause 480
+
+# Zepto — single URL with pincode
+cd scrapers/tools/zepto_price_scraper
+python main.py -p 400093 "https://www.zeptonow.com/pn/solara-air-fryer/pvid/..."
+
+# Amazon ASIN — bulk from file, India marketplace, Slack notification
+cd scrapers/tools/amazon_asin_scraper
+python main.py -m in -f asins.txt -o results.csv --slack
+```
+
+**Note:** These tools do **not** interact with the PostgreSQL database. Output is to stdout and/or CSV only. They are not invoked by `orchestrator.py`.
+
+---
+
 ## Session storage
 
 ```

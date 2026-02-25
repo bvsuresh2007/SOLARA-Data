@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { label: "Sales",     href: "/dashboard/sales" },
   { label: "Inventory", href: "/dashboard/inventory" },
   { label: "Upload",    href: "/dashboard/upload" },
+  { label: "Actions",   href: "/dashboard/actions" },
 ];
 
 export function NavTabs() {

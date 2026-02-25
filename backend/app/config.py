@@ -1,5 +1,6 @@
 from pathlib import Path
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 # .env lives at the project root (two levels above this file: app/config.py → backend/ → root/)
@@ -7,7 +8,8 @@ _ENV_FILE = str(Path(__file__).parent.parent.parent / ".env")
 
 
 class Settings(BaseSettings):
-    # Database
+    # Database — prefer DATABASE_URL if set; otherwise build from POSTGRES_* vars
+    database_url: str = Field(default="", alias="DATABASE_URL")
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "solara_dashboard"
@@ -28,17 +30,20 @@ class Settings(BaseSettings):
     raw_data_path: str = "./data/raw"
     processed_data_path: str = "./data/processed"
 
-    @property
-    def database_url(self) -> str:
+    def get_db_url(self) -> str:
+        if self.database_url:
+            return self.database_url
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
-    class Config:
-        env_file = _ENV_FILE
-        case_sensitive = False
-        extra = "ignore"  # silently ignore any extra env vars not defined as fields
+    model_config = {
+        "env_file": _ENV_FILE,
+        "case_sensitive": False,
+        "extra": "ignore",
+        "populate_by_name": True,
+    }
 
 
 @lru_cache()

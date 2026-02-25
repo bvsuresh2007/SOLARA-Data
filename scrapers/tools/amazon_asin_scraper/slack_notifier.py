@@ -8,7 +8,7 @@ from typing import Optional
 
 import requests
 
-from src.scraper import ProductData
+from scraper import ProductData
 
 # Config file to store webhook URL
 CONFIG_FILE = "slack_config.json"

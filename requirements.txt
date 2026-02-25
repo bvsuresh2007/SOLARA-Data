@@ -1,11 +1,19 @@
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
-fake-useragent>=1.4.0
-selenium>=4.15.0
-webdriver-manager>=4.0.0
+# Root-level requirements
+# Used as: pip cache key in monthly-drive-setup.yml
+# Covers: scripts/ utilities and one-off tools run from the repo root
+#
+# NOTE: Service-specific deps live in their own files:
+#   backend/requirements.txt   — FastAPI service
+#   scrapers/requirements.txt  — Scraper service (portal scrapers + CI workflows)
+#   scrapers/tools/*/requirements.txt — Standalone price-scraper CLI tools
+
+# Google APIs (Drive folder setup, token refresh)
 google-auth>=2.28.0
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 google-api-python-client>=2.120.0
-pyotp>=2.9.0
+
+# Misc utilities used in root-level scripts
+requests>=2.31.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.3.0
