@@ -1203,6 +1203,18 @@ The `iterrows()` → `to_dict("records")` optimisation was correctly applied to 
 
 ---
 
+## Post-Deployment Recommendations — 2026-02-25
+
+### 1. Custom Domain
+The production frontend URL (`solara-frontend-891651347357.asia-south1.run.app`) is auto-generated and unwieldy. Map a custom domain such as `dashboard.solara.in` to the Cloud Run service — free via GCP Console → Cloud Run → **Manage Custom Domains**.
+
+### 2. Backend URL Exposure
+`NEXT_PUBLIC_API_URL` is baked into the frontend JS bundle at build time and is visible in the browser source. This is acceptable for an internal dashboard but should be addressed before any public-facing use:
+- **Option A**: Add API key / token authentication to the FastAPI backend
+- **Option B**: Proxy all API calls through Next.js API routes (`/api/...`) so the backend URL is never exposed to the client
+
+---
+
 ## Prioritised Action Plan
 
 | Priority | Action | Effort |
