@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TargetAchievement } from "@/lib/api";
+import { fmtRevenue } from "@/lib/format";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -21,13 +22,6 @@ const PORTAL_COLORS: Record<string, string> = {
   Flipkart: "bg-yellow-900/40 text-yellow-300",
   Myntra:   "bg-pink-900/40 text-pink-300",
 };
-
-function fmtRevenue(v: number): string {
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
-  if (v >= 1e3) return `₹${(v / 1e3).toFixed(1)} K`;
-  return `₹${Math.round(v)}`;
-}
 
 function achievementVariant(pct: number): "success" | "warning" | "danger" {
   if (pct >= 100) return "success";

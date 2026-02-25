@@ -272,12 +272,22 @@ def run(report_date: date):
 
     db.close()
 
-    # Slack notification
+    # Slack notification — daily summary
     try:
         from backend.app.utils.slack import notify_scraping_complete
         notify_scraping_complete(report_date, results)
     except Exception as exc:
         logger.warning("Slack notification failed: %s", exc)
+
+    # On the 1st of each month, post the Drive reports folder link
+    if report_date.day == 1:
+        folder_url = os.environ.get("REPORTS_DRIVE_FOLDER_URL", "")
+        if folder_url:
+            try:
+                from backend.app.utils.slack import notify_monthly_drive_folder
+                notify_monthly_drive_folder(report_date.strftime("%B %Y"), folder_url)
+            except Exception as exc:
+                logger.warning("Monthly Drive folder notification failed: %s", exc)
 
     logger.info("Orchestrator complete. Total portals: %d", len(results))
     return results

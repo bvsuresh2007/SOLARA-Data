@@ -19,10 +19,10 @@ export interface Product  { id: number; sku_code: string; product_name: string; 
 
 export interface SalesSummary {
   total_revenue: number;
-  total_net_revenue: number;
+  total_net_revenue: number | null;
   total_quantity: number;
-  total_orders: number;
-  total_discount: number;
+  total_orders: number | null;
+  total_discount: number | null;
   record_count: number;
 }
 
@@ -30,10 +30,10 @@ export interface SalesByDimension {
   dimension_id: number;
   dimension_name: string;
   total_revenue: number;
-  total_net_revenue: number;
+  total_net_revenue: number | null;
   total_quantity: number;
-  total_orders: number;
-  record_count: number;
+  total_orders: number | null;
+  record_count: number | null;
 }
 
 export interface SalesTrend {
@@ -100,35 +100,53 @@ export interface PortalDailyResponse {
 }
 
 export interface PortalImportHealth {
-  portal_name: string; display_name: string
-  last_import_at: string | null; last_status: string | null
-  total_imports: number; failed_runs: number
+  portal_name: string;
+  display_name: string;
+  last_import_at: string | null;
+  last_status: string | null;
+  total_imports: number;
+  failed_runs: number;
 }
 export interface PortalCoverage {
-  portal_name: string; display_name: string
-  mapped_products: number; total_products: number; gap: number
+  portal_name: string;
+  display_name: string;
+  mapped_products: number;
+  total_products: number;
+  gap: number;
 }
 export interface UnmappedProduct {
-  product_id: number; sku_code: string; product_name: string
-  missing_portals: string; missing_portal_slugs: string; missing_count: number
+  product_id: number;
+  sku_code: string;
+  product_name: string;
+  missing_portals: string;
+  missing_portal_slugs: string;
+  missing_count: number;
 }
 export interface PortalSkuGap {
-  portal: string; portal_sku: string; portal_name: string
-  matched_sol_sku: string; matched_name: string
-  score: number; status: string
+  portal: string;
+  portal_sku: string;
+  portal_name: string;
+  matched_sol_sku: string;
+  matched_name: string;
+  score: number;
+  status: string;
 }
 export interface ActionItemsResponse {
-  total_products: number
-  import_health: PortalImportHealth[]
-  portal_coverage: PortalCoverage[]
-  unmapped_products: UnmappedProduct[]
-  portal_sku_gaps: PortalSkuGap[]
+  total_products: number;
+  import_health: PortalImportHealth[];
+  portal_coverage: PortalCoverage[];
+  unmapped_products: UnmappedProduct[];
+  portal_sku_gaps: PortalSkuGap[];
 }
 export interface ImportFailure {
-  id: number
-  portal_name: string | null; display_name: string | null
-  file_name: string | null; import_date: string; start_time: string
-  error_message: string | null; source_type: string
+  id: number;
+  portal_name: string | null;
+  display_name: string | null;
+  file_name: string | null;
+  import_date: string;
+  start_time: string;
+  error_message: string | null;
+  source_type: string;
 }
 
 export interface ScrapingLog {

@@ -5,20 +5,9 @@ import { ChevronRight, ChevronDown } from "lucide-react"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import type { PortalImportHealth, ImportFailure } from "@/lib/api"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-
-interface PortalImportHealth {
-  portal_name: string; display_name: string
-  last_import_at: string | null; last_status: string | null
-  total_imports: number; failed_runs: number
-}
-interface ImportFailure {
-  id: number
-  portal_name: string | null; display_name: string | null
-  file_name: string | null; import_date: string; start_time: string
-  error_message: string | null; source_type: string
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return "Never"
@@ -43,6 +32,7 @@ export function PipelineHealthSection({
   noApiData: boolean
 }) {
   const [failures, setFailures] = useState<ImportFailure[]>([])
+  const [loadingFailures, setLoadingFailures] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
 
   useEffect(() => {
@@ -50,6 +40,7 @@ export function PipelineHealthSection({
       .then(r => r.ok ? r.json() : [])
       .then(setFailures)
       .catch(() => {})
+      .finally(() => setLoadingFailures(false))
   }, [])
 
   const portalFailures = (name: string) => failures.filter(f => f.portal_name === name)
@@ -107,7 +98,9 @@ export function PipelineHealthSection({
                 {expanded === row.portal_name && (
                   <TableRow className="border-zinc-800/50 bg-red-950/10">
                     <TableCell colSpan={5} className="px-4 pb-3 pt-0">
-                      {portalFailures(row.portal_name).length === 0 ? (
+                      {loadingFailures ? (
+                        <p className="text-xs text-zinc-600 py-2">Loading…</p>
+                      ) : portalFailures(row.portal_name).length === 0 ? (
                         <p className="text-xs text-zinc-600 py-2">No detailed failure records found.</p>
                       ) : (
                         <div className="space-y-2 mt-2">

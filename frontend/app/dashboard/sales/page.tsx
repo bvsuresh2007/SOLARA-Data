@@ -40,9 +40,8 @@ function SalesContent() {
   const portalIdStr = params.get("portal_id")   ?? undefined;
   const portalId    = portalIdStr ? Number(portalIdStr) : undefined;
 
-  const today = new Date();
-  const [targetYear,  setTargetYear]  = useState(today.getFullYear());
-  const [targetMonth, setTargetMonth] = useState(today.getMonth() + 1);
+  const [targetYear,  setTargetYear]  = useState(() => new Date().getFullYear());
+  const [targetMonth, setTargetMonth] = useState(() => new Date().getMonth() + 1);
 
   const [portals,    setPortals]    = useState<Portal[]>([]);
   const [summary,    setSummary]    = useState<SalesSummary | null>(null);
@@ -66,8 +65,8 @@ function SalesContent() {
         ...(endDate   ? { end_date: endDate }      : {}),
         ...(portalId  ? { portal_id: portalId }    : {}),
       };
-      const [portalsData, summaryData, byPortalData, trendData, byCatData, byProdData] =
-        await Promise.all([
+      const [portalsRes, summaryRes, byPortalRes, trendRes, byCatRes, byProdRes] =
+        await Promise.allSettled([
           api.portals(),
           api.salesSummary(fp),
           api.salesByPortal(fp),
@@ -75,8 +74,12 @@ function SalesContent() {
           api.salesByCategory(fp),
           api.salesByProduct({ ...fp, limit: 50 }),
         ]);
-      setPortals(portalsData); setSummary(summaryData); setByPortal(byPortalData);
-      setTrend(trendData); setByCategory(byCatData); setByProduct(byProdData);
+      if (portalsRes.status  === "fulfilled") setPortals(portalsRes.value);
+      if (summaryRes.status  === "fulfilled") setSummary(summaryRes.value);
+      if (byPortalRes.status === "fulfilled") setByPortal(byPortalRes.value);
+      if (trendRes.status    === "fulfilled") setTrend(trendRes.value);
+      if (byCatRes.status    === "fulfilled") setByCategory(byCatRes.value);
+      if (byProdRes.status   === "fulfilled") setByProduct(byProdRes.value);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
     } finally { setLoading(false); }
@@ -91,6 +94,7 @@ function SalesContent() {
 
   const fetchPortalDaily = useCallback(async () => {
     if (!portalId) { setDailyData(null); return; }
+    if (!portals.length) return;
     setDailyLoading(true);
     try {
       const portalName = portals.find(p => p.id === portalId)?.name;

@@ -1,0 +1,22 @@
+# Enforce LF line endings for all text files checked out on Windows
+* text=auto eol=lf
+
+# Explicitly mark source files
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.jsx  text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Binary files — no line ending conversion
+*.ico  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.woff binary
+*.woff2 binary

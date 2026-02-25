@@ -128,7 +128,7 @@ def parse_blinkit_sales(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, BLINKIT_SALES_REQUIRED, "blinkit_sales")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rows.append({
                 "portal": "blinkit",
                 "sale_date": _parse_date_ymd(row.get("date")),
@@ -151,7 +151,7 @@ def parse_blinkit_inventory(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, BLINKIT_INV_REQUIRED, "blinkit_inventory")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rows.append({
                 "portal": "blinkit",
                 "snapshot_date": _parse_date_ymd(row.get("date", row.get("created_at"))),
@@ -181,7 +181,7 @@ def parse_swiggy_sales(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, SWIGGY_SALES_REQUIRED, "swiggy_sales")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rows.append({
                 "portal": "swiggy",
                 "sale_date": _parse_date_ymd(row.get("date")),
@@ -204,7 +204,7 @@ def parse_swiggy_inventory(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, SWIGGY_INV_REQUIRED, "swiggy_inventory")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             rows.append({
                 "portal": "swiggy",
                 "snapshot_date": _parse_date_ymd(row.get("date")),
@@ -234,7 +234,7 @@ def parse_zepto_sales(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, ZEPTO_SALES_REQUIRED, "zepto_sales")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             mrp = _f(row.get("MRP", 0))
             selling_price = _f(row.get("Selling Price", mrp))
             gmv = _f(row.get("GMV", 0))
@@ -261,7 +261,7 @@ def parse_zepto_inventory(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, ZEPTO_INV_REQUIRED, "zepto_inventory")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             stock = _f(row.get("Units", 0))
             rows.append({
                 "portal": "zepto",
@@ -321,7 +321,7 @@ def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
             if "date" in df.columns or "orderDate" in df.columns:
                 date_col = "date" if "date" in df.columns else "orderDate"
                 rows = []
-                for _, row in df.iterrows():
+                for row in df.to_dict("records"):
                     rows.append({
                         "portal": "amazon",
                         "sale_date": _parse_date_ymd(row.get(date_col)),
@@ -340,7 +340,7 @@ def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
             )
 
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             asin = str(row.get("ASIN", "")).strip()
             if not asin:
                 continue
@@ -380,7 +380,7 @@ def parse_shopify_sales(content: bytes, filename: str) -> list[dict]:
         df = _clean(_read_file(path))
         _require_columns(df, SHOPIFY_SALES_REQUIRED, "shopify_sales")
         rows = []
-        for _, row in df.iterrows():
+        for row in df.to_dict("records"):
             subtotal = _f(row.get("Subtotal", 0))
             total = _f(row.get("Total", subtotal))
             discount = _f(row.get("Discount Amount", 0))

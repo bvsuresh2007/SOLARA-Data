@@ -2,13 +2,7 @@
 
 import { Card, CardContent } from "@/components/ui/card";
 import type { SalesSummary } from "@/lib/api";
-
-function fmt(value: number): string {
-  if (value >= 1e7) return `₹${(value / 1e7).toFixed(2)} Cr`;
-  if (value >= 1e5) return `₹${(value / 1e5).toFixed(2)} L`;
-  if (value >= 1e3) return `₹${(value / 1e3).toFixed(1)} K`;
-  return `₹${Math.round(value)}`;
-}
+import { fmtRevenue } from "@/lib/format";
 
 function fmtNum(value: number): string {
   return new Intl.NumberFormat("en-IN").format(Math.round(value));
@@ -26,9 +20,9 @@ export function KpiStrip({ summary, productCount }: Props) {
       : 0;
 
   const kpis = [
-    { label: "Gross Revenue", value: fmt(summary.total_revenue), accent: true },
+    { label: "Gross Revenue", value: fmtRevenue(summary.total_revenue), accent: true },
     { label: "Units Sold",    value: fmtNum(summary.total_quantity) },
-    { label: "Avg ASP",       value: fmt(asp) },
+    { label: "Avg ASP",       value: fmtRevenue(asp) },
     { label: "Active SKUs",   value: fmtNum(productCount) },
   ];
 

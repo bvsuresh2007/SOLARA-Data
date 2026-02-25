@@ -1034,3 +1034,181 @@ No new files should be gitignored.
 | 🟡 M-6 | Merge duplicate `from fastapi import` lines in `metadata.py` | 1 min |
 | 🟢 L-1 | Add `role="dialog"` + `aria-modal` to `dialog.tsx`; consider Radix Dialog long-term | 5 min |
 | 🟢 L-3 | Add `ge=1` to `limit` in `get_import_failures` | 1 min |
+
+---
+
+## Review: 2026-02-25 — fix/code-review-issues branch (code-review fixes batch)
+
+**Branch**: `fix/code-review-issues`
+**Reviewer**: Claude Code (automated, read-only)
+**Scope**: 33 modified files + 4 untracked new files — systematic remediation of previous code review findings
+
+---
+
+### Files Reviewed
+
+**Modified (33):**
+`.gitignore`,
+`backend/app/api/imports.py`, `metadata.py`, `sales.py`, `uploads.py`,
+`backend/app/config.py`, `backend/app/database.py`,
+`backend/app/schemas/sales.py`,
+`backend/app/utils/excel_parsers.py`, `portal_resolver.py`,
+`frontend/app/dashboard/actions/page.tsx`, `pipeline-health-section.tsx`, `sku-gaps-section.tsx`, `unmapped-section.tsx`,
+`frontend/app/dashboard/page.tsx`, `sales/page.tsx`, `upload/page.tsx`,
+`frontend/components/charts/bar-chart.tsx`,
+`frontend/components/sales/category-chart.tsx`, `kpi-strip.tsx`, `portal-breakdown.tsx`, `portal-daily-table.tsx`, `product-table.tsx`, `revenue-trend.tsx`, `target-achievement.tsx`,
+`frontend/components/ui/dialog.tsx`, `nav-tabs.tsx`, `skeleton.tsx`,
+`frontend/lib/api.ts`, `frontend/package.json`, `frontend/package-lock.json`,
+`scrapers/orchestrator.py`
+
+**Deleted (1):** `scripts/replicate_to_supabase.py`
+
+**New — Untracked (4):**
+`frontend/.gitattributes`, `frontend/lib/chart-colors.ts`, `frontend/lib/format.ts`, `scripts/find_missing_dates.py`
+
+---
+
+### Executive Summary
+
+This diff is a systematic code quality pass across the full stack — 25+ individual fixes applied to backend, frontend, and scrapers. The changes are well-executed with no regressions introduced and substantial improvements to security, correctness, and DX. **One critical issue** was introduced in a new utility script (`scripts/find_missing_dates.py`): a hardcoded production database password in plaintext. All other findings are medium or low priority. The new shared utilities (`format.ts`, `chart-colors.ts`) are clean and well-structured. The dialog accessibility improvements and interface formatting normalisation are high-quality.
+
+---
+
+## 🔴 Critical Issues
+
+---
+
+### C-1 · `scripts/find_missing_dates.py:26` — Hardcoded production database credentials
+
+```python
+DATABASE_URL = "postgresql://postgres:6LkqSuEXJ0zNLOCP@[2406:da1c:f42:ae08:77f3:eb0d:4af6:3eaf]:5432/postgres"
+```
+
+**Problem**: A real production password (`6LkqSuEXJ0zNLOCP`) and IPv6 host address are hardcoded as a module-level constant. If this file is committed, the credential is permanently in git history even after removal. The Supabase IPv6 endpoint is also exposed.
+
+**Suggestion**: Read from environment:
+```python
+import os
+from dotenv import load_dotenv
+load_dotenv()
+DATABASE_URL = os.environ["DATABASE_URL"]  # fail fast if not set
+```
+
+---
+
+## 🟡 Medium Issues
+
+---
+
+### M-1 · `imports.py:191` — `import_inventory` missing row count limit
+
+`import_sales` guards against oversized payloads:
+```python
+if len(body.rows) > 10_000:
+    raise HTTPException(status_code=400, detail="Too many rows (max 10,000 per request)")
+```
+`import_inventory` has no equivalent guard. A single POST can submit unlimited rows.
+
+**Suggestion**: Add the same limit check to `import_inventory` for consistency.
+
+---
+
+### M-2 · `uploads.py:543–548` — `_insert_city_sales` silently rolls back mid-transaction
+
+```python
+except IntegrityError:
+    db.rollback()
+    logger.warning("IntegrityError inserting city_daily_sales — some rows skipped")
+```
+
+`_insert_city_sales` is called without a surrounding savepoint. If it raises `IntegrityError` and calls `db.rollback()`, the session is cleared — but `_process_sales` then continues to insert `daily_sales` rows and commits successfully. Result: `daily_sales` is populated but `city_daily_sales` is silently empty. The user receives `inserted=N` with no indication that city-level data was lost.
+
+**Suggestion**: Use a `SAVEPOINT` via `db.begin_nested()` to isolate the city_sales insert, so a failure only rolls back that sub-transaction without affecting the outer daily_sales commit. Or surface the failure as an entry in `errors[]`.
+
+---
+
+## 🟢 Low Issues
+
+---
+
+### L-1 · `scripts/find_missing_dates.py` — untracked, needs gitignore decision
+
+The script is a useful diagnostic utility comparable to other committed `scripts/` tools. It should be committed once C-1 (hardcoded credential) is fixed. It auto-saves output to `data/source/missing_dates.csv` — that path is covered by the global `*.csv` gitignore rule, so the CSV output will be ignored correctly.
+
+**Suggestion**: Fix C-1, then add the script to git. No gitignore entry needed for the script itself.
+
+---
+
+### L-2 · `format.ts:5–10` — `fmtRevenue` doesn't handle negative values
+
+```typescript
+export function fmtRevenue(v: number): string {
+  if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
+  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
+  if (v >= 1e3) return `₹${(v / 1e3).toFixed(1)} K`;
+  return `₹${Math.round(v)}`;
+}
+```
+
+`fmtRevenue(-150000)` returns `₹-150000` — the rupee sign precedes the negative sign and no L/K suffix is applied. In practice revenue is never negative in this codebase, but if discount amounts or deltas are ever formatted with this function, the output would be visually incorrect.
+
+**Suggestion**: Add a guard: `if (v < 0) return \`-${fmtRevenue(-v)}\`` as the first line.
+
+---
+
+### L-3 · `uploads.py:408` — inline import of private function `_parse_date_ymd`
+
+```python
+from ..utils.excel_parsers import _parse_date_ymd
+```
+
+The underscore prefix signals module-private. This import is buried inside `_process_master_excel()` rather than at the module top. Low risk since both files are in the same package, but inconsistent with conventions.
+
+**Suggestion**: Either promote `_parse_date_ymd` to a public function, or move the import to the module top level alongside the existing `from ..utils.excel_parsers import ColumnMismatchError, parse_file`.
+
+---
+
+### L-4 · `excel_parsers.py:462` — `parse_master_excel` retains `iterrows()` with `.iloc`
+
+The `iterrows()` → `to_dict("records")` optimisation was correctly applied to all 8 portal parsers. The remaining `iterrows()` in `parse_master_excel` was intentionally skipped because it uses positional `.iloc` indexing via a `col_map` object. This is documented behaviour, but worth noting as a future refactor opportunity: storing column positions as indices is fragile if the upstream `iter_sheets()` logic ever changes sheet structure.
+
+---
+
+## ✅ Patterns Done Well
+
+| Pattern | Where | Why |
+|---------|-------|-----|
+| `TOOLTIP_STYLE` / `CHART_COLORS` constants | `lib/chart-colors.ts` | Single source of truth for Recharts colours across 4 components — correct abstraction level |
+| `fmtRevenue` extracted to `lib/format.ts` | 7 sales components | Eliminates 7 near-identical local copies; consistent INR formatting |
+| `Promise.allSettled` with per-result guards | `sales/page.tsx` | Partial API failure no longer blanks the entire dashboard |
+| Lazy `useState` initialisers | `sales/page.tsx:44–45` | Prevents SSR/client date mismatch near midnight — correct React pattern |
+| `role="dialog"` + `aria-modal` + `aria-labelledby` | `dialog.tsx` | Proper ARIA semantics; screen readers will announce dialog title on open |
+| `db_ssl: bool = False` gate for `sslmode=require` | `database.py`, `config.py` | Allows local Docker dev without SSL while keeping cloud Postgres secure |
+| `datetime.now(timezone.utc)` everywhere | `imports.py`, `uploads.py` | Correct UTC-aware timestamps; removes Python 3.12 deprecation warning |
+| Client-side 50 MB + extension guard in `pickFile` | `upload/page.tsx` | Instant feedback before network round-trip; mirrors backend limits |
+| `ge=1` on `limit` param | `metadata.py` | Prevents `LIMIT 0` / negative-LIMIT unbounded queries |
+| `to_dict("records")` in all portal parsers | `excel_parsers.py` | 10–100× faster row iteration vs `iterrows()` |
+| Monthly Drive folder Slack trigger | `orchestrator.py` | `REPORTS_DRIVE_FOLDER_URL` env guard makes it a safe no-op by default |
+
+---
+
+## Gitignore Check — New Untracked Files
+
+| File | Verdict |
+|------|---------|
+| `frontend/.gitattributes` | ✅ Commit — enforces LF endings for the frontend tree |
+| `frontend/lib/chart-colors.ts` | ✅ Commit — shared Recharts constants |
+| `frontend/lib/format.ts` | ✅ Commit — shared INR formatter |
+| `scripts/find_missing_dates.py` | ⚠️ Fix C-1 first, then commit |
+
+---
+
+## Prioritised Action Plan
+
+| Priority | Action | Effort |
+|----------|--------|--------|
+| 🔴 C-1 | Remove hardcoded `DATABASE_URL` from `find_missing_dates.py`; read from env | 2 min |
+| 🟡 M-1 | Add `len(body.rows) > 10_000` guard to `import_inventory` | 2 min |
+| 🟡 M-2 | Use `db.begin_nested()` savepoint in `_insert_city_sales` to isolate the rollback | 10 min |
+| 🟢 L-2 | Add negative-value guard to `fmtRevenue` in `format.ts` | 2 min |
+| 🟢 L-3 | Move `_parse_date_ymd` import to module top level in `uploads.py` | 1 min |

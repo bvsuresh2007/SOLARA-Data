@@ -5,7 +5,7 @@ from typing import List, Optional
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, extract
+from sqlalchemy import func, extract, text
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -39,7 +39,6 @@ def sales_summary(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     portal_id: Optional[int] = Query(None),
-    city_id: Optional[int] = Query(None),   # kept for backward compat, ignored
     product_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -52,10 +51,7 @@ def sales_summary(
     rev = float(row.total_revenue)
     return SalesSummary(
         total_revenue=rev,
-        total_net_revenue=rev,
         total_quantity=float(row.total_quantity),
-        total_orders=0,
-        total_discount=0.0,
         record_count=row.record_count,
     )
 
@@ -65,7 +61,6 @@ def daily_sales(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     portal_id: Optional[int] = Query(None),
-    city_id: Optional[int] = Query(None),   # ignored
     product_id: Optional[int] = Query(None),
     limit: int = Query(500, le=5000),
     db: Session = Depends(get_db),
@@ -99,7 +94,7 @@ def sales_by_portal(
         q = q.filter(DailySales.sale_date <= end_date)
     rows = (
         q.group_by(Portal.id, Portal.display_name)
-        .order_by(func.sum(DailySales.revenue).desc().nullslast())
+        .order_by(text("total_revenue DESC NULLS LAST"))
         .all()
     )
     return [
@@ -107,10 +102,7 @@ def sales_by_portal(
             dimension_id=r.dimension_id,
             dimension_name=r.dimension_name,
             total_revenue=float(r.total_revenue),
-            total_net_revenue=float(r.total_revenue),
             total_quantity=float(r.total_quantity),
-            total_orders=0,
-            record_count=0,
         )
         for r in rows
     ]
@@ -132,7 +124,6 @@ def sales_by_product(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     portal_id: Optional[int] = Query(None),
-    city_id: Optional[int] = Query(None),   # ignored
     limit: int = Query(50, le=200),
     db: Session = Depends(get_db),
 ):
@@ -153,7 +144,7 @@ def sales_by_product(
         q = q.filter(DailySales.portal_id == portal_id)
     rows = (
         q.group_by(Product.id, Product.product_name)
-        .order_by(func.sum(DailySales.revenue).desc().nullslast())
+        .order_by(text("total_revenue DESC NULLS LAST"))
         .limit(limit)
         .all()
     )
@@ -162,10 +153,7 @@ def sales_by_product(
             dimension_id=r.dimension_id,
             dimension_name=r.dimension_name,
             total_revenue=float(r.total_revenue),
-            total_net_revenue=float(r.total_revenue),
             total_quantity=float(r.total_quantity),
-            total_orders=0,
-            record_count=0,
         )
         for r in rows
     ]
@@ -173,8 +161,8 @@ def sales_by_product(
 
 @router.get("/trend", response_model=List[SalesTrend])
 def sales_trend(
-    start_date: Optional[date] = Query(None),
-    end_date: Optional[date] = Query(None),
+    start_date: Optional[date] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 90 days ago when neither date is provided."),
+    end_date: Optional[date] = Query(None, description="End date (YYYY-MM-DD). Defaults to today when neither date is provided."),
     portal_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -235,7 +223,7 @@ def sales_by_category(
     rows = (
         q.group_by(ProductCategory.l1_name)
         .having(func.sum(DailySales.revenue) > 0)
-        .order_by(func.sum(DailySales.revenue).desc().nullslast())
+        .order_by(text("total_revenue DESC NULLS LAST"))
         .all()
     )
     return [

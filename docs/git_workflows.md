@@ -219,13 +219,3 @@ Go to: **GitHub repo → Settings → Secrets and variables → Actions → Secr
 | `SWIGGY_LINK` | Swiggy | Portal URL (`https://partner.swiggy.com/instamart/sales`) |
 | `SWIGGY_EMAIL` | Swiggy | Vendor email — OTP sent to this address via `no-reply@swiggy.in` |
 
----
-
-## New secrets to add (for Swiggy workflow)
-
-These secrets are needed for the Swiggy workflow and are not shared with earlier workflows:
-
-| Secret | Value |
-|--------|-------|
-| `SWIGGY_LINK` | `https://partner.swiggy.com/instamart/sales` |
-| `SWIGGY_EMAIL` | `pavan.kumar@solara.in` |

@@ -12,7 +12,7 @@ Duplicate behaviour:
 
 import logging
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -30,7 +30,7 @@ from ..schemas.uploads import (
     UploadFileType,
     UploadResult,
 )
-from ..utils.excel_parsers import ColumnMismatchError, parse_file
+from ..utils.excel_parsers import ColumnMismatchError, _parse_date_ymd, parse_file
 from ..utils.portal_resolver import PortalResolver
 
 router = APIRouter()
@@ -93,6 +93,8 @@ async def upload_file(
 ):
     filename = file.filename or "upload"
     content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds 50 MB limit")
 
     # ── 1. Parse file ─────────────────────────────────────────────────────────
     try:
@@ -237,7 +239,7 @@ def _process_sales(
                 portal_id=portal_id_for_log,
                 file_name=filename,
                 import_date=earliest,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 status="success",
                 records_imported=inserted,
             )
@@ -247,7 +249,9 @@ def _process_sales(
             db.commit()
         except IntegrityError:
             db.rollback()
-            logger.warning("IntegrityError during sales insert — some rows may have been skipped")
+            inserted = 0
+            errors.append(UploadError(row=0, reason="Database conflict — no rows were inserted. Try re-uploading."))
+            logger.warning("IntegrityError during sales insert — all rows rolled back")
 
     return UploadResult(
         file_type="",
@@ -341,7 +345,7 @@ def _process_inventory(
                 portal_id=portal_id_for_log,
                 file_name=filename,
                 import_date=earliest,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 status="success",
                 records_imported=inserted,
             )
@@ -351,7 +355,9 @@ def _process_inventory(
             db.commit()
         except IntegrityError:
             db.rollback()
-            logger.warning("IntegrityError during inventory insert")
+            inserted = 0
+            errors.append(UploadError(row=0, reason="Database conflict — no rows were inserted. Try re-uploading."))
+            logger.warning("IntegrityError during inventory insert — all rows rolled back")
 
     return UploadResult(
         file_type="", file_name="", rows_parsed=0,
@@ -399,7 +405,6 @@ def _process_master_excel(
 
         sale_date: Optional[date] = row.get("sale_date")
         if isinstance(sale_date, str):
-            from ..utils.excel_parsers import _parse_date_ymd
             sale_date = _parse_date_ymd(sale_date)
         if sale_date is None:
             errors.append(UploadError(row=idx, reason=f"Invalid date (value: {row.get('sale_date')!r})"))
@@ -450,7 +455,7 @@ def _process_master_excel(
                 source_type="excel_import",
                 file_name=filename,
                 import_date=earliest,
-                end_time=datetime.utcnow(),
+                end_time=datetime.now(timezone.utc),
                 status="success",
                 records_imported=inserted,
             )
@@ -460,7 +465,9 @@ def _process_master_excel(
             db.commit()
         except IntegrityError:
             db.rollback()
-            logger.warning("IntegrityError during master Excel insert")
+            inserted = 0
+            errors.append(UploadError(row=0, reason="Database conflict — no rows were inserted. Try re-uploading."))
+            logger.warning("IntegrityError during master Excel insert — all rows rolled back")
 
     return UploadResult(
         file_type="", file_name="", rows_parsed=0,
@@ -533,10 +540,12 @@ def _insert_city_sales(db: Session, rows: list[dict], resolver: PortalResolver) 
             )
         )
     if city_rows:
+        sp = db.begin_nested()
         try:
             db.bulk_save_objects(city_rows)
+            sp.commit()
         except IntegrityError:
-            db.rollback()
+            sp.rollback()
             logger.warning("IntegrityError inserting city_daily_sales — some rows skipped")
 
 

@@ -1,6 +1,6 @@
 # Frontend Architecture & UI Component Decisions
 
-**Last Updated**: 2026-02-24
+**Last Updated**: 2026-02-25
 **Stack**: Next.js 14 · shadcn/ui · Tailwind CSS · Recharts · TypeScript
 
 ---
@@ -261,6 +261,7 @@ Per-portal daily breakdown table. Uses raw HTML table — **intentional**. Multi
 | `/dashboard/sales` | Client Component | URL-param driven filters. `Suspense` boundary at page root for `useSearchParams()`. |
 | `/dashboard/inventory` | Server Component (RSC) | `revalidate = 300`. Fetches inventory snapshot and low-stock list. |
 | `/dashboard/upload` | Client Component | File upload flow with drag-and-drop. No server fetching at render time. |
+| `/dashboard/actions` | Server Component (RSC) | `revalidate = 300`. Pipeline health, SKU mapping gaps, unmapped products. |
 
 ### Why Sales is Client-Side
 
@@ -366,11 +367,19 @@ Default to **Server Components**. Add `"use client"` only when the component use
 
 ### Data Formatting
 
-All currency and number formatting lives in `lib/utils.ts`:
+**`lib/utils.ts`** — general utilities:
 - `formatCurrency(n)` — formats to ₹ with Indian number system
 - `formatNumber(n)` — formats with `en-IN` locale
+- `cn()` — re-exports `clsx` + `tailwind-merge`
 
-Components like `product-table.tsx` define local `fmtRevenue()` and `fmtNum()` for compact notation (e.g. `₹2.4 Cr`, `₹85 L`) — these are intentionally local to that component because the format differs from the global utility.
+**`lib/format.ts`** — compact INR formatter shared across sales components:
+- `fmtRevenue(n)` — `₹1.23 Cr` / `₹1.23 L` / `₹1.2 K` / `₹999`; handles negatives correctly
+
+**`lib/chart-colors.ts`** — shared Recharts constants:
+- `CHART_COLORS` — 7-colour palette array (`#f97316`, `#3b82f6`, … )
+- `TOOLTIP_STYLE` — standard dark tooltip `contentStyle` object used by all chart tooltips
+
+Import these rather than defining local copies in each component.
 
 ---
 

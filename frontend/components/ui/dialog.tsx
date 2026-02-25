@@ -25,9 +25,14 @@ export function Dialog({ open, onClose, title, children, maxWidth = "max-w-lg" }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-hidden />
-      <div className={cn("relative z-10 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full", maxWidth)}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dialog-title"
+        className={cn("relative z-10 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full", maxWidth)}
+      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
-          <h2 className="text-base font-semibold text-zinc-100">{title}</h2>
+          <h2 id="dialog-title" className="text-base font-semibold text-zinc-100">{title}</h2>
           <button
             onClick={onClose}
             className="text-zinc-500 hover:text-zinc-200 transition-colors rounded p-0.5"

@@ -57,6 +57,7 @@ scrapers/sessions/*_profile/
 debug_*.html
 debug_*.json
 screenshots/
+scrapers/amazon_pi_diagnose.py
 
 # ── Database ─────────────────────────────────────────────────────────────────
 *.db

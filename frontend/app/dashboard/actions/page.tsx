@@ -7,7 +7,7 @@ import { PipelineHealthSection } from "./pipeline-health-section";
 import { SkuGapsSection } from "./sku-gaps-section";
 import { UnmappedSection } from "./unmapped-section";
 
-export const revalidate = 60;
+export const revalidate = 300;
 
 export default async function ActionsPage() {
   const data = await api.actionItems().catch(() => null);
