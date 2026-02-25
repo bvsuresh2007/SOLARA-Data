@@ -5,8 +5,8 @@ ASIN Price and BSR Scraper CLI
 Usage:
     python main.py <ASIN>                                # Single ASIN
     python main.py -f asins.txt -o results.csv           # Bulk from file
-    python main.py --browser -m in -f asins.txt          # Browser mode
-    python main.py --browser -m in -s RetailEZ -f asins.txt -o results.csv
+    python main.py -m in -f asins.txt                    # India marketplace
+    python main.py --no-headless -m in -s RetailEZ -f asins.txt -o results.csv
 """
 
 import sys
@@ -16,6 +16,10 @@ import argparse
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
+
+# Windows terminal: force UTF-8 so ₹ and other unicode prints correctly
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 from scraper import AmazonScraper, ProductData
 from slack_notifier import post_to_slack, save_webhook, load_webhook
@@ -179,8 +183,8 @@ def main():
         help="Save HTML to debug.html for inspection"
     )
     parser.add_argument(
-        "--browser", action="store_true",
-        help="Use browser (Selenium) to avoid CAPTCHA detection"
+        "--no-headless", action="store_true",
+        help="Show the browser window (default: headless)"
     )
     parser.add_argument(
         "--delay", type=float, default=3.0,
@@ -230,7 +234,8 @@ def main():
             unique_asins.append(asin)
     asins = unique_asins
 
-    mode = "browser" if args.browser else "requests"
+    headless = not args.no_headless
+    mode = "playwright (visible)" if not headless else "playwright (headless)"
     print(f"\nScraping {len(asins)} ASIN(s) from amazon.{args.marketplace} using {mode}...")
     print(f"Delay between requests: {args.delay}s")
     if args.seller:
@@ -239,7 +244,7 @@ def main():
     scraper = AmazonScraper(
         marketplace=args.marketplace,
         debug=args.debug,
-        use_browser=args.browser
+        headless=headless,
     )
 
     results = []

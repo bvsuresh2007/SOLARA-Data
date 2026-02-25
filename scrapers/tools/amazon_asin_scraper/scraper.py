@@ -1,29 +1,41 @@
 """
-Amazon ASIN Scraper for Price and BSR (Best Seller Rank)
+Amazon ASIN Scraper for Price and BSR (Best Seller Rank) — Playwright
+
+Scrapes live price, BSR (main + sub-categories), and seller info
+from Amazon product pages.
+
+Replaces Selenium browser mode with Playwright while keeping all
+parsing logic unchanged.
 """
 
 import re
 import time
 import random
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
-from fake_useragent import UserAgent
+from playwright.sync_api import sync_playwright, Page, BrowserContext
 
-# Selenium imports (optional, for browser mode)
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
+
+# ── Stealth: injected before any page JS runs ─────────────────────────────────
+_STEALTH = """
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+    window.chrome = {runtime: {}};
+    const origQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = p =>
+        p.name === 'notifications'
+            ? Promise.resolve({state: Notification.permission})
+            : origQuery(p);
+"""
+
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 
 
 @dataclass
@@ -52,149 +64,125 @@ class ProductData:
 
 
 class AmazonScraper:
-    """Scraper for Amazon product price and BSR data."""
+    """Playwright-based Amazon product price and BSR scraper."""
 
-    BASE_URL = "https://www.amazon.com/dp/{asin}"
-
-    def __init__(self, marketplace: str = "com", debug: bool = False, use_browser: bool = False):
+    def __init__(self, marketplace: str = "com", debug: bool = False, headless: bool = True):
         """
         Initialize the scraper.
 
         Args:
-            marketplace: Amazon marketplace (com, co.uk, de, etc.)
+            marketplace: Amazon marketplace (com, in, co.uk, de, etc.)
             debug: If True, save HTML to file for inspection
-            use_browser: If True, use Selenium browser instead of requests
+            headless: If False, show the browser window
         """
         self.marketplace = marketplace
         self.base_url = f"https://www.amazon.{marketplace}/dp/{{asin}}"
-        self.ua = UserAgent()
-        self.session = requests.Session()
         self.debug = debug
-        self.use_browser = use_browser
-        self.driver = None
+        self.headless = headless
+        self._pw = None
+        self._browser = None
 
-        if use_browser:
-            if not SELENIUM_AVAILABLE:
-                raise ImportError("Selenium not installed. Run: pip install selenium webdriver-manager")
-            self._init_browser()
+    # ── Browser lifecycle ─────────────────────────────────────────────────────
 
-    def _init_browser(self):
-        """Initialize Chrome browser with anti-detection options."""
-        options = Options()
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--disable-infobars")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=options)
-
-        # Remove webdriver flag
-        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-    def _fetch_page_browser(self, asin: str) -> Optional[str]:
-        """Fetch page using Selenium browser."""
-        url = self.base_url.format(asin=asin)
-
-        try:
-            self.driver.get(url)
-            # Wait for initial page load
-            time.sleep(2)
-
-            # Scroll down to trigger lazy loading
-            self.driver.execute_script("window.scrollTo(0, 500);")
-            time.sleep(1)
-
-            # Wait for product title to appear
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "productTitle"))
-                )
-            except:
-                pass
-
-            # Try to wait for price element
-            try:
-                WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "a-price"))
-                )
-            except:
-                pass
-
-            # Additional wait for dynamic content
-            time.sleep(2)
-
-            return self.driver.page_source
-        except Exception as e:
-            print(f"Browser error for ASIN {asin}: {e}")
-            return None
+    def _launch(self):
+        self._pw = sync_playwright().__enter__()
+        self._browser = self._pw.chromium.launch(
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
 
     def close(self):
-        """Close the browser if open."""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+        """Close the browser."""
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._pw.__exit__(None, None, None)
+        except Exception:
+            pass
+        self._pw = self._browser = None
 
-    def _get_headers(self) -> dict:
-        """Generate request headers with random user agent."""
-        return {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
-        }
+    # ── Page fetching ─────────────────────────────────────────────────────────
 
     def _fetch_page(self, asin: str) -> Optional[str]:
         """
-        Fetch the Amazon product page HTML.
+        Fetch the Amazon product page HTML using Playwright.
 
-        Args:
-            asin: Amazon Standard Identification Number
-
-        Returns:
-            HTML content or None if request fails
+        Replicates the original Selenium browser mode behaviour:
+          navigate → wait 2s → scroll to 500px → wait for #productTitle →
+          wait for .a-price → wait 2s → return page HTML
         """
+        if not self._browser:
+            self._launch()
+
         url = self.base_url.format(asin=asin)
 
+        ctx: BrowserContext = self._browser.new_context(
+            user_agent=_UA,
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+        )
         try:
-            response = self.session.get(
-                url,
-                headers=self._get_headers(),
-                timeout=15
-            )
-            response.raise_for_status()
-            return response.text
-        except requests.RequestException as e:
-            print(f"Error fetching page for ASIN {asin}: {e}")
+            page: Page = ctx.new_page()
+            page.set_default_timeout(30_000)
+            page.add_init_script(_STEALTH)
+
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+
+            # Initial settle — mirrors Selenium's time.sleep(2)
+            page.wait_for_timeout(2_000)
+
+            # Scroll to trigger lazy loading — mirrors Selenium's scrollTo(0, 500)
+            page.evaluate("window.scrollTo(0, 500)")
+            page.wait_for_timeout(1_000)
+
+            # Wait for product title — mirrors Selenium's WebDriverWait(10) for #productTitle
+            try:
+                page.wait_for_selector("#productTitle", timeout=10_000)
+            except Exception:
+                pass
+
+            # Wait for price element — mirrors Selenium's WebDriverWait(5) for .a-price
+            try:
+                page.wait_for_selector(".a-price", timeout=5_000)
+            except Exception:
+                pass
+
+            # Final settle for dynamic content — mirrors Selenium's time.sleep(2)
+            page.wait_for_timeout(2_000)
+
+            html = page.content()
+
+            if self.debug:
+                fname = f"debug_{asin}.html"
+                with open(fname, "w", encoding="utf-8") as f:
+                    f.write(html)
+                print(f"  Debug HTML -> {fname}")
+
+            return html
+
+        except Exception as e:
+            print(f"Browser error for ASIN {asin}: {e}")
             return None
+        finally:
+            ctx.close()
+
+    # ── Parsing ────────────────────────────────────────────────────────────────
+    # All parsing methods are unchanged — they operate on BeautifulSoup HTML.
 
     def _parse_title(self, soup: BeautifulSoup) -> Optional[str]:
         """Extract product title from page."""
-        # Try primary selector
         title_elem = soup.find("span", {"id": "productTitle"})
         if title_elem:
             return title_elem.get_text(strip=True)
 
-        # Try alternate selectors
         title_selectors = [
             ("h1", {"id": "title"}),
             ("h1", {"class": "a-size-large"}),
             ("span", {"class": "product-title-word-break"}),
             ("h1", {}),
         ]
-
         for tag, attrs in title_selectors:
             elem = soup.find(tag, attrs)
             if elem:
@@ -202,7 +190,6 @@ class AmazonScraper:
                 if text and len(text) > 10:
                     return text
 
-        # Try meta tag
         meta_title = soup.find("meta", {"name": "title"})
         if meta_title and meta_title.get("content"):
             return meta_title["content"]
@@ -237,11 +224,9 @@ class AmazonScraper:
             ("span", {"class": "priceToPay"}),
             ("span", {"class": "a-price"}),
         ]
-
         for tag, attrs in price_containers:
             container = soup.find(tag, attrs)
             if container:
-                # Look for offscreen price first
                 offscreen = container.find("span", {"class": "a-offscreen"})
                 if offscreen:
                     price_text = offscreen.get_text(strip=True)
@@ -270,7 +255,6 @@ class AmazonScraper:
             r'"price":\s*"?₹?\s*([\d,]+(?:\.\d{2})?)"?',
             r'data-price="([\d.]+)"',
         ]
-
         for pattern in price_patterns:
             match = re.search(pattern, html_str)
             if match:
@@ -278,8 +262,7 @@ class AmazonScraper:
                 try:
                     price_value = float(price_num)
                     if price_value > 0:
-                        price_text = f"₹{match.group(1)}"
-                        return price_text, price_value
+                        return f"₹{match.group(1)}", price_value
                 except ValueError:
                     continue
 
@@ -287,11 +270,8 @@ class AmazonScraper:
 
     def _extract_price_value(self, price_text: str) -> Optional[float]:
         """Extract numeric value from price string."""
-        # Remove currency symbols and whitespace
         cleaned = re.sub(r'[^\d.,]', '', price_text)
-        # Remove commas (handles both 1,000 and 1,00,000 formats)
         cleaned = cleaned.replace(",", "")
-        # Extract the number
         match = re.search(r'[\d]+\.?\d*', cleaned)
         if match:
             try:
@@ -315,7 +295,7 @@ class AmazonScraper:
             "sub_bsr": None,
             "sub_bsr_value": None,
             "sub_category": None,
-            "all_bsr": []
+            "all_bsr": [],
         }
 
         # Pattern to find all BSR entries: #123 in Category Name
@@ -355,26 +335,23 @@ class AmazonScraper:
             if len(category) < 3 or category.lower() in ["see top 100", "see top"]:
                 continue
 
-            bsr_entry = {
+            result["all_bsr"].append({
                 "rank": rank_value,
                 "category": category,
-                "display": f"#{rank} in {category}"
-            }
-            result["all_bsr"].append(bsr_entry)
+                "display": f"#{rank} in {category}",
+            })
 
         # Sort by rank (lowest first)
         result["all_bsr"].sort(key=lambda x: x["rank"])
 
-        # Determine main category (highest rank number = broadest category)
-        # and sub-category (lowest rank number = most specific)
+        # Main category: highest rank number (broadest)
+        # Sub-category: lowest rank number (most specific)
         if result["all_bsr"]:
-            # Main category is typically the one with highest rank (broadest)
             main = max(result["all_bsr"], key=lambda x: x["rank"])
             result["main_bsr"] = main["display"]
             result["main_bsr_value"] = main["rank"]
             result["main_category"] = main["category"]
 
-            # Sub-category is the one with lowest rank (most specific)
             sub = min(result["all_bsr"], key=lambda x: x["rank"])
             if sub != main:
                 result["sub_bsr"] = sub["display"]
@@ -395,27 +372,15 @@ class AmazonScraper:
         fulfilled_by = None
 
         # Method 1: Tabular buybox (Amazon India layout)
-        # Layout: "Ships from: Amazon" / "Sold by: RetailEZ Pvt Ltd"
         tabular = soup.find("div", {"id": "tabular-buybox"})
         if tabular:
-            rows = tabular.find_all("tr") if tabular.find("table") else []
-            # Also try div-based rows
-            if not rows:
-                rows = tabular.find_all("div", {"class": "tabular-buybox-text"})
-
             text = tabular.get_text(" ", strip=True)
-
-            # Extract "Ships from"
             ships_match = re.search(r'Ships from\s+(.+?)(?:Sold by|Gift|Payment|$)', text, re.IGNORECASE)
             if ships_match:
                 ships_from = ships_match.group(1).strip()
-
-            # Extract "Sold by"
             sold_match = re.search(r'Sold by\s+(.+?)(?:Gift|Payment|Ships|$)', text, re.IGNORECASE)
             if sold_match:
                 seller = sold_match.group(1).strip()
-
-            # Check for "Fulfilled by" in text
             fulfilled_match = re.search(r'Fulfilled by\s+(.+?)(?:\.|,|Gift|Payment|$)', text, re.IGNORECASE)
             if fulfilled_match:
                 fulfilled_by = fulfilled_match.group(1).strip()
@@ -458,12 +423,14 @@ class AmazonScraper:
             if sold_match:
                 seller = sold_match.group(1).strip()
 
-        # If ships_from is set but fulfilled_by is not, derive it
+        # Derive fulfilled_by from ships_from if not set
         if ships_from and not fulfilled_by:
             if "amazon" in ships_from.lower():
                 fulfilled_by = "Amazon"
 
         return seller, ships_from, fulfilled_by
+
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     def scrape(self, asin: str) -> ProductData:
         """
@@ -478,25 +445,22 @@ class AmazonScraper:
         url = self.base_url.format(asin=asin)
         result = ProductData(asin=asin, url=url)
 
-        # Use browser or requests based on setting
-        if self.use_browser:
-            html = self._fetch_page_browser(asin)
-        else:
-            html = self._fetch_page(asin)
+        html = self._fetch_page(asin)
 
         if not html:
             result.error = "Failed to fetch page"
             return result
 
-        # Save HTML for debugging
         if self.debug:
-            with open(f"debug_{asin}.html", "w", encoding="utf-8") as f:
+            fname = f"debug_{asin}.html"
+            with open(fname, "w", encoding="utf-8") as f:
                 f.write(html)
 
         soup = BeautifulSoup(html, "lxml")
 
         # Check for CAPTCHA or bot detection
-        if "Enter the characters you see below" in html or "api-services-support@amazon.com" in html:
+        if ("Enter the characters you see below" in html
+                or "api-services-support@amazon.com" in html):
             result.error = "Bot detection triggered - CAPTCHA required"
             return result
 
@@ -531,13 +495,9 @@ class AmazonScraper:
         """
         results = []
         for i, asin in enumerate(asins):
-            result = self.scrape(asin)
-            results.append(result)
-
-            # Add delay between requests (with some randomization)
+            results.append(self.scrape(asin))
             if i < len(asins) - 1:
                 time.sleep(delay + random.uniform(0, 1))
-
         return results
 
 
@@ -547,7 +507,7 @@ def scrape_asin(asin: str, marketplace: str = "com") -> ProductData:
 
     Args:
         asin: Amazon Standard Identification Number
-        marketplace: Amazon marketplace (com, co.uk, de, etc.)
+        marketplace: Amazon marketplace (com, in, co.uk, de, etc.)
 
     Returns:
         ProductData object with scraped information
