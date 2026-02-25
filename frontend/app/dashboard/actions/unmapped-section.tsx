@@ -8,13 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import type { UnmappedProduct } from "@/lib/api"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-
-interface UnmappedProduct {
-  product_id: number; sku_code: string; product_name: string
-  missing_portals: string; missing_portal_slugs: string; missing_count: number
-}
 
 type Step = "form" | "confirm"
 
@@ -83,9 +79,9 @@ export function UnmappedSection({ unmapped }: { unmapped: UnmappedProduct[] }) {
     }
   }
 
-  // Build display name from slug
+  // Build display name from slug: "amazon_pi" → "Amazon PI"
   const displayName = (slug: string) =>
-    slug.charAt(0).toUpperCase() + slug.slice(1).replace(/_/g, " ")
+    slug.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
 
   return (
     <>

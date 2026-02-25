@@ -34,7 +34,7 @@ export default async function DashboardPage() {
 
       <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard label="Total Revenue"  value={formatCurrency(summary.total_revenue)} />
-        <MetricCard label="Net Revenue"    value={formatCurrency(summary.total_net_revenue)} />
+        <MetricCard label="Net Revenue"    value={formatCurrency(summary.total_net_revenue ?? 0)} />
         <MetricCard label="Total Quantity" value={formatNumber(summary.total_quantity)} />
         <MetricCard label="Records"        value={formatNumber(summary.record_count)} />
       </section>

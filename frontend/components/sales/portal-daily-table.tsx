@@ -3,6 +3,7 @@
 import { format, parseISO } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PortalDailyResponse, PortalDailyRow } from "@/lib/api";
+import { fmtRevenue } from "@/lib/format";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -13,13 +14,6 @@ function fmtDate(iso: string) {
 function fmtAsp(v: number | null) {
   if (v == null) return "—";
   return `₹${v.toFixed(0)}`;
-}
-
-function fmtValue(v: number) {
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
-  if (v >= 1e3) return `₹${(v / 1e3).toFixed(1)} K`;
-  return `₹${Math.round(v)}`;
 }
 
 function unitCell(units: number | null | undefined) {
@@ -144,7 +138,7 @@ export function PortalDailyTable({ data, loading, portalSelected }: Props) {
                   {row.mtd_units.toLocaleString("en-IN")}
                 </td>
                 <td className="py-1.5 px-3 text-right text-orange-400 font-semibold font-mono tabular-nums">
-                  {fmtValue(row.mtd_value)}
+                  {fmtRevenue(row.mtd_value)}
                 </td>
               </tr>
             ))}
@@ -169,7 +163,7 @@ export function PortalDailyTable({ data, loading, portalSelected }: Props) {
                 {rows.reduce((s, r) => s + r.mtd_units, 0).toLocaleString("en-IN")}
               </td>
               <td className="py-2 px-3 text-right font-bold text-orange-400 font-mono tabular-nums">
-                {fmtValue(rows.reduce((s, r) => s + r.mtd_value, 0))}
+                {fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0))}
               </td>
             </tr>
           </tfoot>

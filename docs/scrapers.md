@@ -1,6 +1,6 @@
 # Scrapers — How They Work
 
-**Last updated:** 2026-02-24
+**Last updated:** 2026-02-25
 
 ---
 
@@ -20,13 +20,27 @@ GitHub Actions workflows (`.github/workflows/scraper-*.yml`) run EasyEcom, Zepto
 ```
 orchestrator.py
   └── for each portal scraper:
-        scraper.run(report_date)   ← login → download → logout (with retry)
-        excel_parser.parse_sales() ← extract rows from the downloaded file
+        scraper.run(report_date)        ← login → download → logout (with retry)
+        excel_parser.parse_sales()      ← extract rows from the downloaded file
         data_transformer.transform_sales_rows() ← normalise + resolve IDs
-        _upsert_sales() / _upsert_inventory() ← ON CONFLICT DO UPDATE
-        _log_scrape() ← write to scraping_logs table
+        _upsert_sales()                 ← city_daily_sales (ON CONFLICT DO UPDATE)
+        _upsert_daily_sales()           ← daily_sales aggregated (dashboard reads this)
+        _upsert_inventory()             ← inventory_snapshots (if parser supports it)
+        _log_scrape()                   ← write to import_logs table
   └── notify_scraping_complete() ← Slack summary
 ```
+
+### Backfill entry point — `populate_portal_data()`
+
+The CI workflows (and `scripts/populate_db.py`) use `populate_portal_data()` rather than the full `run()` function. It skips the browser scraping step and goes directly to parse → transform → upsert, using files already present in `data/raw/<portal>/`:
+
+```python
+from scrapers.orchestrator import populate_portal_data
+result = populate_portal_data("blinkit", date(2026, 2, 10))
+# result: {"status": "success", "records_imported": 142, "files": [...]}
+```
+
+Writes to both `city_daily_sales` and `daily_sales`. Status values: `"success"`, `"failed"`, `"no_parser"`, `"no_file"`.
 
 ---
 

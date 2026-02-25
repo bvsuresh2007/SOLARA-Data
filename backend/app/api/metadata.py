@@ -3,34 +3,28 @@ import logging
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.metadata import Portal, City, Warehouse
 from ..models.inventory import ImportLog
-from fastapi import HTTPException
 
 from ..schemas.metadata import (
     PortalOut, CityOut, WarehouseOut,
     ActionItemsResponse, PortalImportHealth, PortalCoverage, UnmappedProduct,
     PortalSkuGap, ImportFailure, CreatePortalMappingRequest,
 )
+from ..config import settings
 from ..schemas.inventory import ImportLogOut
 
 logger = logging.getLogger(__name__)
 
-# Locate mapping_gaps.csv relative to this file.
-# In Docker: __file__ = /app/app/api/metadata.py → parents[2] = /app/ (data volume at /app/data/)
-# Locally:   __file__ = <root>/backend/app/api/metadata.py → parents[3] = <root>/
+
 def _find_gaps_csv() -> Path | None:
-    here = Path(__file__).resolve()
-    for depth in (2, 3, 4):
-        candidate = here.parents[depth] / "data" / "source" / "mapping_gaps.csv"
-        if candidate.exists():
-            return candidate
-    return None
+    p = Path(settings.source_data_path) / "mapping_gaps.csv"
+    return p if p.exists() else None
 
 router = APIRouter()
 
@@ -200,7 +194,7 @@ def get_action_items(db: Session = Depends(get_db)):
 
 
 @router.get("/import-failures", response_model=List[ImportFailure])
-def get_import_failures(limit: int = Query(100, le=500), db: Session = Depends(get_db)):
+def get_import_failures(limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     rows = db.execute(text("""
         SELECT
             il.id,

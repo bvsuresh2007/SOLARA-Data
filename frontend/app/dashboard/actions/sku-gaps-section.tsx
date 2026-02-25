@@ -8,15 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import type { PortalSkuGap, Product } from "@/lib/api"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-
-interface PortalSkuGap {
-  portal: string; portal_sku: string; portal_name: string
-  matched_sol_sku: string; matched_name: string
-  score: number; status: string
-}
-interface Product { id: number; sku_code: string; product_name: string }
 
 type Step = "form" | "confirm"
 
@@ -147,7 +141,7 @@ export function SkuGapsSection({ skuGaps }: { skuGaps: PortalSkuGap[] }) {
               </TableHeader>
               <TableBody>
                 {skuGaps.map((row, i) => (
-                  <TableRow key={`${row.portal}-${row.portal_sku}-${i}`} className="border-zinc-800/50">
+                  <TableRow key={`${row.portal}-${row.portal_sku}`} className="border-zinc-800/50">
                     <TableCell className="py-2 px-2 text-zinc-300 capitalize text-sm">{row.portal}</TableCell>
                     <TableCell className="py-2 px-2 font-mono text-xs text-zinc-400">{row.portal_sku}</TableCell>
                     <TableCell className="py-2 px-2 text-zinc-300 text-sm max-w-xs truncate" title={row.portal_name}>{row.portal_name}</TableCell>

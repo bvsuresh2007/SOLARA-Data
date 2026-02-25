@@ -58,7 +58,7 @@ class PortalResolver:
         return self._sku_cache[sku]
 
     def city_id(self, city_name: str) -> Optional[int]:
-        name = city_name.strip()
+        name = city_name.lower().strip()
         if name not in self._city_cache:
             row = self._db.query(City).filter(City.name == name).first()
             self._city_cache[name] = row.id if row else None

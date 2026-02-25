@@ -6,23 +6,8 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SalesByDimension } from "@/lib/api";
-
-const COLORS = [
-  "#f97316", // orange  — Swiggy
-  "#3b82f6", // blue    — Blinkit
-  "#22c55e", // green   — Amazon
-  "#a855f7", // purple  — Zepto
-  "#eab308", // yellow  — Flipkart
-  "#ec4899", // pink    — Myntra
-  "#71717a", // zinc    — others
-];
-
-function fmtRevenue(v: number): string {
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(1)}Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(1)}L`;
-  if (v >= 1e3) return `₹${(v / 1e3).toFixed(0)}K`;
-  return `₹${v}`;
-}
+import { fmtRevenue } from "@/lib/format";
+import { CHART_COLORS, TOOLTIP_STYLE } from "@/lib/chart-colors";
 
 interface Props {
   data: SalesByDimension[];
@@ -53,16 +38,11 @@ export function PortalBreakdown({ data }: Props) {
                 paddingAngle={2}
               >
                 {sorted.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip
-                contentStyle={{
-                  backgroundColor: "#18181b",
-                  border: "1px solid #3f3f46",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
+                contentStyle={TOOLTIP_STYLE}
                 formatter={(v: number, name: string) => [
                   `${fmtRevenue(v)} (${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%)`,
                   name,
@@ -77,7 +57,7 @@ export function PortalBreakdown({ data }: Props) {
                 <div className="flex items-center gap-2">
                   <span
                     className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                    style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
                   />
                   <span className="text-zinc-400">{d.dimension_name}</span>
                 </div>
@@ -119,18 +99,13 @@ export function PortalBreakdown({ data }: Props) {
                 width={70}
               />
               <Tooltip
-                contentStyle={{
-                  backgroundColor: "#18181b",
-                  border: "1px solid #3f3f46",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
+                contentStyle={TOOLTIP_STYLE}
                 formatter={(v: number) => [fmtRevenue(v), "Revenue"]}
                 cursor={{ fill: "#27272a" }}
               />
               <Bar dataKey="total_revenue" radius={[0, 4, 4, 0]} label={{ position: "right", formatter: fmtRevenue, fill: "#71717a", fontSize: 11 }}>
                 {sorted.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                 ))}
               </Bar>
             </BarChart>

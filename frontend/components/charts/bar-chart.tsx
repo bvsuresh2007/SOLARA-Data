@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { TOOLTIP_STYLE } from "@/lib/chart-colors";
 
 interface DataPoint { name: string; value: number }
 
@@ -27,7 +28,6 @@ export default function SalesBarChart({
 
   const axisStyle = { fontSize: 11, fill: "#71717a" };
   const gridColor = "#3f3f46";
-  const tooltipStyle = { backgroundColor: "#18181b", border: "1px solid #3f3f46", borderRadius: 8 };
 
   if (horizontal) {
     return (
@@ -36,7 +36,7 @@ export default function SalesBarChart({
           <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridColor} />
           <XAxis type="number" tickFormatter={fmt} tick={axisStyle} />
           <YAxis dataKey="name" type="category" tick={axisStyle} width={100} />
-          <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={tooltipStyle} />
+          <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} />
           <Bar dataKey={dataKey} fill={color} radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -49,7 +49,7 @@ export default function SalesBarChart({
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
         <XAxis dataKey="name" tick={axisStyle} angle={-20} textAnchor="end" />
         <YAxis tickFormatter={fmt} tick={axisStyle} />
-        <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={tooltipStyle} />
+        <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} />
         <Bar dataKey={dataKey} fill={color} radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>

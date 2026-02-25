@@ -16,7 +16,7 @@ This prevents both:
 The DB-level UNIQUE constraints are a second safety net for concurrent inserts.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -92,7 +92,7 @@ def _log_import(
         source_type=source_type,
         portal_id=portal_id,
         import_date=import_date,
-        end_time=datetime.utcnow(),
+        end_time=datetime.now(timezone.utc),
         status=status,
         records_imported=records_imported,
         error_message=error_message,
@@ -116,6 +116,8 @@ def _log_import(
 def import_sales(body: DailySalesImportIn, db: Session = Depends(get_db)):
     if not body.rows:
         raise HTTPException(status_code=400, detail="rows list is empty")
+    if len(body.rows) > 10_000:
+        raise HTTPException(status_code=400, detail="Too many rows (max 10,000 per request)")
 
     duplicates = _find_sales_duplicates(db, body.rows)
     if duplicates:
@@ -189,6 +191,8 @@ def import_sales(body: DailySalesImportIn, db: Session = Depends(get_db)):
 def import_inventory(body: InventoryImportIn, db: Session = Depends(get_db)):
     if not body.rows:
         raise HTTPException(status_code=400, detail="rows list is empty")
+    if len(body.rows) > 10_000:
+        raise HTTPException(status_code=400, detail="Too many rows (max 10,000 per request)")
 
     duplicates = _find_inventory_duplicates(db, body.rows)
     if duplicates:

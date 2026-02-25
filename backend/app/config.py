@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Data paths
     raw_data_path: str = "./data/raw"
     processed_data_path: str = "./data/processed"
+    source_data_path: str = "./data/source"
+
+    # Database SSL — set DB_SSL=true for Supabase/cloud Postgres; false for local Docker
+    db_ssl: bool = False
 
     def get_db_url(self) -> str:
         if self.database_url:

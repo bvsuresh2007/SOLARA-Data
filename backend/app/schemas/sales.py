@@ -34,10 +34,10 @@ class SalesDataOut(BaseModel):
 
 class SalesSummary(BaseModel):
     total_revenue: float
-    total_net_revenue: float
+    total_net_revenue: Optional[float] = None   # not yet in DB schema
     total_quantity: float
-    total_orders: int
-    total_discount: float
+    total_orders: Optional[int] = None          # not yet in DB schema
+    total_discount: Optional[float] = None      # not yet in DB schema
     record_count: int
 
 
@@ -45,10 +45,10 @@ class SalesByDimension(BaseModel):
     dimension_id: int
     dimension_name: str
     total_revenue: float
-    total_net_revenue: float
+    total_net_revenue: Optional[float] = None   # not yet in DB schema
     total_quantity: float
-    total_orders: int
-    record_count: int
+    total_orders: Optional[int] = None          # not yet in DB schema
+    record_count: Optional[int] = None          # not yet in DB schema
 
 
 class SalesTrend(BaseModel):

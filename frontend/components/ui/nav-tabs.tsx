@@ -17,7 +17,9 @@ export function NavTabs() {
   return (
     <nav className="flex gap-4 text-sm font-medium">
       {NAV_ITEMS.map(({ label, href }) => {
-        const isActive = pathname === href;
+        const isActive = href === "/dashboard"
+          ? pathname === href
+          : pathname.startsWith(href);
         return (
           <Link
             key={href}

@@ -5,15 +5,8 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SalesByCategory } from "@/lib/api";
-
-function fmtRevenue(v: number): string {
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(1)}Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(1)}L`;
-  if (v >= 1e3) return `₹${(v / 1e3).toFixed(0)}K`;
-  return `₹${v}`;
-}
-
-const CAT_COLORS = ["#f97316", "#3b82f6", "#22c55e", "#a855f7", "#eab308", "#ec4899", "#71717a"];
+import { fmtRevenue } from "@/lib/format";
+import { CHART_COLORS, TOOLTIP_STYLE } from "@/lib/chart-colors";
 
 interface Props {
   data: SalesByCategory[];
@@ -51,12 +44,7 @@ export function CategoryChart({ data }: Props) {
               width={150}
             />
             <Tooltip
-              contentStyle={{
-                backgroundColor: "#18181b",
-                border: "1px solid #3f3f46",
-                borderRadius: "8px",
-                fontSize: "12px",
-              }}
+              contentStyle={TOOLTIP_STYLE}
               formatter={(v: number, _: string, item) => {
                 const p = item.payload as SalesByCategory | undefined;
                 return [`${fmtRevenue(v)}${p ? ` · ${p.product_count} SKUs` : ""}`, "Revenue"];
@@ -74,7 +62,7 @@ export function CategoryChart({ data }: Props) {
               }}
             >
               {sorted.map((_, i) => (
-                <Cell key={i} fill={CAT_COLORS[i % CAT_COLORS.length]} />
+                <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
               ))}
             </Bar>
           </BarChart>

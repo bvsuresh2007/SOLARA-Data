@@ -68,7 +68,15 @@ export default function UploadPage() {
   const selectedTypeInfo = fileTypes.find((t) => t.value === selectedType);
 
   function clearResult() { setResult(null); setParseError(null); setNetworkError(null); }
-  function pickFile(f: File) { setFile(f); clearResult(); }
+  function pickFile(f: File) {
+    const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["xlsx", "xls", "csv"].includes(ext)) {
+      clearResult();
+      setNetworkError(`Unsupported file type ".${ext}". Please upload an .xlsx, .xls, or .csv file.`);
+      return;
+    }
+    setFile(f); clearResult();
+  }
   function onDragOver(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(true); }
   function onDragLeave(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(false); }
   function onDrop(e: DragEvent<HTMLDivElement>) {
@@ -81,6 +89,10 @@ export default function UploadPage() {
 
   async function handleUpload() {
     if (!file || !selectedType || uploading) return;
+    if (file.size > 50 * 1024 * 1024) {
+      setNetworkError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 50 MB.`);
+      return;
+    }
     setUploading(true); clearResult();
     const form = new FormData(); form.append("file", file);
     try {
@@ -89,7 +101,8 @@ export default function UploadPage() {
       if (res.status === 422) setParseError(data.detail ?? data);
       else if (res.ok) setResult(data as UploadResult);
       else setNetworkError(`Server error ${res.status}: ${data?.detail ?? "unknown error"}`);
-    } catch {
+    } catch (err) {
+      console.error("[Upload] network error:", err);
       setNetworkError("Network error — could not reach the backend.");
     } finally { setUploading(false); }
   }

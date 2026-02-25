@@ -5,16 +5,10 @@ import { ChevronUp, ChevronDown, Search } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { SalesByDimension } from "@/lib/api";
+import { fmtRevenue } from "@/lib/format";
 
 type SortKey = "total_revenue" | "total_quantity" | "asp" | "share";
 type SortDir = "asc" | "desc";
-
-function fmtRevenue(v: number): string {
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
-  if (v >= 1e3) return `₹${(v / 1e3).toFixed(1)} K`;
-  return `₹${Math.round(v)}`;
-}
 
 function fmtNum(v: number): string {
   return new Intl.NumberFormat("en-IN").format(Math.round(v));
@@ -130,6 +124,11 @@ export function ProductTable({ data, totalRevenue }: Props) {
           </table>
           {rows.length === 0 && (
             <p className="text-center text-zinc-600 text-sm py-8">No products found</p>
+          )}
+          {rows.length > 50 && (
+            <p className="text-xs text-zinc-600 mt-3 px-1">
+              Showing 50 of {rows.length} products{search ? ` matching "${search}"` : ""}.
+            </p>
           )}
         </div>
       </CardContent>
