@@ -4,3 +4,14 @@ openpyxl==3.1.2
 requests==2.32.3
 psycopg2-binary==2.9.9
 sqlalchemy==2.0.30
+
+# Google APIs — Drive profile sync, Gmail OTP
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.126.0
+
+# TOTP — Amazon PI 2FA
+pyotp==2.9.0
+
+# Env loading
+python-dotenv==1.0.1
