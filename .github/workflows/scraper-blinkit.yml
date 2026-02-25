@@ -83,6 +83,7 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
+          pip install -r backend/requirements.txt -q
           python - <<'EOF'
           import sys, os
           from datetime import date, timedelta

@@ -1,0 +1,109 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+env:
+  PROJECT_ID: solara-automation
+  REGION: asia-south1
+  REGISTRY: asia-south1-docker.pkg.dev
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build & Push Backend Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/backend:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/backend:latest \
+            ./backend
+
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/backend:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/backend:latest
+
+      - name: Deploy Backend to Cloud Run
+        run: |
+          gcloud run deploy solara-backend \
+            --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/backend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 2 \
+            --set-env-vars DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            --quiet
+
+      - name: Print Backend URL
+        run: |
+          URL=$(gcloud run services describe solara-backend \
+            --region ${{ env.REGION }} \
+            --format="value(status.url)")
+          echo "Backend deployed at: $URL"
+          echo "BACKEND_URL=$URL" >> $GITHUB_ENV
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-22.04
+    needs: deploy-backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build & Push Frontend Image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:latest \
+            ./frontend
+
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:latest
+
+      - name: Deploy Frontend to Cloud Run
+        run: |
+          gcloud run deploy solara-frontend \
+            --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 2 \
+            --set-env-vars NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }} \
+            --quiet
+
+      - name: Print Frontend URL
+        run: |
+          URL=$(gcloud run services describe solara-frontend \
+            --region ${{ env.REGION }} \
+            --format="value(status.url)")
+          echo "Frontend deployed at: $URL"
