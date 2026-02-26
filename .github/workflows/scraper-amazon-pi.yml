@@ -75,12 +75,6 @@ jobs:
               sys.exit(1)
           EOF
 
-      - name: Disable IPv6 (GitHub Actions runners have no outbound IPv6)
-        if: success()
-        run: |
-          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
-          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
-
       - name: Populate DB from downloaded data
         if: success()
         env:
@@ -94,9 +88,24 @@ jobs:
         run: |
           pip install -r backend/requirements.txt -q
           python - <<'EOF'
-          import sys, os
+          import sys, os, re
           from datetime import date, timedelta
+          from urllib.parse import urlparse, urlunparse
           sys.path.insert(0, '.')
+
+          # Supabase direct DB (db.<ref>.supabase.co) is IPv6-only on GitHub Actions.
+          # Rewrite to the connection pooler (<ref>.pooler.supabase.com) which has IPv4.
+          _url = os.environ.get("DATABASE_URL", "")
+          if _url:
+              _p = urlparse(_url)
+              _m = re.match(r'^db\.([^.]+)\.supabase\.co$', _p.hostname or "")
+              if _m:
+                  _ref = _m.group(1)
+                  _pooler = f"{_ref}.pooler.supabase.com"
+                  os.environ["DATABASE_URL"] = urlunparse(_p._replace(
+                      netloc=_p.netloc.replace(_p.hostname, _pooler, 1)
+                  ))
+                  print(f"[DB] Using Supabase pooler: {_p.hostname} -> {_pooler}")
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
