@@ -147,6 +147,23 @@ See `.env.example` for all required variables.
 
 ---
 
+## Documentation
+
+Full technical documentation lives in [`docs/`](./docs/README.md):
+
+| Doc | Contents |
+|-----|----------|
+| [`docs/database.md`](./docs/database.md) | Schema reference — all 13 tables, indexes, duplicate prevention |
+| [`docs/scrapers.md`](./docs/scrapers.md) | Portal scrapers — run modes, env vars, session management |
+| [`docs/upload_api.md`](./docs/upload_api.md) | Upload REST API — endpoints, file types, parser registry |
+| [`docs/git_workflows.md`](./docs/git_workflows.md) | GitHub Actions workflows — triggers, secrets, failure handling |
+| [`docs/frontend.md`](./docs/frontend.md) | Next.js architecture, components, API client |
+| [`docs/price-scraper-guide.md`](./docs/price-scraper-guide.md) | Step-by-step guide to running the Amazon ASIN price scraper |
+
+For Claude Code context and project conventions, see [`CLAUDE.md`](./CLAUDE.md).
+
+---
+
 ## License
 
 To be determined.

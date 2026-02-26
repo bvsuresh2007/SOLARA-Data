@@ -207,6 +207,12 @@ See `scrapers/tools/amazon_asin_scraper/README.md` for full usage.
 
 ---
 
+## Documentation
+
+Full technical reference docs live in [`docs/`](./docs/README.md). See [`README.md`](./README.md) for the user-facing project overview and quick-start.
+
+---
+
 ## Merge Notes
 
 The original SOLARA-Data was a Python CLI tool (`main.py`, `src/scraper.py`, `src/slack_notifier.py`) for scraping Amazon ASINs. It has been:
