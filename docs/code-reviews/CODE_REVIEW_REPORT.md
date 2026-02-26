@@ -2,6 +2,352 @@
 
 ---
 
+## Review: 2026-02-25
+
+**Branch:** `backfill/missing-dates`
+**Reviewed by:** Claude Code (automated)
+
+### Files Reviewed
+
+**Modified (14 files):**
+- `backend/app/api/inventory.py`
+- `backend/app/api/metadata.py`
+- `backend/app/schemas/inventory.py`
+- `backend/app/utils/excel_parsers.py`
+- `frontend/app/dashboard/inventory/page.tsx`
+- `frontend/components/tables/data-table.tsx`
+- `frontend/lib/api.ts`
+- `scrapers/amazon_pi_scraper.py`
+- `scrapers/blinkit_scraper.py`
+- `scrapers/easyecom_scraper.py`
+- `scrapers/excel_parser.py`
+- `scrapers/orchestrator.py`
+- `scrapers/swiggy_scraper.py`
+- `scrapers/zepto_scraper.py`
+
+**New / Untracked (6 files):**
+- `.github/workflows/scraper-backfill.yml`
+- `.github/workflows/scraper-easyecom-inventory.yml`
+- `scrapers/easyecom_inventory_scraper.py`
+- `scripts/backfill_missing_dates.py`
+- `scripts/backfill_run_ids.json`
+- `scripts/run_backfill_local.py`
+
+### Executive Summary
+
+This change set adds a multi-portal date-range backfill system (scraper-level `run_range()`, CI workflows, a dispatch/verify CLI tool), a new EasyEcom Manage Inventory scraper, portal name resolution for the UI, Amazon PI Excel parser improvements, and the login-fails-don't-save-session fix that triggered this review.
+
+**Overall quality is high.** The architecture is consistent, the failed-login guard is well-implemented across all 5 scrapers, and the batch upsert logic in the orchestrator correctly prevents duplicate-key conflicts. One critical security issue found (hardcoded credentials), one medium-severity protocol violation (profile uploaded while browser is open), and several low-priority items.
+
+---
+
+### 🔴 Critical Issues
+
+---
+
+#### C-01 · Hardcoded database credentials in `scripts/backfill_missing_dates.py`
+
+**File:** `scripts/backfill_missing_dates.py:62`
+**Issue:** Production PostgreSQL connection string — including password and IPv6 host — hardcoded in source code.
+
+```python
+DATABASE_URL = "postgresql://postgres:6LkqSuEXJ0zNLOCP@[2406:da1c:f42:ae08:77f3:eb0d:4af6:3eaf]:5432/postgres"
+```
+
+**Risk:** Anyone with repo access (including CI logs, forks, or a future public mirror) can see the production DB password and connect directly. This is also a credential leak if the repo is ever made public.
+
+**Suggested fix:**
+```python
+DATABASE_URL = os.environ["DATABASE_URL"]
+```
+Then pass it via `.env` locally and as a GitHub secret in CI. The script already imports `os` indirectly — just add `import os` at the top.
+
+**Priority:** 🔴 Critical — rotate the DB password immediately; fix before merging.
+
+---
+
+### 🟡 Medium Issues
+
+---
+
+#### M-01 · Profile uploaded while browser is still running — `easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:349-352`
+**Issue:** `upload_profile("easyecom")` is called while the Chromium persistent context is still open, directly contradicting `profile_sync.py`'s documented contract:
+
+> *"Call AFTER closing the browser — Chrome locks the profile while running."*
+
+```python
+self.login()
+login_ok = True
+upload_profile("easyecom")          # ← Browser still open here
+
+self._go_to_inventory_page()        # Browser continues running...
+file_path = self._download_inventory(snapshot_date)
+# ...
+finally:
+    self._close_browser()           # ← Browser closed here (too late)
+```
+
+While the intent is good ("preserve session even if download fails"), uploading mid-run means the zip may contain partially-written Chromium files (network state, session storage) that haven't been flushed yet. This can result in a subtly corrupted profile being pushed to Drive.
+
+**Suggested fix:** Follow the same pattern as the other scrapers — use the `login_ok` guard in `finally` *after* `_close_browser()`. To handle the "preserve on download failure" use-case, use the `result["status"]` to decide:
+```python
+finally:
+    self._close_browser()
+    if login_ok:                    # Only upload after browser is closed
+        upload_profile("easyecom")
+```
+
+**Priority:** 🟡 Medium — corrupts Drive profile subtly; not immediately fatal but will degrade over time.
+
+---
+
+#### M-02 · `scripts/backfill_run_ids.json` should not be committed
+
+**File:** `scripts/backfill_run_ids.json`
+**Issue:** This is a generated state file from a one-off backfill operation. It contains GitHub Actions run IDs for specific portal/date combinations in February 2026. It has no value beyond the specific backfill session that produced it.
+
+Committing ephemeral generated data to the repository:
+- Bloats history
+- Will mislead future developers (the run IDs reference already-completed CI runs)
+- Should be regenerated fresh for each backfill
+
+**Suggested fix:** Add to `.gitignore`:
+```
+scripts/backfill_run_ids.json
+```
+The script already writes this file to a predictable path — it doesn't need to be tracked.
+
+**Priority:** 🟡 Medium — should be resolved before merging.
+
+---
+
+#### M-03 · Non-standard Google Drive import in `easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:28-41`
+**Issue:** Uses a complex `importlib.util` fallback pattern that every other scraper avoids:
+
+```python
+try:
+    from .google_drive_upload import upload_to_drive as _upload_to_drive
+except ImportError:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "google_drive_upload", Path(__file__).parent / "google_drive_upload.py"
+    )
+    try:
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _upload_to_drive = _mod.upload_to_drive
+    except Exception:
+        _upload_to_drive = None
+```
+
+All other scrapers use the simple two-except pattern:
+```python
+try:
+    from scrapers.google_drive_upload import upload_to_drive as _upload_to_drive
+except ImportError:
+    from google_drive_upload import upload_to_drive as _upload_to_drive
+```
+
+**Priority:** 🟡 Medium — functional but inconsistent; makes maintenance harder.
+
+---
+
+#### M-04 · Missing `import logging` at module level — `easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:71`
+**Issue:** `logging` is never imported at the top of the file. Instead, it's accessed via the `__import__()` builtin:
+
+```python
+self._log = __import__("logging").getLogger("scrapers.easyecom_inventory")
+```
+
+This works but is an anti-pattern — `__import__` is not meant for everyday module imports. Every other scraper has `import logging` at the top.
+
+**Suggested fix:** Add `import logging` to the imports block (lines 20-25) and change line 71 to:
+```python
+self._log = logging.getLogger("scrapers.easyecom_inventory")
+```
+
+**Priority:** 🟡 Medium — not a bug, but inconsistent and unexpected.
+
+---
+
+#### M-05 · `populate_all_portal_files` return value semantics unclear for CI failure detection
+
+**File:** `scrapers/orchestrator.py` + `scraper-backfill.yml:102-103`
+**Issue:** The CI workflow fails the job if `result.get("status") == "failed"`:
+
+```python
+result = populate_all_portal_files("amazon_pi")
+if result.get("status") == "failed":
+    sys.exit(1)
+```
+
+But `populate_all_portal_files` is designed to be resilient — it skips 0-byte files and continues past per-file parse errors. If it never returns `{"status": "failed"}` (e.g., always returns `"partial"` or `"success"` even after import failures), then actual data import failures would silently pass the CI check.
+
+**Suggested fix:** Verify the return contract of `populate_all_portal_files` and document when it returns `"failed"` vs `"partial"` vs `"success"`. Consider failing CI on `"partial"` too, or logging a warning at minimum.
+
+**Priority:** 🟡 Medium — could mask real data import failures in CI.
+
+---
+
+### 🟢 Low Issues
+
+---
+
+#### L-01 · `INVENTORY_URL` is a placeholder / best-guess
+
+**File:** `scrapers/easyecom_inventory_scraper.py:55`
+
+```python
+INVENTORY_URL = "https://app.easyecom.io/V2/inventory/manage_inventory.php"
+```
+
+The module docstring explicitly warns: *"NOTE: INVENTORY_URL is a best-guess based on EasyEcom URL patterns. Verify on first run."* If this is wrong, the scraper will fail silently (or with a cryptic error) on the first CI run. This is a known risk but worth flagging before it lands in CI.
+
+**Suggested fix:** Verify the URL manually before merging, or add a URL-validation assertion in `_go_to_inventory_page()` that checks the page loaded expected content.
+
+---
+
+#### L-02 · No start/end date validation in `scripts/run_backfill_local.py`
+
+**File:** `scripts/run_backfill_local.py:96-101`
+
+If `--start` is later than `--end`, the loop in each scraper's `run_range()` simply runs zero iterations — no error is raised. This is a quiet footgun for manual use.
+
+**Suggested fix:**
+```python
+if start_date > end_date:
+    logger.error("--start (%s) must be <= --end (%s)", start_date, end_date)
+    sys.exit(1)
+```
+
+---
+
+#### L-03 · Frontend: `#undefined` if both `portal_name` and `portal_id` are null
+
+**File:** `frontend/app/dashboard/inventory/page.tsx`
+
+The fallback chain `row.portal_name ?? '#' + row.portal_id` produces `"#undefined"` if `portal_name` is `null` and `portal_id` is also `null` or `undefined`.
+
+**Suggested fix:**
+```tsx
+row.portal_name ?? (row.portal_id != null ? `#${row.portal_id}` : '—')
+```
+Same applies for `product_name` / `product_id`.
+
+---
+
+#### L-04 · Zepto backfill job missing `GOOGLE_DRIVE_ROOT_FOLDER_ID`
+
+**File:** `.github/workflows/scraper-backfill.yml:367-373`
+
+The Zepto job's env block omits `GOOGLE_DRIVE_ROOT_FOLDER_ID`, which is present in the Amazon PI, Swiggy, and Blinkit jobs. Zepto uses session-based auth (not profile-based) and its `run_range` may not upload to Drive, so this is likely intentional — but worth a comment confirming it.
+
+---
+
+#### L-05 · Shared EasyEcom profile between sales and inventory scrapers — concurrent run risk
+
+**Files:** `easyecom_scraper.py`, `easyecom_inventory_scraper.py`
+
+Both scrapers use `download_profile("easyecom")` / `upload_profile("easyecom")` — the same Drive file. If the daily sales scraper and the inventory scraper CI jobs overlap in time, both would:
+1. Download the same profile from Drive
+2. Modify it independently
+3. Upload — last writer wins, potentially discarding one session update
+
+Currently the schedules are staggered (`scraper-easyecom-inventory.yml` runs at 10:00 AM IST), but this is fragile if re-runs or manual dispatches overlap.
+
+**Suggested fix (long term):** Use a different profile name for the inventory scraper, e.g. `download_profile("easyecom_inventory")`, with its own Drive zip. Both share the same local `easyecom_profile/` directory for browser state.
+
+---
+
+#### L-06 · `cmd_verify` in `backfill_missing_dates.py` doesn't use its `args` parameter
+
+**File:** `scripts/backfill_missing_dates.py:191`
+
+```python
+def cmd_verify(args):
+    # args is never referenced
+```
+
+Called internally as `cmd_verify(argparse.Namespace())` (empty object) from `cmd_monitor`. Minor signature inconsistency.
+
+---
+
+#### L-07 · `backfill_missing_dates.py` hardcoded date ranges become stale
+
+**File:** `scripts/backfill_missing_dates.py:38-58`
+
+The `PORTAL_CONFIG` missing date lists are hardcoded from a single scan on 2026-02-25. After the backfill completes, this script must not be re-run without updating the date lists, otherwise it will re-dispatch already-filled dates and waste CI minutes.
+
+The "scanned 2026-02-25" comment is good, but consider renaming the script (e.g., `backfill_feb2026.py`) to make clear it's a one-time artifact, not a general-purpose tool. The general-purpose tool is `scraper-backfill.yml`.
+
+---
+
+#### L-08 · f-string table name in SQL query — `backfill_missing_dates.py:87`
+
+**File:** `scripts/backfill_missing_dates.py:87`
+
+```python
+cur.execute(
+    f"""SELECT 1 FROM {table} ds ...""",
+    (portal_db_name, d),
+)
+```
+
+`table` comes from the hardcoded list `["daily_sales", "city_daily_sales"]` so there is no injection risk here, but the pattern looks dangerous at a glance. A future maintainer could accidentally add user-supplied values to that list.
+
+**Suggested fix:** Use `psycopg2.sql` for table name interpolation:
+```python
+from psycopg2 import sql
+cur.execute(
+    sql.SQL("SELECT 1 FROM {} ds JOIN portals p ON ...").format(sql.Identifier(table)),
+    (portal_db_name, d),
+)
+```
+
+---
+
+### Gitignore Check
+
+| File | Should gitignore? |
+|------|-------------------|
+| `scripts/backfill_run_ids.json` | ✅ Yes — ephemeral generated state |
+| `scripts/backfill_missing_dates.py` | No — intentional script |
+| `scripts/run_backfill_local.py` | No — intentional script |
+| `.github/workflows/*.yml` | No — should be committed |
+| `scrapers/easyecom_inventory_scraper.py` | No — source code |
+
+---
+
+### Production Deployment Requirements
+
+Before merging / deploying:
+
+1. 🔴 **Rotate the Supabase/PostgreSQL password** — it is currently exposed in `scripts/backfill_missing_dates.py`. Replace the hardcoded `DATABASE_URL` with `os.environ["DATABASE_URL"]`.
+2. 🟡 Add `scripts/backfill_run_ids.json` to `.gitignore`.
+3. 🟡 Fix the profile upload order in `easyecom_inventory_scraper.py` (upload after `_close_browser()`).
+4. 🟡 Verify `INVENTORY_URL` against the actual EasyEcom Manage Inventory page before CI runs.
+
+### Recommended Action Plan
+
+| Priority | Action |
+|----------|--------|
+| Immediate | Rotate DB password (C-01) |
+| Before merge | Fix `scripts/backfill_missing_dates.py` to read `DATABASE_URL` from env |
+| Before merge | Add `scripts/backfill_run_ids.json` to `.gitignore` |
+| Before merge | Fix profile upload order in `easyecom_inventory_scraper.py` (M-01) |
+| Before first CI run | Verify `INVENTORY_URL` manually (L-01) |
+| Cleanup | Standardise Drive import pattern in `easyecom_inventory_scraper.py` (M-03, M-04) |
+| Nice to have | Add start > end date guard in `run_backfill_local.py` (L-02) |
+| Nice to have | Fix frontend `#undefined` fallback (L-03) |
+
+---
+
 ## Review: 2026-02-21
 
 **Branch:** `claude/merge-solara-projects-Qo5Sd`
@@ -1224,3 +1570,413 @@ The production frontend URL (`solara-frontend-891651347357.asia-south1.run.app`)
 | 🟡 M-2 | Use `db.begin_nested()` savepoint in `_insert_city_sales` to isolate the rollback | 10 min |
 | 🟢 L-2 | Add negative-value guard to `fmtRevenue` in `format.ts` | 2 min |
 | 🟢 L-3 | Move `_parse_date_ymd` import to module top level in `uploads.py` | 1 min |
+
+---
+
+## Review: 2026-02-26
+
+**Branch:** `fix/code-review-issues`
+**Reviewed by:** Claude Code (automated)
+
+### Files Reviewed
+
+**Modified (14 files):**
+1. `backend/app/api/inventory.py`
+2. `backend/app/api/metadata.py`
+3. `backend/app/schemas/inventory.py`
+4. `backend/app/utils/excel_parsers.py`
+5. `frontend/app/dashboard/inventory/page.tsx`
+6. `frontend/components/tables/data-table.tsx`
+7. `frontend/lib/api.ts`
+8. `scrapers/amazon_pi_scraper.py`
+9. `scrapers/blinkit_scraper.py`
+10. `scrapers/easyecom_scraper.py`
+11. `scrapers/excel_parser.py`
+12. `scrapers/orchestrator.py`
+13. `scrapers/swiggy_scraper.py`
+14. `scrapers/zepto_scraper.py`
+
+**New / Untracked (2 files):**
+15. `.github/workflows/scraper-easyecom-inventory.yml`
+16. `scrapers/easyecom_inventory_scraper.py`
+
+---
+
+### Executive Summary
+
+This change set has three main themes:
+
+1. **Portal name resolution in the UI** — `joinedload` was added to the `current_inventory` and `list_scraping_logs` endpoints so `portal_name` and `product_name` are returned alongside raw IDs. The backend schemas and frontend types were updated in lock-step. This is a clean, correct fix that eliminates N+1 queries.
+
+2. **Amazon PI parser improvements** — `parse_amazon_pi` in both `excel_parsers.py` (upload pipeline) and `excel_parser.py` (scraper pipeline) now handles the real long-format report from the Download Center (one row per order, `orderYear`/`orderMonth`/`orderDay` columns) in addition to the legacy wide-format (date-as-column-header) format. Column name matching is now case-insensitive throughout.
+
+3. **New EasyEcom Inventory scraper** — `easyecom_inventory_scraper.py` and its CI workflow `scraper-easyecom-inventory.yml` are new. The scraper downloads the Manage Inventory CSV from EasyEcom, and a new `EasyEcomInventoryParser` in `excel_parser.py` handles its specific format (metadata row + ASIN data).
+
+**Overall quality is good.** The code is consistent with existing patterns, the CI workflow follows the project's established template, and there are no new hardcoded credentials. Several issues require attention before production deployment:
+
+- One critical issue: `_upsert_inventory` lacks the pre-aggregation deduplication that `_upsert_sales` received, making it vulnerable to the same duplicate-key PostgreSQL error on multi-file inventory imports.
+- One medium issue: the `ImportLogOut` schema's `import_date` is typed `date` but the raw SQL in `get_import_failures` casts it to `::text`, creating a type mismatch that will raise a Pydantic validation error if both endpoints share the same schema.
+- Several low-severity issues related to robustness and code hygiene.
+
+---
+
+### Issues by Priority
+
+---
+
+### 🔴 Critical Issues
+
+---
+
+#### C-01 · `_upsert_inventory` missing duplicate-key pre-aggregation — `scrapers/orchestrator.py`
+
+**File:** `scrapers/orchestrator.py:142-164`
+**Issue Type:** Error Handling / Correctness
+
+The `_upsert_sales` function received a critical fix in this PR: pre-aggregating rows that share the same `(portal_id, product_id, city_id, sale_date)` key to prevent the PostgreSQL error `"ON CONFLICT DO UPDATE command cannot affect row a second time"`. However, `_upsert_inventory` did not receive the same treatment:
+
+```python
+def _upsert_inventory(db, rows: list[dict]) -> int:
+    from sqlalchemy.dialects.postgresql import insert
+    from backend.app.models.inventory import InventorySnapshot
+    if not rows:
+        return 0
+    for i in range(0, len(rows), _UPSERT_BATCH):
+        batch = rows[i : i + _UPSERT_BATCH]
+        stmt = insert(InventorySnapshot).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["portal_id", "product_id", "snapshot_date"],
+            ...
+        )
+```
+
+If any two rows in a batch share the same `(portal_id, product_id, snapshot_date)` key — which is possible when parsing a file that contains ASIN-level rows that resolve to the same internal product — PostgreSQL will raise `"cannot affect row a second time"` and the entire batch will fail.
+
+The new `EasyEcomInventoryParser` maps one row per ASIN. If two ASINs resolve to the same `product_id` via `product_portal_mapping`, this error will occur.
+
+**Suggested fix:** Add the same pre-aggregation pattern used in `_upsert_sales`: aggregate numeric fields (summing stock levels) before batching, keyed on `(portal_id, product_id, snapshot_date)`.
+
+**Priority:** 🔴 Critical — will cause silent data loss or runtime error on first multi-ASIN-to-one-product inventory import.
+
+---
+
+### 🟡 Medium Issues
+
+---
+
+#### M-01 · `ImportLogOut.import_date` typed as `date` but raw SQL returns `text` — `backend/app/api/metadata.py` and `backend/app/schemas/inventory.py`
+
+**Files:** `backend/app/api/metadata.py:204-205`, `backend/app/schemas/inventory.py:46`
+**Issue Type:** Type Safety / Potential Runtime Error
+
+The `get_import_failures` endpoint executes raw SQL with explicit text casts:
+
+```sql
+il.import_date::text  AS import_date,
+il.start_time::text   AS start_time,
+```
+
+These are returned as `str` values via `dict(r._mapping)`. However the `ImportLogOut` schema (used by `list_scraping_logs`) has:
+
+```python
+import_date: date
+start_time: datetime
+```
+
+The `get_import_failures` endpoint does NOT use `ImportLogOut` — it uses `ImportFailure` from `metadata.py`, which correctly types these as `str`. This mismatch is currently harmless, but it creates ongoing confusion: if a developer ever switches `get_import_failures` to use `ImportLogOut`, Pydantic will raise a validation error because a `str` cannot be coerced to `date` when `from_attributes = True` is the ORM mode.
+
+**Suggested fix:** Either (a) remove the `::text` casts in `get_import_failures` and let SQLAlchemy return native `date`/`datetime` types, or (b) add a comment in the raw SQL block documenting why the casts are intentional (e.g., to avoid timezone-aware datetime serialization issues).
+
+**Priority:** 🟡 Medium — not currently a runtime error but is a latent type confusion that will surprise the next developer.
+
+---
+
+#### M-02 · `_upsert_inventory` does not batch-deduplicate but `_upsert_sales` does — `scrapers/orchestrator.py`
+
+**File:** `scrapers/orchestrator.py:93-139`
+**Issue Type:** DRY / Consistency
+
+This is the counterpart to C-01 above. The `_upsert_sales` aggregation logic was written inline inside that function with duplicated arithmetic:
+
+```python
+agg[key]["units_sold"] = float(agg[key].get("units_sold") or 0) + float(row.get("units_sold") or 0)
+agg[key]["revenue"]    = float(agg[key].get("revenue") or 0) + float(row.get("revenue") or 0)
+# ... 3 more lines of the same pattern
+```
+
+This is verbose, and the same pattern will need to be repeated in `_upsert_inventory` when C-01 is fixed. Consider extracting a `_pre_aggregate(rows, key_fields, numeric_fields)` helper function to reduce duplication across both upsert functions.
+
+**Priority:** 🟡 Medium — not a bug today, but increases maintenance cost and the probability of future inconsistencies.
+
+---
+
+#### M-03 · Hardcoded email address exposed in exception message — `scrapers/zepto_scraper.py`
+
+**File:** `scrapers/zepto_scraper.py:131`
+**Issue Type:** Security / Information Exposure
+
+```python
+raise RuntimeError("Could not fetch Zepto OTP from automation@solara.in.")
+```
+
+The internal Gmail automation account address is embedded in a plain-text exception message. This message will appear in:
+- CI logs (GitHub Actions), which may be accessible to anyone with repo access
+- Slack failure notifications (if the orchestrator captures the error)
+- Any future log aggregation system
+
+**Suggested fix:** Move the email address to an environment variable (`GMAIL_OTP_ACCOUNT` or similar) and reference it in the message via `os.getenv(...)`. This is consistent with how all other credentials are handled in the project.
+
+**Priority:** 🟡 Medium — low immediate risk (internal tool), but the email address should not be hardcoded in exception strings.
+
+---
+
+#### M-04 · `easyecom_inventory_scraper.py` does not share a base class with other scrapers — `scrapers/easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:61-380`
+**Issue Type:** DRY / Architecture
+
+`EasyecomInventoryScraper` duplicates approximately 90 lines of code that are already present in `EasyecomScraper`:
+- `_init_browser()` (lines 77-99) — identical to `EasyecomScraper._init_browser()` except for the logger name
+- `_close_browser()` (lines 101-110) — byte-for-byte identical
+- `_shot()` (lines 111-117) — byte-for-byte identical
+- `_dismiss_popups()` (lines 122-143) — functionally identical (slightly different log prefix)
+- `login()` (lines 149-193) — identical logic, slightly different timeout for visible mode
+
+The other scrapers (`BlinkitScraper`, `SwiggyScraper`, etc.) inherit from `BaseScraper` to share this boilerplate. The EasyEcom scrapers do not, leading to duplication that will need to be maintained in two places.
+
+**Suggested fix:** Extract the shared EasyEcom browser lifecycle + login logic into a `BaseEasyecomScraper` class, then have both `EasyecomScraper` and `EasyecomInventoryScraper` inherit from it. This mirrors the existing `BaseScraper` pattern.
+
+**Priority:** 🟡 Medium — not a bug, but any future change to login flow or browser setup must be applied in two places.
+
+---
+
+#### M-05 · `populate_all_portal_files` always returns `"success"` even if all files are skipped — `scrapers/orchestrator.py`
+
+**File:** `scrapers/orchestrator.py:302-327`
+**Issue Type:** Error Handling / CI Reliability
+
+When every file in the portal directory is skipped (all zero-byte or all parse errors), `populate_all_portal_files` still returns `{"status": "success", "records_imported": 0}`. The CI workflow in `scraper-easyecom-inventory.yml` only fails the job if `status == "failed"`:
+
+```python
+if result.get("status") == "failed":
+    sys.exit(1)
+```
+
+A scraper that downloads a zero-byte file would produce `records_imported: 0, status: "success"` — silently passing CI while importing nothing into the database.
+
+**Suggested fix:** Return `status: "partial"` (or `"skipped"`) when `total_records == 0` and `skipped_files` is non-empty, so the caller can distinguish "nothing to import" from "successfully imported data". The CI step should also check for zero records.
+
+**Priority:** 🟡 Medium — masks silent data import failures in CI.
+
+---
+
+#### M-06 · `portal_id = 0` would be silently ignored in filter parameters — `backend/app/api/inventory.py` and `backend/app/api/metadata.py`
+
+**Files:** `backend/app/api/inventory.py:53,95,135`, `backend/app/api/metadata.py:61,274`
+**Issue Type:** Correctness / Edge Case
+
+Multiple endpoints use the truthiness check pattern:
+
+```python
+if portal_id:
+    q = q.filter(...)
+```
+
+If `portal_id = 0` is ever passed as a query parameter (which is technically valid for an auto-increment primary key that starts at 1 in practice, but not guaranteed by the schema), the filter is silently skipped and all portals are returned instead. The correct check is:
+
+```python
+if portal_id is not None:
+    q = q.filter(...)
+```
+
+**Priority:** 🟡 Medium — unlikely to be triggered in practice (PKs start at 1), but is a correctness bug that becomes a data leak if portal ID 0 is ever used.
+
+---
+
+### 🟢 Low Issues
+
+---
+
+#### L-01 · Debug screenshot files not covered by `.gitignore` — `scrapers/easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:113`, `.gitignore`
+**Issue Type:** Gitignore / Repository Hygiene
+
+`EasyecomInventoryScraper._shot()` writes debug screenshots to `data/raw/easyecom_inventory/debug_*.png`. The `.gitignore` excludes `data/raw/` (covering the data files) and `debug_*.html` / `debug_*.json` (covering HTML/JSON debug output), but does NOT exclude `debug_*.png` files directly. If the `data/raw/` rule is ever adjusted or overridden, screenshots would be committed.
+
+The other scrapers write screenshots to their own `out_dir` directories which are all under `data/raw/` and therefore covered. This particular issue is low-risk in practice because `data/raw/` is already excluded, but the CI artifact upload step (`path: data/raw/easyecom_inventory/debug_*.png`) in the workflow assumes screenshots land there.
+
+**Suggested fix:** Add `debug_*.png` to `.gitignore` alongside the existing `debug_*.html` and `debug_*.json` entries for completeness and belt-and-suspenders coverage.
+
+**Priority:** 🟢 Low — `data/raw/` coverage means this won't accidentally be committed today.
+
+---
+
+#### ~~L-02 · `INVENTORY_URL` is a best-guess; no validation on navigation — `scrapers/easyecom_inventory_scraper.py`~~ ✅ Fixed
+
+**Resolved 2026-02-26** — `INVENTORY_URL` verified and updated by the developer on first visible run.
+
+**Priority:** 🟢 Low — will fail loudly on first run if the URL is wrong; the error message is descriptive enough for diagnosis.
+
+---
+
+#### L-03 · `EasyEcomInventoryParser` imports `re` inside a method — `scrapers/excel_parser.py`
+
+**File:** `scrapers/excel_parser.py:357`
+**Issue Type:** Code Style / Performance
+
+```python
+def _snapshot_date_from_file(self, path: Path) -> date:
+    import re as _re
+    ...
+```
+
+The `re` module is imported inside the method body. In Python, `import` statements inside functions incur a lookup overhead on every call (though `sys.modules` caching makes this minimal). More importantly, it is inconsistent with the rest of the file where `import` statements are at the top of the module.
+
+**Suggested fix:** Move `import re` to the top of `scrapers/excel_parser.py`, alongside the other standard library imports (`logging`, `datetime`, `pathlib`, `typing`).
+
+**Priority:** 🟢 Low — no functional impact; style inconsistency only.
+
+---
+
+#### L-04 · `run()` parameter name differs from all other scrapers — `scrapers/easyecom_inventory_scraper.py`
+
+**File:** `scrapers/easyecom_inventory_scraper.py:324`
+**Issue Type:** Consistency / API Contract
+
+```python
+def run(self, snapshot_date: date = None) -> dict:
+```
+
+All other scrapers use `report_date` as the parameter name for `run()`. The orchestrator's `populate_portal_data` function passes `report_date` positionally as a keyword argument in its interface contract. While `EasyecomInventoryScraper` is currently called with `snapshot_date=snapshot_date` explicitly in the CI workflow (so this doesn't break anything), it breaks the implicit interface contract expected by the orchestrator if it were ever added to the `SCRAPERS` list.
+
+**Suggested fix:** Rename the parameter to `report_date` for consistency, or add `report_date` as an alias: `def run(self, report_date: date = None, snapshot_date: date = None)`.
+
+**Priority:** 🟢 Low — not a current bug (the scraper is called explicitly with `snapshot_date=`), but would break if added to `SCRAPERS` list.
+
+---
+
+#### L-05 · Frontend: `revalidate = 300` conflicts with `cache: "no-store"` in `api.ts` — `frontend/app/dashboard/inventory/page.tsx`
+
+**File:** `frontend/app/dashboard/inventory/page.tsx:9`, `frontend/lib/api.ts:10`
+**Issue Type:** Configuration Inconsistency
+
+The inventory page sets a 5-minute ISR revalidation period:
+```typescript
+export const revalidate = 300;
+```
+
+But all fetch calls in `api.ts` use `cache: "no-store"`:
+```typescript
+const res = await fetch(url.toString(), { cache: "no-store" });
+```
+
+In Next.js 14, `cache: "no-store"` at the fetch level overrides `revalidate` at the segment level for that specific request. This means the page will re-fetch from the API on every request anyway, making `revalidate = 300` a no-op. The page is effectively uncached despite the `revalidate` declaration.
+
+**Suggested fix:** Either remove `revalidate = 300` (since `cache: "no-store"` already opts out of caching), or remove `cache: "no-store"` from the relevant API calls and rely on the segment-level revalidation. The choice depends on how stale inventory data is acceptable to be.
+
+**Priority:** 🟢 Low — no functional bug (the data is always fresh), but the `revalidate = 300` declaration is misleading.
+
+---
+
+#### L-06 · `AmazonPIParser.parse_sales` in `excel_parser.py` uses `order_count: _i(row.get("orderQuantity", 1))` — `scrapers/excel_parser.py`
+
+**File:** `scrapers/excel_parser.py:441`
+**Issue Type:** Data Accuracy
+
+```python
+"order_count": _i(row.get("orderQuantity", 1)),
+```
+
+`orderQuantity` is the number of units ordered, not the number of orders. Using it as `order_count` double-counts: a single order for 3 units would be reported as 3 orders. The upload-pipeline parser (`excel_parsers.py`) correctly sets `order_count: 1` for each long-format row (since each row represents a single sale event). The scraper-pipeline parser should match this.
+
+**Suggested fix:** Change to `"order_count": 1` for the long-format Amazon PI report, matching the behavior of the upload pipeline's `parse_amazon_pi`.
+
+**Priority:** 🟢 Low — affects dashboard order-count metrics but not revenue or units figures.
+
+---
+
+#### L-07 · `_find_gaps_csv()` reads an unbounded file into memory — `backend/app/api/metadata.py`
+
+**File:** `backend/app/api/metadata.py:168-183`
+**Issue Type:** Performance
+
+```python
+with open(gaps_path, newline="", encoding="utf-8") as fh:
+    for row in csv.DictReader(fh):
+        portal_sku_gaps.append(PortalSkuGap(...))
+```
+
+`mapping_gaps.csv` is an auto-generated file from SKU matching. It could theoretically grow large (thousands of rows) if the matching process produces many gap candidates. The file is loaded in its entirety on every call to `GET /api/metadata/action-items`, which is a dashboard-level endpoint likely called on every page load.
+
+**Suggested fix:** Add a row limit (e.g., `if len(portal_sku_gaps) >= 500: break`) and cache the result in memory with a short TTL (e.g., via `functools.lru_cache` with a `maxsize=1` and a time-based invalidation, or simply read the file once at startup). At a minimum, log the total row count so operators can detect when the file grows unexpectedly large.
+
+**Priority:** 🟢 Low — not a problem for typical usage sizes, but is worth addressing before the CSV grows large.
+
+---
+
+#### L-08 · `string_agg` in `get_action_items` is PostgreSQL-specific — `backend/app/api/metadata.py`
+
+**File:** `backend/app/api/metadata.py:109-110`
+**Issue Type:** Portability
+
+```sql
+string_agg(ap.display_name, ', ' ORDER BY ap.display_name) AS missing_portals,
+string_agg(ap.name,         ','  ORDER BY ap.display_name) AS missing_portal_slugs,
+```
+
+The entire `get_action_items` endpoint uses raw SQL with PostgreSQL-specific constructs (`string_agg`, `CROSS JOIN`, `NULLS LAST`). This is fine for the current deployment target (Supabase / PostgreSQL), but should be noted for any future database portability concerns. The function also hardcodes portal exclusions (`WHERE po.name NOT IN ('myntra','flipkart')`) rather than reading from a configuration table or constant.
+
+**Suggested fix:** Move portal exclusions to a named Python constant at the top of the file (e.g., `EXCLUDED_PORTALS = ("myntra", "flipkart")`). This does not change the SQL but makes the exclusion list easier to find and update.
+
+**Priority:** 🟢 Low — PostgreSQL is the declared database; hardcoded portal names are a minor maintainability concern.
+
+---
+
+### Gitignore Check — New Untracked Files
+
+| File | Verdict |
+|------|---------|
+| `.github/workflows/scraper-easyecom-inventory.yml` | ✅ Commit — CI workflow, correct location |
+| `scrapers/easyecom_inventory_scraper.py` | ✅ Commit — new scraper module |
+
+Both new files are appropriate to track in git. No gitignore updates are required for these specific files.
+
+The existing `.gitignore` covers `debug_*.html` and `debug_*.json` but not `debug_*.png`. Since `data/raw/` is already excluded, the PNG files written by the new scraper's `_shot()` method will not be committed. However, see L-01 for a belt-and-suspenders recommendation.
+
+---
+
+### Production Deployment Checklist
+
+Before merging this branch to `main` and deploying:
+
+- [ ] **C-01**: Add pre-aggregation deduplication to `_upsert_inventory()` matching the pattern in `_upsert_sales()`. This is the only item that will cause a production error if not fixed before inventory data is imported with duplicate ASINs mapping to the same product.
+- [ ] **M-01**: Resolve the `ImportLogOut.import_date: date` vs. raw SQL `::text` cast discrepancy. Decide which is canonical and make both the raw SQL and the schema agree.
+- [ ] **M-03**: Replace the hardcoded `automation@solara.in` email in the Zepto exception message with an environment variable reference.
+- [ ] **M-05**: Decide on the `populate_all_portal_files` return semantics when all files are skipped; update the CI failure check accordingly.
+- [ ] **M-06**: Replace truthiness checks (`if portal_id:`) with `if portal_id is not None:` in all filter guards in `inventory.py` and `metadata.py`.
+- [x] **L-02**: ~~Verify `INVENTORY_URL`~~ — confirmed correct by developer (2026-02-26).
+- [ ] **L-06**: Fix `order_count` in `AmazonPIParser.parse_sales` — should be `1` per row, not `orderQuantity`.
+- [ ] **L-01 (optional)**: Add `debug_*.png` to `.gitignore` alongside existing debug file patterns.
+
+---
+
+### Prioritised Action Plan
+
+| Priority | Issue | Action | Effort |
+|----------|-------|--------|--------|
+| 🔴 C-01 | `_upsert_inventory` missing deduplication | Add pre-aggregation by `(portal_id, product_id, snapshot_date)` before batching | 10 min |
+| 🟡 M-01 | `ImportLogOut.import_date` type mismatch | Remove `::text` casts in `get_import_failures` OR add schema note | 5 min |
+| 🟡 M-02 | Duplicated aggregation logic | Extract `_pre_aggregate()` helper (can be done with C-01 fix) | 15 min |
+| 🟡 M-03 | Hardcoded email in Zepto exception | Move to env var or constant | 2 min |
+| 🟡 M-04 | EasyEcom scrapers share no base class | Create `BaseEasyecomScraper` | 30 min |
+| 🟡 M-05 | `populate_all_portal_files` masks zero-record "success" | Return `"partial"` when all skipped | 5 min |
+| 🟡 M-06 | `if portal_id:` truthy check misses ID 0 | Change to `if portal_id is not None:` | 2 min |
+| 🟢 L-01 | `debug_*.png` not in `.gitignore` | Add pattern to `.gitignore` | 1 min |
+| ✅ L-02 | `INVENTORY_URL` unverified | Verified by developer 2026-02-26 | Done |
+| 🟢 L-03 | `import re` inside method | Move to module top-level | 1 min |
+| 🟢 L-04 | `snapshot_date` parameter name inconsistency | Rename to `report_date` | 2 min |
+| 🟢 L-05 | `revalidate = 300` vs `cache: "no-store"` conflict | Remove one or the other | 2 min |
+| 🟢 L-06 | `order_count` uses `orderQuantity` | Change to `1` per row | 1 min |
+| 🟢 L-07 | `mapping_gaps.csv` loaded unbounded | Add row cap and cache | 10 min |
+| 🟢 L-08 | Portal exclusions hardcoded in SQL | Extract to named constant | 3 min |
