@@ -68,6 +68,21 @@ jobs:
               sys.exit(1)
           EOF
 
+      - name: Resolve DB host to IPv4
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # GitHub Actions runners lack outbound IPv6; resolve Supabase host to IPv4.
+          if [ -n "$DATABASE_URL" ]; then
+            HOST=$(echo "$DATABASE_URL" | sed -E 's|.*://[^@]*@([^:/]+).*|\1|')
+            IPV4=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR==1{print $1}')
+            if [ -n "$IPV4" ] && [ "$IPV4" != "$HOST" ]; then
+              echo "DATABASE_URL=${DATABASE_URL/$HOST/$IPV4}" >> "$GITHUB_ENV"
+              echo "Resolved $HOST -> $IPV4"
+            fi
+          fi
+
       - name: Populate DB from downloaded data
         if: success()
         env:
@@ -121,5 +136,5 @@ jobs:
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d '{
-              "text": ":warning: *Swiggy scraper failed* — OTP session may have expired.\n\n*Action needed:*\n1. Run locally in visible mode: `python scrapers/swiggy_scraper.py`\n2. Complete the OTP login in the browser window\n3. Profile will auto-upload to Drive\n4. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-swiggy.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
+              "text": ":warning: *Swiggy scraper failed* — Gmail OTP token has likely expired.\n\n*Action needed:*\n1. Run locally: `python scrapers/auth_gmail.py` (re-authorize Gmail API)\n2. Base64-encode the new token: `base64 -w0 token.json`\n3. Update the *GOOGLE_TOKEN_JSON* GitHub secret with the new value\n4. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-swiggy.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
             }'

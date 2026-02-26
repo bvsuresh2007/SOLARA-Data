@@ -75,6 +75,21 @@ jobs:
               sys.exit(1)
           EOF
 
+      - name: Resolve DB host to IPv4
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # GitHub Actions runners lack outbound IPv6; resolve Supabase host to IPv4.
+          if [ -n "$DATABASE_URL" ]; then
+            HOST=$(echo "$DATABASE_URL" | sed -E 's|.*://[^@]*@([^:/]+).*|\1|')
+            IPV4=$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR==1{print $1}')
+            if [ -n "$IPV4" ] && [ "$IPV4" != "$HOST" ]; then
+              echo "DATABASE_URL=${DATABASE_URL/$HOST/$IPV4}" >> "$GITHUB_ENV"
+              echo "Resolved $HOST -> $IPV4"
+            fi
+          fi
+
       - name: Populate DB from downloaded data
         if: success()
         env:
