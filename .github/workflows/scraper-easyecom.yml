@@ -97,6 +97,8 @@ jobs:
               _ref = _m.group(1)
               os.environ["POSTGRES_HOST"] = f"{_ref}.pooler.supabase.com"
               print(f"[DB] Using Supabase pooler: {_h} -> {os.environ['POSTGRES_HOST']}", flush=True)
+              os.environ.pop("DATABASE_URL", None)
+              print("[DB] Cleared DATABASE_URL; using POSTGRES_HOST pooler endpoint", flush=True)
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
