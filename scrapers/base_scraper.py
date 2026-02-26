@@ -35,6 +35,17 @@ class BaseScraper(abc.ABC):
     # ------------------------------------------------------------------
 
     def _init_browser(self):
+        # Reset the asyncio event loop before each Playwright start.
+        # Without this, retry attempts fail with "Playwright Sync API inside asyncio loop"
+        # because the previous attempt's loop is left in a non-running but unclosed state.
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if not loop.is_running():
+                loop.close()
+        except Exception:
+            pass
+        asyncio.set_event_loop(asyncio.new_event_loop())
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().__enter__()
         self.browser = self._pw.chromium.launch(headless=True)

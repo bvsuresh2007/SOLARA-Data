@@ -70,20 +70,6 @@ jobs:
               sys.exit(1)
           EOF
 
-      - name: Resolve DB host to IPv4
-        if: success()
-        env:
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-        run: |
-          # GitHub Actions runners lack outbound IPv6; resolve Supabase host to IPv4.
-          if [ -n "$POSTGRES_HOST" ]; then
-            IPV4=$(getent ahostsv4 "$POSTGRES_HOST" 2>/dev/null | awk 'NR==1{print $1}')
-            if [ -n "$IPV4" ] && [ "$IPV4" != "$POSTGRES_HOST" ]; then
-              echo "POSTGRES_HOST=$IPV4" >> "$GITHUB_ENV"
-              echo "Resolved $POSTGRES_HOST -> $IPV4"
-            fi
-          fi
-
       - name: Populate DB from downloaded data
         if: success()
         env:
@@ -94,10 +80,23 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
+          pip install -r backend/requirements.txt -q
           python - <<'EOF'
-          import sys, os
+          import sys, os, socket as _sock
           from datetime import date, timedelta
           sys.path.insert(0, '.')
+
+          # GitHub Actions runners have no outbound IPv6; resolve Supabase host to IPv4
+          # before importing backend (settings are cached at import time).
+          _h = os.environ.get("POSTGRES_HOST", "")
+          if _h:
+              try:
+                  _ip = next(r[4][0] for r in _sock.getaddrinfo(_h, None, _sock.AF_INET))
+                  if _ip != _h:
+                      os.environ["POSTGRES_HOST"] = _ip
+                      print(f"IPv4: {_h} -> {_ip}")
+              except Exception:
+                  pass
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
