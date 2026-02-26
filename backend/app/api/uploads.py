@@ -41,6 +41,7 @@ _CITY_SALES_TYPES = {
     UploadFileType.BLINKIT_SALES,
     UploadFileType.SWIGGY_SALES,
     UploadFileType.ZEPTO_SALES,
+    UploadFileType.EASYECOM_SALES,   # has Shipping City column
 }
 
 # ─── File types that produce inventory_snapshot rows ──────────────────────────
@@ -165,10 +166,18 @@ def _process_sales(
             errors.append(UploadError(row=idx, reason="Empty portal_product_id (SKU)"))
             continue
 
-        product_id = resolver.product_id(portal_id, sku)
-        if product_id is None:
-            errors.append(UploadError(row=idx, reason=f"SKU '{sku}' not mapped for portal '{portal_name}'"))
-            continue
+        # EasyEcom rows use SOL-XXXX internal SKU codes — resolve directly from
+        # products table (no product_portal_mapping entries needed for these portals).
+        if file_type == UploadFileType.EASYECOM_SALES:
+            product_id = resolver.product_id_by_sku(sku)
+            if product_id is None:
+                errors.append(UploadError(row=idx, reason=f"SKU '{sku}' not found in products table"))
+                continue
+        else:
+            product_id = resolver.product_id(portal_id, sku)
+            if product_id is None:
+                errors.append(UploadError(row=idx, reason=f"SKU '{sku}' not mapped for portal '{portal_name}'"))
+                continue
 
         sale_date: Optional[date] = row.get("sale_date")
         if sale_date is None:

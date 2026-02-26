@@ -1,9 +1,9 @@
 # Database Reference
 
-**Last updated:** 2026-02-23
+**Last updated:** 2026-02-26
 
 PostgreSQL 15+ (`solara_dashboard` database, `public` schema).
-12 tables across 4 logical groups: **master**, **product**, **transactional**, **audit**.
+13 tables across 4 logical groups: **master**, **product**, **transactional**, **audit**.
 
 ---
 
@@ -19,7 +19,8 @@ product_categories─┤   inventory_snapshots
                    │   import_logs
                    │
 warehouses ────────┘  (linked to portals + cities; not yet populated)
-product_portal_mapping (join table: products ↔ portals)
+product_portal_mapping    (join table: products ↔ portals — active listings)
+product_portal_exclusions (join table: products ↔ portals — confirmed not listed)
 ```
 
 ---
@@ -28,7 +29,7 @@ product_portal_mapping (join table: products ↔ portals)
 
 ### `portals`
 
-Lookup for the 7 e-commerce portals Solara sells on.
+Lookup for the 13 portals/channels Solara sells on (12 active + 1 inactive aggregator).
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -38,6 +39,8 @@ Lookup for the 7 e-commerce portals Solara sells on.
 | is_active | boolean | Filter inactive portals from UI/API |
 | created_at | timestamp | |
 | updated_at | timestamp | Nullable — set on edits |
+
+**Current portals:** `swiggy`, `blinkit`, `amazon`, `zepto`, `shopify`, `myntra`, `flipkart`, `meesho`, `nykaa_fashion`, `cred`, `vaaree`, `offline` (active) + `easyecom` (inactive aggregator — data imported via Amazon PI scraper).
 
 **Why it exists:** Normalises portal identity across all transactional tables. Instead of storing `"Amazon PI"` in 329K rows, we store `portal_id=3`. Changing a display name is one row update.
 
@@ -135,6 +138,27 @@ Solara's physical warehouse locations (0 rows currently — schema ready).
 **Unique constraint:** `(portal_id, portal_sku)` — one SKU per portal is unique.
 
 **Why it exists:** Scrapers download files with portal SKUs. The data transformer looks up this table to resolve `portal_sku → product_id` before inserting into transactional tables.
+
+---
+
+### `product_portal_exclusions`
+
+Companion to `product_portal_mapping` — records products that are **confirmed not listed** on a specific portal. Seeded from `data/Sku_mapping.xlsx` (columns with value `0` mean the product doesn't exist on that portal).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| product_id | integer FK → products | Composite PK |
+| portal_id | integer FK → portals | Composite PK |
+| created_at | timestamp | |
+
+**Primary key:** `(product_id, portal_id)` — one row per product/portal pair.
+
+**Why it exists:** Without this table, the Actions Dashboard would flag every product without a portal mapping as a "gap" requiring attention. With it, the dashboard correctly distinguishes:
+- No row in either table → genuinely unmapped (needs attention)
+- Row in `product_portal_mapping` → product is listed and mapped
+- Row in `product_portal_exclusions` → product is confirmed not on this portal (not a gap)
+
+**Seeder:** `scripts/seed_sku_mapping.py` — run after updating `data/Sku_mapping.xlsx`.
 
 ---
 
@@ -308,6 +332,7 @@ City-level breakdown of sales (currently 0 rows; Blinkit and Zepto can populate 
 | `portals` | `name` | Single source — rarely inserted |
 | `products` | `sku_code` | Single source — rarely inserted |
 | `product_portal_mapping` | `(portal_id, portal_sku)` | Single source — rarely inserted |
+| `product_portal_exclusions` | `(product_id, portal_id)` | Seeded from Sku_mapping.xlsx |
 | `cities` | `(name, state)` | Single source — rarely inserted |
 | `product_categories` | `(l1_name, l2_name)` | Single source — rarely inserted |
 

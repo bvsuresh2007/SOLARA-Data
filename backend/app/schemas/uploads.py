@@ -58,8 +58,8 @@ FILE_TYPE_META: dict[str, dict] = {
     },
     UploadFileType.EASYECOM_SALES: {
         "label": "EasyEcom Sales CSV",
-        "description": "EasyEcom mini sales report (CSV from ZIP download) with SKU, Order Date, Shipping City, Selling Price, Item Quantity columns. Cancelled orders are excluded automatically.",
-        "target_tables": ["daily_sales"],
+        "description": "EasyEcom mini sales report (CSV from ZIP). Rows are split by MP Name: Shopify, Meesho, Nykaa Fashion, CRED, Vaaree, Offline are imported; Amazon, Flipkart and Myntra rows are skipped. Cancelled orders excluded automatically.",
+        "target_tables": ["city_daily_sales", "daily_sales"],
     },
     UploadFileType.AMAZON_PI: {
         "label": "Amazon PI ASIN Revenue Report",

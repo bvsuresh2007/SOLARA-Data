@@ -196,6 +196,18 @@ def upsert_portal_mapping(
     )
 
 
+def upsert_portal_exclusion(session, product_id: int, portal_id: int) -> None:
+    """Record that a product intentionally does not exist on a portal."""
+    session.execute(
+        text("""
+            INSERT INTO product_portal_exclusions (product_id, portal_id)
+            VALUES (:pid, :portal)
+            ON CONFLICT (product_id, portal_id) DO NOTHING
+        """),
+        {"pid": product_id, "portal": portal_id},
+    )
+
+
 def get_product_id_by_sku(session, sku_code: str) -> int | None:
     """Look up products.id by sku_code. Returns None if not found."""
     row = session.execute(

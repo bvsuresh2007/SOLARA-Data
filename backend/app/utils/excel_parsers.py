@@ -132,7 +132,7 @@ def _i(val: Any, default: int = 0) -> int:
 # Blinkit
 # =============================================================================
 
-BLINKIT_SALES_REQUIRED = ["item_id", "date", "city"]
+BLINKIT_SALES_REQUIRED = ["item_id", "date"]
 BLINKIT_INV_REQUIRED = ["item_id", "date"]
 
 
@@ -144,13 +144,15 @@ def parse_blinkit_sales(content: bytes, filename: str) -> list[dict]:
         _require_columns(df, BLINKIT_SALES_REQUIRED, "blinkit_sales")
         rows = []
         for row in df.to_dict("records"):
+            # city column: new exports use city_name, old exports used city
+            city = str(row.get("city_name", row.get("city", ""))).strip()
             rows.append({
                 "portal": "blinkit",
                 "sale_date": _parse_date_ymd(row.get("date")),
                 "portal_product_id": str(row.get("item_id", "")).strip(),
-                "city": str(row.get("city", "")).strip(),
+                "city": city,
                 "revenue": _f(row.get("mrp", row.get("revenue", 0))),
-                "quantity_sold": _f(row.get("quantity", row.get("qty_sold", 0))),
+                "quantity_sold": _f(row.get("qty_sold", row.get("quantity", 0))),
                 "order_count": _i(row.get("orders", 0)),
                 "discount_amount": 0.0,
             })
@@ -255,7 +257,7 @@ def parse_swiggy_inventory(content: bytes, filename: str) -> list[dict]:
 # Zepto
 # =============================================================================
 
-ZEPTO_SALES_REQUIRED = ["SKU Number", "Date", "Units"]
+ZEPTO_SALES_REQUIRED = ["SKU Number", "Date"]
 ZEPTO_INV_REQUIRED = ["SKU Number", "Date"]
 
 
@@ -267,17 +269,25 @@ def parse_zepto_sales(content: bytes, filename: str) -> list[dict]:
         _require_columns(df, ZEPTO_SALES_REQUIRED, "zepto_sales")
         rows = []
         for row in df.to_dict("records"):
+            # Use EAN as portal_product_id — matches product_portal_mapping seeded from
+            # Sku_mapping.xlsx EAN CODE column. Skip rows with no EAN.
+            ean = str(row.get("EAN", "")).strip()
+            if not ean or ean in ("0", "nan", ""):
+                continue
             mrp = _f(row.get("MRP", 0))
-            selling_price = _f(row.get("Selling Price", mrp))
-            gmv = _f(row.get("GMV", 0))
+            # Selling Price: new exports use "Gross Selling Value", old used "Selling Price"
+            selling_price = _f(row.get("Gross Selling Value", row.get("Selling Price", mrp)))
+            # GMV: new exports use "Gross Merchandise Value", old used "GMV"
+            gmv = _f(row.get("Gross Merchandise Value", row.get("GMV", 0)))
             discount = round(mrp - selling_price, 2) if mrp > selling_price else 0.0
             rows.append({
                 "portal": "zepto",
                 "sale_date": _parse_date_dmy(row.get("Date")),
-                "portal_product_id": str(row.get("SKU Number", "")).strip(),
+                "portal_product_id": ean,
                 "city": str(row.get("City", "")).strip(),
                 "revenue": gmv,
-                "quantity_sold": _f(row.get("Units", 0)),
+                # Units: new exports use "Sales (Qty) - Units", old used "Units"
+                "quantity_sold": _f(row.get("Sales (Qty) - Units", row.get("Units", 0))),
                 "order_count": _i(row.get("Orders", 0)),
                 "discount_amount": discount,
             })
@@ -316,13 +326,32 @@ def parse_zepto_inventory(content: bytes, filename: str) -> list[dict]:
 EASYECOM_SALES_REQUIRED = ["SKU", "Order Date", "Item Quantity"]
 _EASYECOM_CANCELLED = {"cancelled", "CANCELLED"}
 
+# Maps EasyEcom "MP Name" (lowercased + stripped) to portal slug.
+# None = skip row (handled by another scraper or not tracked here).
+EASYECOM_MP_MAP: dict[str, str | None] = {
+    "amazon.in":               None,          # Amazon comes from Amazon PI scraper
+    "vendor central dropship": None,          # Skip
+    "flipkart":                None,          # Skip — handled separately
+    "myntra ppmp":             None,          # Skip — handled separately
+    "shopify":                 "shopify",
+    "meesho-api":              "meesho",
+    "nykaa fashion":           "nykaa_fashion",
+    "cred-api":                "cred",
+    "vaaree":                  "vaaree",
+    "offline":                 "offline",
+}
+
 
 def parse_easyecom_sales(content: bytes, filename: str) -> list[dict]:
     """
     EasyEcom mini sales report (CSV extracted from ZIP download).
 
+    Rows are split by MP Name → portal slug using EASYECOM_MP_MAP.
+    Marketplaces mapped to None (Amazon, Vendor Central, Flipkart, Myntra) are
+    skipped. Unknown MP Names are also skipped (logged as warnings).
+
     Key columns: SKU, Order Date, Shipping City, Selling Price, Item Quantity,
-                 Order Status, Category, MP Name.
+                 Order Status, MP Name.
     - Cancelled orders are excluded.
     - SKU may have a leading backtick (artifact from EasyEcom export) — stripped.
     - Selling Price is the line-item total (not per-unit price).
@@ -333,6 +362,9 @@ def parse_easyecom_sales(content: bytes, filename: str) -> list[dict]:
     try:
         df = _clean(_read_file(path))
         _require_columns(df, EASYECOM_SALES_REQUIRED, "easyecom_sales")
+        if "MP Name" not in df.columns:
+            logger.warning("EasyEcom file %s has no 'MP Name' column — cannot split by marketplace", filename)
+            return []
         rows = []
         for row in df.to_dict("records"):
             status = str(row.get("Order Status", "")).strip()
@@ -341,9 +373,16 @@ def parse_easyecom_sales(content: bytes, filename: str) -> list[dict]:
             sku = str(row.get("SKU", "")).strip().lstrip("`")
             if not sku:
                 continue
+            mp_name = str(row.get("MP Name", "")).strip().lower()
+            if mp_name not in EASYECOM_MP_MAP:
+                logger.warning("EasyEcom: unknown MP Name %r — skipping row", mp_name)
+                continue
+            portal = EASYECOM_MP_MAP[mp_name]
+            if portal is None:
+                continue  # explicitly skipped marketplace
             revenue = _f(row.get("Selling Price", 0))
             rows.append({
-                "portal": "easyecom",
+                "portal": portal,
                 "sale_date": _parse_iso(row.get("Order Date")),
                 "portal_product_id": sku,
                 "city": str(row.get("Shipping City", "")).strip(),

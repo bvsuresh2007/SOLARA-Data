@@ -291,18 +291,43 @@ class ShopifyParser:
 # EasyEcom
 # =============================================================================
 
+# Maps EasyEcom "MP Name" (lowercased + stripped) to portal slug.
+# None = skip row (handled by another scraper or not tracked here).
+EASYECOM_MP_MAP: dict[str, str | None] = {
+    "amazon.in":               None,          # Amazon comes from Amazon PI scraper
+    "vendor central dropship": None,          # Skip
+    "flipkart":                None,          # Skip — handled separately
+    "myntra ppmp":             None,          # Skip — handled separately
+    "shopify":                 "shopify",
+    "meesho-api":              "meesho",
+    "nykaa fashion":           "nykaa_fashion",
+    "cred-api":                "cred",
+    "vaaree":                  "vaaree",
+    "offline":                 "offline",
+}
+
+
 class EasyEcomParser:
     """
     EasyEcom mini sales report parser.
     Key columns: SKU, Order Date, Shipping City, Selling Price, Item Quantity,
-                 Order Status, Category, MP Name.
-    portal_product_id = SKU (SOL-prefixed internal code = self-mapping).
+                 Order Status, MP Name.
+
+    Rows are split by MP Name → portal slug using EASYECOM_MP_MAP.
+    Marketplaces mapped to None (Amazon, Vendor Central, Flipkart, Myntra) are
+    skipped. Unknown MP Names are also skipped (logged as warnings).
+
+    portal_product_id = SKU (SOL-prefixed internal code — resolves directly via
+    products.sku_code, no product_portal_mapping entries needed).
     Cancelled orders are excluded.
     """
     _CANCELLED = {"cancelled", "CANCELLED"}
 
     def parse_sales(self, path: Path) -> list[dict]:
         df = _clean(_read_file(path))
+        if "MP Name" not in df.columns:
+            logger.warning("[EasyEcom] %s has no 'MP Name' column — cannot split by marketplace", path.name)
+            return []
         rows = []
         for _, row in df.iterrows():
             status = str(row.get("Order Status", "")).strip()
@@ -311,10 +336,17 @@ class EasyEcomParser:
             sku = str(row.get("SKU", "")).strip().lstrip("`")
             if not sku:
                 continue
+            mp_name = str(row.get("MP Name", "")).strip().lower()
+            if mp_name not in EASYECOM_MP_MAP:
+                logger.warning("[EasyEcom] Unknown MP Name %r — skipping row", mp_name)
+                continue
+            portal = EASYECOM_MP_MAP[mp_name]
+            if portal is None:
+                continue  # explicitly skipped marketplace
             # Selling Price is already the line-item total (not per-unit)
             revenue = _f(row.get("Selling Price", 0))
             rows.append({
-                "portal": "easyecom",
+                "portal": portal,
                 "sale_date": _parse_iso(row.get("Order Date")),
                 "portal_product_id": sku,
                 "city": str(row.get("Shipping City", "")).strip(),
@@ -428,7 +460,7 @@ class AmazonPIParser:
             revenue = _f(row.get("orderAmt", 0))
             qty = _f(row.get("orderQuantity", 0))
             rows.append({
-                "portal": "amazon_pi",
+                "portal": "amazon",
                 "sale_date": sale_date,
                 "portal_product_id": asin,
                 # stateName (e.g. "GUJARAT") used as location; no city-level data

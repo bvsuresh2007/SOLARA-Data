@@ -258,7 +258,12 @@ def populate_portal_data(
             logger.info("[%s] Parsing %s", portal_name, file.name)
 
             sales_rows = parser.parse_sales(file)
-            transformed_sales = transformer.transform_sales_rows(sales_rows)
+            # EasyEcom rows already carry the correct portal slug from MP Name
+            # splitting; product is resolved via sku_code (no portal mapping needed).
+            if portal_name == "easyecom":
+                transformed_sales = transformer.transform_sales_rows_by_sku(sales_rows)
+            else:
+                transformed_sales = transformer.transform_sales_rows(sales_rows)
             total_records += _upsert_sales(db, transformed_sales)
             total_records += _upsert_daily_sales(db, transformed_sales)
 
@@ -337,7 +342,10 @@ def populate_all_portal_files(
             logger.info("[%s] Parsing %s", portal_name, file.name)
             try:
                 sales_rows = parser.parse_sales(file)
-                transformed_sales = transformer.transform_sales_rows(sales_rows)
+                if portal_name == "easyecom":
+                    transformed_sales = transformer.transform_sales_rows_by_sku(sales_rows)
+                else:
+                    transformed_sales = transformer.transform_sales_rows(sales_rows)
                 total_records += _upsert_sales(db, transformed_sales)
                 total_records += _upsert_daily_sales(db, transformed_sales)
 
@@ -389,7 +397,10 @@ def run(report_date: date):
 
                 # Parse & upsert sales
                 sales_rows = parser.parse_sales(result["file"])
-                transformed_sales = transformer.transform_sales_rows(sales_rows)
+                if scraper.portal_name == "easyecom":
+                    transformed_sales = transformer.transform_sales_rows_by_sku(sales_rows)
+                else:
+                    transformed_sales = transformer.transform_sales_rows(sales_rows)
                 total_records += _upsert_sales(db, transformed_sales)
 
                 # Parse & upsert inventory (if supported)

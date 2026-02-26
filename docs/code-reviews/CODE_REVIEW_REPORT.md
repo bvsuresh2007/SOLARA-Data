@@ -1980,3 +1980,215 @@ Before merging this branch to `main` and deploying:
 | 🟢 L-06 | `order_count` uses `orderQuantity` | Change to `1` per row | 1 min |
 | 🟢 L-07 | `mapping_gaps.csv` loaded unbounded | Add row cap and cache | 10 min |
 | 🟢 L-08 | Portal exclusions hardcoded in SQL | Extract to named constant | 3 min |
+
+---
+
+## Review: 2026-02-26 — EasyEcom MP Split & Portal Consolidation
+
+**Branch:** `feature/backend-db-improvements`
+
+**Files reviewed (modified):**
+- `backend/app/api/metadata.py`
+- `backend/app/api/uploads.py`
+- `backend/app/schemas/uploads.py`
+- `backend/app/utils/excel_parsers.py`
+- `database/init_db.sql`
+- `frontend/app/dashboard/actions/page.tsx`
+- `scrapers/data_transformer.py`
+- `scrapers/excel_parser.py`
+- `scrapers/orchestrator.py`
+- `scripts/db_utils.py`
+
+**Untracked new files:**
+- `database/alembic/versions/002_rename_amazon_display.py`
+- `database/alembic/versions/003_add_easyecom_portals.py`
+- `database/alembic/versions/003_add_portal_exclusions.py`
+- `scripts/reprocess_easyecom.py`
+- `scripts/seed_sku_mapping.py`
+- `docs/price-scraper-guide.md`
+
+**Executive Summary:**
+The EasyEcom MP Name split is well-designed and correctly routes data to 6 new portals. The upload and scraper pipelines were updated consistently. The Amazon PI → Amazon consolidation is clean. Two issues need attention before merging: a branching Alembic history that will break `upgrade head`, and a missing `None`-value cache in the new `_get_product_id_by_sku()` that causes repeated DB queries for unmapped SKUs. `EASYECOM_MP_MAP` being duplicated across two files is a medium-term maintenance risk.
+
+---
+
+### 🔴 Critical
+
+#### C-01 · Branching Alembic revision history
+**Files:** `database/alembic/versions/003_add_portal_exclusions.py`, `database/alembic/versions/003_add_easyecom_portals.py`
+
+Both files declare `down_revision = "002_rename_amazon_display"`, creating two parallel heads from the same revision. Running `alembic upgrade head` on a fresh DB will fail with `Multiple head revisions` error.
+
+```python
+# 003_add_portal_exclusions.py
+revision = "003_add_portal_exclusions"
+down_revision = "002_rename_amazon_display"   # ← same parent
+
+# 003_add_easyecom_portals.py
+revision = "003_add_easyecom_portals"
+down_revision = "002_rename_amazon_display"   # ← same parent — CONFLICT
+```
+
+**Fix:** Chain them. `003_add_easyecom_portals` should revise from `003_add_portal_exclusions`:
+```python
+# 003_add_easyecom_portals.py
+revision = "003_add_easyecom_portals"
+down_revision = "003_add_portal_exclusions"   # ← chain, not branch
+```
+
+---
+
+### 🟡 Medium
+
+#### M-01 · `EASYECOM_MP_MAP` duplicated in two files
+**Files:** `backend/app/utils/excel_parsers.py:321`, `scrapers/excel_parser.py:296`
+
+The same dict is defined independently in both the upload pipeline parser and the scraper parser. A new marketplace added to EasyEcom needs to be added in both places — easy to miss.
+
+```python
+# Identical dict in two different files — no shared import
+EASYECOM_MP_MAP: dict[str, str | None] = {
+    "amazon.in": None,
+    "meesho-api": "meesho",
+    ...
+}
+```
+
+**Fix:** Move to `shared/constants.py` and import from both files:
+```python
+# shared/constants.py
+EASYECOM_MP_MAP: dict[str, str | None] = { ... }
+
+# both parsers
+from shared.constants import EASYECOM_MP_MAP
+```
+
+---
+
+#### M-02 · `_get_product_id_by_sku()` doesn't cache `None` results — N+1 for unmapped SKUs
+**File:** `scrapers/data_transformer.py:64–77`
+
+When a SKU isn't found in the DB, `None` is returned but not stored in `_sku_cache`. Every subsequent row with the same unmapped SKU code hits the DB again. An EasyEcom file with 1,000 rows of a new unmapped product would trigger 1,000 identical `SELECT` queries.
+
+```python
+def _get_product_id_by_sku(self, sku_code: str) -> int | None:
+    sku = sku_code.strip()
+    if sku not in self._sku_cache:
+        product = self.db.query(Product).filter_by(sku_code=sku).first()
+        if product:
+            self._sku_cache[sku] = product.id
+        else:
+            logger.warning("No product found for sku_code=%s", sku)
+            return None     # ← None not cached; next row re-queries
+    return self._sku_cache.get(sku)
+```
+
+**Fix:** Always write to cache, including the `None` case:
+```python
+        self._sku_cache[sku] = product.id if product else None
+    return self._sku_cache[sku]   # None returned correctly for unmapped SKUs
+```
+
+Note: `_get_product_id()` (the existing portal-mapping path) has the same bug.
+
+---
+
+#### M-03 · Missing `MP Name` column silently returns 0 rows with no error
+**File:** `backend/app/utils/excel_parsers.py:363–365`
+
+If a user uploads an EasyEcom CSV that lacks the `MP Name` column, the function returns `[]`. The upload API will respond `inserted=0, errors=[]` — no feedback that anything went wrong.
+
+```python
+if "MP Name" not in df.columns:
+    logger.warning("EasyEcom file %s has no 'MP Name' column ...", filename)
+    return []    # ← silent empty result; user sees 0 inserted, 0 errors
+```
+
+**Fix:** Raise `ColumnMismatchError` so the upload API returns a clear 422:
+```python
+if "MP Name" not in df.columns:
+    raise ColumnMismatchError(
+        missing=["MP Name"],
+        found=sorted(df.columns.tolist()),
+        file_type="easyecom_sales",
+    )
+```
+
+---
+
+### 🟢 Low
+
+#### L-01 · Dead branch in `orchestrator.run()` — EasyEcom not in `SCRAPERS`
+**File:** `scrapers/orchestrator.py:400`
+
+`SCRAPERS = [SwiggyScraper, BlinkitScraper, AmazonScraper, ZeptoScraper, ShopifyScraper]` — EasyEcom is not in this list. The `scraper.portal_name == "easyecom"` check in `run()` can never be true and is dead code.
+
+```python
+if scraper.portal_name == "easyecom":   # ← never reached
+    transformed_sales = transformer.transform_sales_rows_by_sku(sales_rows)
+```
+
+**Fix:** Remove the dead branch, or add a comment noting EasyEcom uses `populate_portal_data()` instead.
+
+---
+
+#### L-02 · `portal_name == "easyecom"` repeated 3× — minor DRY issue
+**File:** `scrapers/orchestrator.py:263, 345, 400`
+
+The conditional to choose `transform_sales_rows_by_sku` vs `transform_sales_rows` is copy-pasted in three places.
+
+**Fix:** Extract to a module-level set and use a helper:
+```python
+_SKU_RESOLVED_PORTALS = {"easyecom"}  # portals whose SKUs are resolved via sku_code
+
+def _transform_sales(transformer, portal_name, sales_rows):
+    if portal_name in _SKU_RESOLVED_PORTALS:
+        return transformer.transform_sales_rows_by_sku(sales_rows)
+    return transformer.transform_sales_rows(sales_rows)
+```
+
+---
+
+#### L-03 · `_EXCLUDED_PORTALS_SQL` interpolated as raw string in f-SQL
+**File:** `backend/app/api/metadata.py:27, 92, 115, 164`
+
+The exclusion tuple is a hardcoded literal (not user input) so there's no injection risk, but the f-string pattern `WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}` is fragile — a single-element tuple like `('easyecom')` would be parsed by PostgreSQL as a string, not a tuple (requires trailing comma: `('easyecom',)`). Currently 3 values so safe, but worth documenting.
+
+---
+
+### Untracked File Check
+
+| File | Should gitignore? |
+|------|-------------------|
+| `database/alembic/versions/002_rename_amazon_display.py` | ✅ No — migration file, commit it |
+| `database/alembic/versions/003_add_easyecom_portals.py` | ✅ No — migration file, commit it |
+| `database/alembic/versions/003_add_portal_exclusions.py` | ✅ No — migration file, commit it (after fixing C-01) |
+| `scripts/reprocess_easyecom.py` | ✅ No — useful utility script, commit it |
+| `scripts/seed_sku_mapping.py` | ✅ No — commit it |
+| `docs/price-scraper-guide.md` | ✅ No — documentation, commit it |
+
+---
+
+### Production Deployment Requirements
+
+Before deploying to production:
+
+1. **Fix C-01** — update `003_add_easyecom_portals.py` to chain from `003_add_portal_exclusions` (change `down_revision`)
+2. **Fix M-02** — cache `None` in `_get_product_id_by_sku()` to avoid N+1 on first EasyEcom upload with unmapped SKUs
+3. **Fix M-03** — raise `ColumnMismatchError` instead of silently returning `[]` for missing `MP Name` column
+
+M-01 (EASYECOM_MP_MAP duplication) is safe to defer — the two maps are currently identical and both are live. Fix before the next time a new EasyEcom marketplace needs to be added.
+
+---
+
+### Action Plan
+
+| ID | Priority | Fix | Est. |
+|----|----------|-----|------|
+| C-01 | 🔴 | Fix `down_revision` in `003_add_easyecom_portals.py` | 1 min |
+| M-01 | 🟡 | Move `EASYECOM_MP_MAP` to `shared/constants.py` | 10 min |
+| M-02 | 🟡 | Cache `None` in `_get_product_id_by_sku()` | 2 min |
+| M-03 | 🟡 | Raise `ColumnMismatchError` for missing `MP Name` | 2 min |
+| L-01 | 🟢 | Remove dead `easyecom` branch in `run()` | 2 min |
+| L-02 | 🟢 | Extract `_transform_sales()` helper in orchestrator | 5 min |
+| L-03 | 🟢 | Document single-element tuple risk in `_EXCLUDED_PORTALS_SQL` | 1 min |
