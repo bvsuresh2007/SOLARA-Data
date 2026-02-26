@@ -54,13 +54,13 @@ export default async function ActionsPage() {
                 {noApiData ? "—" : "No portal data"}
               </p>
             ) : portalCoverage.map(p => {
-              const pct = totalProducts > 0 ? Math.round((p.mapped_products / totalProducts) * 100) : 0;
+              const pct = p.total_products > 0 ? Math.round((p.mapped_products / p.total_products) * 100) : 0;
               return (
                 <div key={p.portal_name} className="bg-zinc-800 rounded-lg p-4 space-y-2">
                   <p className="font-semibold text-zinc-100 text-sm">{p.display_name}</p>
                   <p className="text-2xl font-bold text-zinc-50 font-mono">
                     {p.mapped_products}
-                    <span className="text-base font-normal text-zinc-500"> / {totalProducts}</span>
+                    <span className="text-base font-normal text-zinc-500"> / {p.total_products}</span>
                   </p>
                   <Progress value={pct} className="h-2 bg-zinc-700" />
                   {p.gap === 0
