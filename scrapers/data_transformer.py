@@ -26,6 +26,7 @@ class DataTransformer:
         self._city_cache: dict[str, int] = {}
         self._warehouse_cache: dict[tuple, int] = {}
         self._product_cache: dict[tuple, int] = {}  # (portal_id, portal_product_id) → product_id
+        self._sku_cache: dict[str, int] = {}         # sku_code → product_id (direct lookup)
 
     def _get_portal_id(self, name: str) -> int | None:
         if name not in self._portal_cache:
@@ -63,6 +64,19 @@ class DataTransformer:
             self._warehouse_cache[key] = wh.id
         return self._warehouse_cache[key]
 
+    def _get_product_id_by_sku(self, sku_code: str) -> int | None:
+        """Look up product_id by SOL-XXXX sku_code directly (no portal mapping needed)."""
+        sku = sku_code.strip()
+        if sku not in self._sku_cache:
+            from backend.app.models.sales import Product
+            product = self.db.query(Product).filter_by(sku_code=sku).first()
+            if product:
+                self._sku_cache[sku] = product.id
+            else:
+                logger.warning("No product found for sku_code=%s", sku)
+                return None
+        return self._sku_cache.get(sku)
+
     def _get_product_id(self, portal_id: int, portal_product_id: str) -> int | None:
         key = (portal_id, portal_product_id)
         if key not in self._product_cache:
@@ -76,6 +90,39 @@ class DataTransformer:
                 logger.warning("No product mapping for portal_id=%s, portal_sku=%s", portal_id, portal_product_id)
                 return None
         return self._product_cache.get(key)
+
+    def transform_sales_rows_by_sku(self, rows: list[dict]) -> list[dict]:
+        """
+        Like transform_sales_rows() but resolves product via sku_code directly
+        (products.sku_code) instead of product_portal_mapping.
+
+        Used for EasyEcom, which uses SOL-XXXX internal SKU codes — no
+        product_portal_mapping entries are needed for the target portals.
+        """
+        out = []
+        for row in rows:
+            portal_id = self._get_portal_id(row.get("portal", ""))
+            if not portal_id:
+                continue
+            city_id = self._get_or_create_city(row.get("city"))
+            if city_id is None:
+                logger.warning("Skipping row — unknown city: %r", row.get("city"))
+                continue
+            product_id = self._get_product_id_by_sku(row.get("portal_product_id", ""))
+            if not product_id:
+                continue
+            out.append({
+                "portal_id": portal_id,
+                "city_id": city_id,
+                "product_id": product_id,
+                "sale_date": row.get("sale_date"),
+                "units_sold": row.get("quantity_sold", 0),
+                "revenue": row.get("revenue", 0),
+                "discount_amount": row.get("discount_amount", 0),
+                "net_revenue": row.get("net_revenue", 0),
+                "order_count": row.get("order_count", 0),
+            })
+        return out
 
     def transform_sales_rows(self, rows: list[dict]) -> list[dict]:
         """Returns list of dicts ready to upsert into sales_data."""
