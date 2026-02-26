@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS product_portal_mapping (
     UNIQUE (portal_id, portal_product_id)
 );
 
+-- Products intentionally not listed on a given portal (0 in SKU mapping file).
+-- Distinguishes "mapping missing" from "product does not sell on this portal".
+CREATE TABLE IF NOT EXISTS product_portal_exclusions (
+    product_id INTEGER NOT NULL REFERENCES products(id)  ON DELETE CASCADE,
+    portal_id  INTEGER NOT NULL REFERENCES portals(id)   ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (product_id, portal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ppe_portal ON product_portal_exclusions (portal_id);
+
 -- =============================================================================
 -- TRANSACTION TABLES
 -- =============================================================================
@@ -147,11 +158,20 @@ CREATE INDEX IF NOT EXISTS idx_logs_date_portal_status ON scraping_logs (scrape_
 -- =============================================================================
 
 INSERT INTO portals (name, display_name) VALUES
-    ('swiggy',   'Swiggy'),
-    ('blinkit',  'Blinkit'),
-    ('amazon',   'Amazon'),
-    ('zepto',    'Zepto'),
-    ('shopify',  'Shopify'),
-    ('myntra',   'Myntra'),
-    ('flipkart', 'Flipkart')
+    ('swiggy',        'Swiggy'),
+    ('blinkit',       'Blinkit'),
+    ('amazon',        'Amazon'),
+    ('zepto',         'Zepto'),
+    ('shopify',       'Shopify'),
+    ('myntra',        'Myntra'),
+    ('flipkart',      'Flipkart'),
+    ('meesho',        'Meesho'),
+    ('nykaa_fashion', 'Nykaa Fashion'),
+    ('cred',          'CRED'),
+    ('vaaree',        'Vaaree'),
+    ('offline',       'Offline')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO portals (name, display_name, is_active) VALUES
+    ('easyecom', 'EasyEcom (Aggregator)', false)
 ON CONFLICT (name) DO NOTHING;
