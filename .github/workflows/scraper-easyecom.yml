@@ -52,9 +52,10 @@ jobs:
           INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
           python - <<'EOF'
-          import sys, os
+          import sys, os, logging
           from datetime import date, timedelta
           sys.path.insert(0, '.')
+          logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
@@ -70,6 +71,12 @@ jobs:
               sys.exit(1)
           EOF
 
+      - name: Disable IPv6 (GitHub Actions runners have no outbound IPv6)
+        if: success()
+        run: |
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
       - name: Populate DB from downloaded data
         if: success()
         env:
@@ -82,21 +89,9 @@ jobs:
         run: |
           pip install -r backend/requirements.txt -q
           python - <<'EOF'
-          import sys, os, socket as _sock
+          import sys, os
           from datetime import date, timedelta
           sys.path.insert(0, '.')
-
-          # GitHub Actions runners have no outbound IPv6; resolve Supabase host to IPv4
-          # before importing backend (settings are cached at import time).
-          _h = os.environ.get("POSTGRES_HOST", "")
-          if _h:
-              try:
-                  _ip = next(r[4][0] for r in _sock.getaddrinfo(_h, None, _sock.AF_INET))
-                  if _ip != _h:
-                      os.environ["POSTGRES_HOST"] = _ip
-                      print(f"IPv4: {_h} -> {_ip}")
-              except Exception:
-                  pass
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
