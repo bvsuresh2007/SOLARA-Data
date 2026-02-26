@@ -54,12 +54,27 @@ def _write_temp(content: bytes, suffix: str) -> str:
 
 
 def _read_file(path: str, sheet_name=0, skiprows=0) -> pd.DataFrame:
+    # Detect real format by magic bytes — portals sometimes save XLSX as .csv
+    with open(path, "rb") as fh:
+        magic = fh.read(4)
+    is_xlsx = magic[:2] == b"PK"          # ZIP container → xlsx
+    is_xls  = magic[:2] == b"\xd0\xcf"   # BIFF container → legacy xls
+
+    if is_xlsx:
+        return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows, dtype=str, engine="openpyxl")
+    if is_xls:
+        return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows, dtype=str, engine="xlrd")
+
     suffix = os.path.splitext(path)[1].lower()
     if suffix in (".xlsx", ".xls"):
         return pd.read_excel(path, sheet_name=sheet_name, skiprows=skiprows, dtype=str)
-    elif suffix == ".csv":
-        return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
-    raise ValueError(f"Unsupported file extension: {suffix!r}. Expected .xlsx, .xls, or .csv")
+    # Plain CSV — try common encodings in order
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return pd.read_csv(path, dtype=str, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"Could not decode {os.path.basename(path)} — tried utf-8, utf-8-sig, latin-1")
 
 
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -170,8 +185,17 @@ def parse_blinkit_inventory(content: bytes, filename: str) -> list[dict]:
 # Swiggy
 # =============================================================================
 
-SWIGGY_SALES_REQUIRED = ["date", "ITEM_CODE"]
-SWIGGY_INV_REQUIRED = ["date", "ITEM_CODE"]
+SWIGGY_SALES_REQUIRED = ["item_code"]   # date col checked separately (two known names)
+SWIGGY_INV_REQUIRED   = ["item_code"]
+
+
+def _swiggy_parse_date(row: dict) -> date | None:
+    """Parse Swiggy date from either 'date' (YYYY-MM-DD) or 'ordered_date' (YYYY-MM-DD HH:MM:SS)."""
+    raw = row.get("date") or row.get("ordered_date")
+    if not raw:
+        return None
+    val = str(raw).strip()[:10]   # take YYYY-MM-DD prefix regardless of time part
+    return _parse_date_ymd(val)
 
 
 def parse_swiggy_sales(content: bytes, filename: str) -> list[dict]:
@@ -179,16 +203,24 @@ def parse_swiggy_sales(content: bytes, filename: str) -> list[dict]:
     path = _write_temp(content, suffix)
     try:
         df = _clean(_read_file(path))
+        # Normalise to lowercase so both old (area_name) and new (AREA_NAME) formats work
+        df.columns = [c.lower() for c in df.columns]
+        if "date" not in df.columns and "ordered_date" not in df.columns:
+            raise ColumnMismatchError(
+                missing=["date (or ordered_date)"],
+                found=sorted(df.columns.tolist()),
+                file_type="swiggy_sales",
+            )
         _require_columns(df, SWIGGY_SALES_REQUIRED, "swiggy_sales")
         rows = []
         for row in df.to_dict("records"):
             rows.append({
                 "portal": "swiggy",
-                "sale_date": _parse_date_ymd(row.get("date")),
-                "portal_product_id": str(row.get("ITEM_CODE", "")).strip(),
-                "city": str(row.get("area_name", "")).strip(),
-                "revenue": _f(row.get("GMV", 0)),
-                "quantity_sold": _f(row.get("quantity_sold", row.get("UNITS_SOLD", row.get("qty", 0)))),
+                "sale_date": _swiggy_parse_date(row),
+                "portal_product_id": str(row.get("item_code", "")).strip(),
+                "city": str(row.get("area_name", row.get("city", ""))).strip(),
+                "revenue": _f(row.get("gmv", 0)),
+                "quantity_sold": _f(row.get("units_sold", row.get("quantity_sold", row.get("qty", 0)))),
                 "order_count": _i(row.get("order_count", 0)),
                 "discount_amount": 0.0,
             })
@@ -278,35 +310,116 @@ def parse_zepto_inventory(content: bytes, filename: str) -> list[dict]:
 
 
 # =============================================================================
+# EasyEcom
+# =============================================================================
+
+EASYECOM_SALES_REQUIRED = ["SKU", "Order Date", "Item Quantity"]
+_EASYECOM_CANCELLED = {"cancelled", "CANCELLED"}
+
+
+def parse_easyecom_sales(content: bytes, filename: str) -> list[dict]:
+    """
+    EasyEcom mini sales report (CSV extracted from ZIP download).
+
+    Key columns: SKU, Order Date, Shipping City, Selling Price, Item Quantity,
+                 Order Status, Category, MP Name.
+    - Cancelled orders are excluded.
+    - SKU may have a leading backtick (artifact from EasyEcom export) — stripped.
+    - Selling Price is the line-item total (not per-unit price).
+    - Order Date is ISO-format timestamp (YYYY-MM-DD HH:MM:SS or YYYY-MM-DD).
+    """
+    suffix = os.path.splitext(filename)[1] or ".csv"
+    path = _write_temp(content, suffix)
+    try:
+        df = _clean(_read_file(path))
+        _require_columns(df, EASYECOM_SALES_REQUIRED, "easyecom_sales")
+        rows = []
+        for row in df.to_dict("records"):
+            status = str(row.get("Order Status", "")).strip()
+            if status in _EASYECOM_CANCELLED:
+                continue
+            sku = str(row.get("SKU", "")).strip().lstrip("`")
+            if not sku:
+                continue
+            revenue = _f(row.get("Selling Price", 0))
+            rows.append({
+                "portal": "easyecom",
+                "sale_date": _parse_iso(row.get("Order Date")),
+                "portal_product_id": sku,
+                "city": str(row.get("Shipping City", "")).strip(),
+                "revenue": revenue,
+                "quantity_sold": _f(row.get("Item Quantity", 1)),
+                "order_count": 1,
+                "discount_amount": 0.0,
+            })
+        return rows
+    finally:
+        os.unlink(path)
+
+
+# =============================================================================
 # Amazon PI
 # =============================================================================
 
-AMAZON_PI_REQUIRED = ["ASIN"]
+AMAZON_PI_REQUIRED = ["asin"]
 
 
 def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
     """
     Amazon PI ASIN-wise revenue and unit sales report.
-    Date columns are the report's date range columns (not a 'date' column).
-    Returns one row per ASIN per date column that has data.
+
+    Handles two formats (both are case-insensitive on column names):
+      1. Long format  — one row per order with orderYear/orderMonth/orderDay columns
+                        (actual format from Amazon PI Download Center)
+      2. Wide format  — date columns as headers (legacy / SBG pivot export)
     """
     suffix = os.path.splitext(filename)[1] or ".xlsx"
     path = _write_temp(content, suffix)
     try:
         df = _clean(_read_file(path))
+        # Normalise all column names to lowercase so matching is case-insensitive
+        df.columns = [c.lower() for c in df.columns]
         _require_columns(df, AMAZON_PI_REQUIRED, "amazon_pi")
 
-        # Date columns: all columns that parse as dates (YYYY-MM-DD or similar)
-        # Non-date metadata columns to skip
-        non_date_cols = {"ASIN", "Product Name", "Category", "Brand", "Sub Category"}
+        rows = []
+
+        # ── Format 1: long format with orderYear / orderMonth / orderDay ──────
+        if all(c in df.columns for c in ("orderyear", "ordermonth", "orderday")):
+            for row in df.to_dict("records"):
+                asin = str(row.get("asin", "") or "").strip()
+                if not asin:
+                    continue
+                try:
+                    sale_date = date(
+                        int(float(row["orderyear"])),
+                        int(float(row["ordermonth"])),
+                        int(float(row["orderday"])),
+                    )
+                except (ValueError, TypeError, KeyError):
+                    continue
+                rows.append({
+                    "portal": "amazon",
+                    "sale_date": sale_date,
+                    "portal_product_id": asin,
+                    "city": str(row.get("statename", "") or "").strip(),
+                    "revenue": _f(row.get("orderamt", 0)),
+                    "quantity_sold": _f(row.get("orderquantity", 0)),
+                    "order_count": 1,
+                    "discount_amount": 0.0,
+                })
+            return rows
+
+        # ── Format 2: wide format with date-header columns ────────────────────
+        non_date_cols = {
+            "asin", "product name", "category", "brand", "sub category",
+            "itemname", "lbrbrandname", "subcategory", "statename", "postalcode",
+        }
         date_cols = []
         for col in df.columns:
             if col in non_date_cols:
                 continue
-            # Try to parse as date
             parsed = _parse_date_ymd(col)
             if parsed is None:
-                # Try other formats
                 try:
                     parsed = datetime.strptime(str(col).strip(), "%d-%m-%Y").date()
                 except Exception:
@@ -317,31 +430,29 @@ def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
             date_cols.append((col, parsed))
 
         if not date_cols:
-            # Fallback: look for standard columns
-            if "date" in df.columns or "orderDate" in df.columns:
-                date_col = "date" if "date" in df.columns else "orderDate"
-                rows = []
+            # Last-resort: single date column
+            if "date" in df.columns or "orderdate" in df.columns:
+                date_col = "date" if "date" in df.columns else "orderdate"
                 for row in df.to_dict("records"):
                     rows.append({
                         "portal": "amazon",
                         "sale_date": _parse_date_ymd(row.get(date_col)),
-                        "portal_product_id": str(row.get("ASIN", "")).strip(),
-                        "city": "",
-                        "revenue": _f(row.get("Revenue", row.get("orderAmt", 0))),
-                        "quantity_sold": _f(row.get("Units", row.get("orderQuantity", 0))),
-                        "order_count": _i(row.get("Orders", row.get("orderCount", 1))),
+                        "portal_product_id": str(row.get("asin", "") or "").strip(),
+                        "city": str(row.get("statename", "") or "").strip(),
+                        "revenue": _f(row.get("revenue", row.get("orderamt", 0))),
+                        "quantity_sold": _f(row.get("units", row.get("orderquantity", 0))),
+                        "order_count": _i(row.get("orders", row.get("ordercount", 1))),
                         "discount_amount": 0.0,
                     })
                 return rows
             raise ColumnMismatchError(
-                missing=["date columns (YYYY-MM-DD format) or a 'date' column"],
+                missing=["date columns (YYYY-MM-DD format) or orderyear/ordermonth/orderday"],
                 found=sorted(df.columns.tolist()),
                 file_type="amazon_pi",
             )
 
-        rows = []
         for row in df.to_dict("records"):
-            asin = str(row.get("ASIN", "")).strip()
+            asin = str(row.get("asin", "") or "").strip()
             if not asin:
                 continue
             for col_name, sale_date in date_cols:
@@ -356,7 +467,7 @@ def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
                     "sale_date": sale_date,
                     "portal_product_id": asin,
                     "city": "",
-                    "revenue": 0.0,  # PI report has units only; revenue derived from ASP
+                    "revenue": 0.0,
                     "quantity_sold": qty,
                     "order_count": 0,
                     "discount_amount": 0.0,
@@ -498,6 +609,7 @@ PARSER_REGISTRY: dict[str, Any] = {
     "swiggy_inventory": parse_swiggy_inventory,
     "zepto_sales": parse_zepto_sales,
     "zepto_inventory": parse_zepto_inventory,
+    "easyecom_sales": parse_easyecom_sales,
     "amazon_pi": parse_amazon_pi,
     "shopify_sales": parse_shopify_sales,
     "master_excel": parse_master_excel,

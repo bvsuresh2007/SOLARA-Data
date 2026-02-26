@@ -479,34 +479,45 @@ def _process_master_excel(
 # Helpers
 # =============================================================================
 
+_FETCH_BATCH = 500  # PostgreSQL stack depth limit with tuple IN() — stay well under
+
+
 def _fetch_existing_daily_keys(db: Session, keys: list[tuple]) -> set[tuple]:
     if not keys:
         return set()
-    rows = db.execute(
-        select(DailySales.portal_id, DailySales.product_id, DailySales.sale_date).where(
-            tuple_(DailySales.portal_id, DailySales.product_id, DailySales.sale_date).in_(keys)
-        )
-    ).fetchall()
-    return {(r[0], r[1], r[2]) for r in rows}
+    existing: set[tuple] = set()
+    for i in range(0, len(keys), _FETCH_BATCH):
+        batch = keys[i : i + _FETCH_BATCH]
+        rows = db.execute(
+            select(DailySales.portal_id, DailySales.product_id, DailySales.sale_date).where(
+                tuple_(DailySales.portal_id, DailySales.product_id, DailySales.sale_date).in_(batch)
+            )
+        ).fetchall()
+        existing.update((r[0], r[1], r[2]) for r in rows)
+    return existing
 
 
 def _fetch_existing_inventory_keys(db: Session, keys: list[tuple]) -> set[tuple]:
     if not keys:
         return set()
-    rows = db.execute(
-        select(
-            InventorySnapshot.portal_id,
-            InventorySnapshot.product_id,
-            InventorySnapshot.snapshot_date,
-        ).where(
-            tuple_(
+    existing: set[tuple] = set()
+    for i in range(0, len(keys), _FETCH_BATCH):
+        batch = keys[i : i + _FETCH_BATCH]
+        rows = db.execute(
+            select(
                 InventorySnapshot.portal_id,
                 InventorySnapshot.product_id,
                 InventorySnapshot.snapshot_date,
-            ).in_(keys)
-        )
-    ).fetchall()
-    return {(r[0], r[1], r[2]) for r in rows}
+            ).where(
+                tuple_(
+                    InventorySnapshot.portal_id,
+                    InventorySnapshot.product_id,
+                    InventorySnapshot.snapshot_date,
+                ).in_(batch)
+            )
+        ).fetchall()
+        existing.update((r[0], r[1], r[2]) for r in rows)
+    return existing
 
 
 def _insert_city_sales(db: Session, rows: list[dict], resolver: PortalResolver) -> None:
