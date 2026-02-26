@@ -21,8 +21,10 @@ from ..schemas.inventory import ImportLogOut
 
 logger = logging.getLogger(__name__)
 
-# Portals not yet integrated — excluded from action-items and health queries
-_EXCLUDED_PORTALS_SQL = "('myntra','flipkart')"
+# Portals excluded from action-items and health queries:
+#   myntra, flipkart — not yet integrated
+#   easyecom — inactive aggregator portal (data is split into per-marketplace portals)
+_EXCLUDED_PORTALS_SQL = "('myntra','flipkart','easyecom')"
 
 # Maximum rows returned from mapping_gaps.csv (guards against huge files on every request)
 _MAX_GAPS_ROWS = 500
@@ -76,18 +78,20 @@ def get_action_items(db: Session = Depends(get_db)):
     # Total product count
     total_products = db.execute(text("SELECT COUNT(*) FROM products")).scalar() or 0
 
-    # Query A — mapped product count per portal
+    # Query A — mapped product count per portal (excluding products not on that portal)
     coverage_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
             po.display_name,
-            COUNT(DISTINCT ppm.product_id) AS mapped_products
+            COUNT(DISTINCT ppm.product_id) AS mapped_products,
+            (SELECT COUNT(*) FROM product_portal_exclusions ppe
+             WHERE ppe.portal_id = po.id)  AS excluded_count
         FROM portals po
         LEFT JOIN product_portal_mapping ppm
             ON ppm.portal_id = po.id AND ppm.is_active = true
         WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}
         GROUP BY po.id, po.name, po.display_name
-        ORDER BY COUNT(DISTINCT ppm.product_id) DESC
+        ORDER BY po.display_name ASC
     """)).fetchall()
 
     portal_coverage = [
@@ -95,13 +99,15 @@ def get_action_items(db: Session = Depends(get_db)):
             portal_name=r.portal_name,
             display_name=r.display_name,
             mapped_products=r.mapped_products,
-            total_products=total_products,
-            gap=total_products - r.mapped_products,
+            total_products=total_products - r.excluded_count,
+            gap=total_products - r.excluded_count - r.mapped_products,
         )
         for r in coverage_rows
     ]
 
     # Query B — products missing mapping for ≥1 portal
+    # Excludes product/portal combos recorded in product_portal_exclusions
+    # (product does not sell on that portal at all — not a gap)
     unmapped_rows = db.execute(text(f"""
         WITH active_portals AS (
             SELECT id, name, display_name
@@ -119,7 +125,10 @@ def get_action_items(db: Session = Depends(get_db)):
         CROSS JOIN active_portals ap
         LEFT JOIN product_portal_mapping ppm
             ON ppm.product_id = p.id AND ppm.portal_id = ap.id AND ppm.is_active = true
+        LEFT JOIN product_portal_exclusions ppe
+            ON ppe.product_id = p.id AND ppe.portal_id = ap.id
         WHERE ppm.id IS NULL
+          AND ppe.product_id IS NULL
         GROUP BY p.id, p.sku_code, p.product_name
         HAVING COUNT(*) > 0
         ORDER BY COUNT(*) DESC, p.product_name
