@@ -3,6 +3,7 @@ Portal-specific Excel/CSV parsers.
 Each parser reads a downloaded file and returns a list of raw row dicts.
 """
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -333,6 +334,69 @@ class EasyEcomParser:
 
 
 # =============================================================================
+# EasyEcom Inventory (Manage Inventory download — Amazon Vendor Central format)
+# =============================================================================
+
+class EasyEcomInventoryParser:
+    """
+    Parser for the EasyEcom Manage Inventory download (Amazon Vendor Central CSV).
+
+    File structure:
+      Row 1: metadata — Programme=[Retail],...,Report Updated=[DD/MM/YY]
+      Row 2: column headers — ASIN, Product Title, Brand, ...,
+             Sellable On Hand Units, Open Purchase Order Quantity, ...
+      Row 3+: one row per ASIN
+
+    Key mappings to InventorySnapshot:
+      ASIN                          → portal_product_id
+      Sellable On Hand Units        → amazon_fc_stock
+      Open Purchase Order Quantity  → open_po
+    """
+
+    def _snapshot_date_from_file(self, path: Path) -> date:
+        """Extract the report date from the metadata row (first line of file)."""
+        try:
+            with open(str(path), encoding="utf-8-sig") as fh:
+                meta = fh.readline()
+            # Format: Report Updated=[DD/MM/YY]
+            m = re.search(r"Report Updated=\[(\d{2}/\d{2}/\d{2})\]", meta)
+            if m:
+                return datetime.strptime(m.group(1), "%d/%m/%y").date()
+        except Exception:
+            pass
+        return date.today()
+
+    def parse_sales(self, path: Path) -> list[dict]:
+        return []
+
+    def parse_inventory(self, path: Path) -> list[dict]:
+        snapshot_date = self._snapshot_date_from_file(path)
+
+        # Skip the first metadata row so row 2 becomes the column headers
+        try:
+            df = _clean(
+                pd.read_csv(str(path), skiprows=1, dtype=str, encoding="utf-8-sig")
+            )
+        except Exception as exc:
+            logger.warning("[EasyEcomInventory] Failed to read CSV %s: %s", path, exc)
+            return []
+
+        rows = []
+        for _, row in df.iterrows():
+            asin = str(row.get("ASIN", "")).strip()
+            if not asin or asin.lower() == "nan":
+                continue
+            rows.append({
+                "portal":            "easyecom",
+                "snapshot_date":     snapshot_date,
+                "portal_product_id": asin,
+                "amazon_fc_stock":   _i(row.get("Sellable On Hand Units", 0)),
+                "open_po":           _i(row.get("Open Purchase Order Quantity", 0)),
+            })
+        return rows
+
+
+# =============================================================================
 # Amazon PI
 # =============================================================================
 
@@ -374,7 +438,7 @@ class AmazonPIParser:
                 "l3_category": "",
                 "revenue": revenue,
                 "quantity_sold": qty,
-                "order_count": _i(row.get("orderQuantity", 1)),
+                "order_count": 1,  # each row is one order in the long format
                 "discount_amount": 0.0,
                 "net_revenue": revenue,
             })
@@ -389,13 +453,14 @@ class AmazonPIParser:
 # =============================================================================
 
 PARSERS: dict[str, type] = {
-    "swiggy":    SwiggyParser,
-    "blinkit":   BlinkitParser,
-    "zepto":     ZeptoParser,
-    "amazon":    AmazonParser,
-    "shopify":   ShopifyParser,
-    "easyecom":  EasyEcomParser,
-    "amazon_pi": AmazonPIParser,
+    "swiggy":              SwiggyParser,
+    "blinkit":             BlinkitParser,
+    "zepto":               ZeptoParser,
+    "amazon":              AmazonParser,
+    "shopify":             ShopifyParser,
+    "easyecom":            EasyEcomParser,
+    "easyecom_inventory":  EasyEcomInventoryParser,
+    "amazon_pi":           AmazonPIParser,
 }
 
 

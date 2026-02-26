@@ -69,8 +69,12 @@ def _profile_dir() -> Path:
     return (_HERE / "sessions" / "swiggy_profile").resolve()
 
 # --- URLs ---
-LOGIN_URL = "https://partner.swiggy.com/"
-SALES_URL = os.environ.get("SWIGGY_LINK", "https://partner.swiggy.com/instamart/sales")
+# Swiggy migrated from partner.swiggy.com → partner.instamart.in
+LOGIN_URL = "https://partner.instamart.in/"
+SALES_URL = os.environ.get("SWIGGY_LINK", "https://partner.instamart.in/instamart/sales")
+
+# Both old and new domains are accepted (migration may be in-progress)
+_SWIGGY_DOMAINS = ("partner.instamart.in", "partner.swiggy.com")
 
 # OTP sender — Swiggy sends OTPs from this address
 SWIGGY_OTP_SENDER = "no-reply@swiggy.in"
@@ -144,11 +148,12 @@ class SwiggyScraper:
     def _is_logged_in(self) -> bool:
         """Return True if the current URL is inside the dashboard (not login page)."""
         url = self._page.url
+        on_portal = any(d in url for d in _SWIGGY_DOMAINS)
         return (
-            "partner.swiggy.com" in url
+            on_portal
             and "/login" not in url.lower()
             and "/auth" not in url.lower()
-            and url.rstrip("/") != "https://partner.swiggy.com"
+            and url.rstrip("/") not in ("https://partner.swiggy.com", "https://partner.instamart.in")
         )
 
     # ------------------------------------------------------------------
@@ -310,13 +315,13 @@ class SwiggyScraper:
 
         self._shot("reauth_post_submit")
 
-        # Wait for any post-OTP page (dashboard or account-select)
+        # Wait for any post-OTP page (dashboard or account-select), on either domain
         try:
             self._page.wait_for_url(
-                lambda u: "partner.swiggy.com" in u
+                lambda u: any(d in u for d in _SWIGGY_DOMAINS)
                           and "/login" not in u.lower()
                           and "/auth" not in u.lower()
-                          and u.rstrip("/") != "https://partner.swiggy.com",
+                          and u.rstrip("/") not in ("https://partner.swiggy.com", "https://partner.instamart.in"),
                 timeout=30_000,
             )
         except Exception:
@@ -337,8 +342,9 @@ class SwiggyScraper:
     def _handle_account_select(self) -> None:
         """
         Swiggy may redirect to an account-select / store-picker page after OTP.
-        Try to click the first available store/account option to proceed.
-        Silently skips if the page is not an account-select page.
+        Also handles the portal migration page ("This website is moving!") which
+        auto-redirects to partner.instamart.in after 3 seconds.
+        Silently skips if on neither page.
         """
         url = self._page.url
         if "account-select" not in url and "store-select" not in url:
@@ -346,6 +352,25 @@ class SwiggyScraper:
 
         self._log.info("[Swiggy] On account-select page — picking first account")
         self._shot("account_select")
+
+        # Check for the migration notice ("This website is moving!")
+        page_text = self._page.inner_text("body") if self._page else ""
+        if "partner.instamart.in" in page_text or "website is moving" in page_text.lower():
+            self._log.info("[Swiggy] Migration page detected — waiting for auto-redirect to partner.instamart.in")
+            try:
+                self._page.wait_for_url(
+                    lambda u: "partner.instamart.in" in u,
+                    timeout=10_000,
+                )
+                self._log.info("[Swiggy] Redirected to %s", self._page.url)
+            except Exception:
+                # Redirect didn't happen — navigate there directly
+                self._log.info("[Swiggy] Navigating directly to partner.instamart.in")
+                self._page.goto(LOGIN_URL, wait_until="domcontentloaded")
+                self._page.wait_for_timeout(3000)
+            self._shot("after_account_select")
+            return
+
         try:
             # Look for a clickable store/account card or list item
             item = self._page.locator(
@@ -690,7 +715,7 @@ class SwiggyScraper:
 
         self._page.wait_for_timeout(1000)
         self._shot("after_date_set")
-        self._log.info("[Swiggy] Date range set (%s → %s)", start_str, end_str)
+        self._log.info("[Swiggy] Date range set (%s -> %s)", start_str, end_str)
 
     # ------------------------------------------------------------------
     # Generate report
@@ -1027,12 +1052,14 @@ class SwiggyScraper:
         except ImportError:
             from profile_sync import download_profile, upload_profile
 
+        login_ok = False
         try:
             # Pull latest profile from Drive before launching browser (no-op if not configured)
             download_profile("swiggy")
 
             self._init_browser()
             self.login()
+            login_ok = True
 
             # Snapshot session after login so it's preserved even if download fails
             session_path = _HERE / "sessions" / "swiggy_session.json"
@@ -1066,8 +1093,9 @@ class SwiggyScraper:
             result["error"] = str(exc)
         finally:
             self._close_browser()
-            # Push updated profile back to Drive (no-op if not configured)
-            upload_profile("swiggy")
+            # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+            if login_ok:
+                upload_profile("swiggy")
 
         return result
 

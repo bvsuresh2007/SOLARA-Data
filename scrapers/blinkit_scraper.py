@@ -1051,12 +1051,14 @@ class BlinkitScraper:
         except ImportError:
             from profile_sync import download_profile, upload_profile
 
+        login_ok = False
         try:
             # Pull latest profile from Drive before launching browser (no-op if not configured)
             download_profile("blinkit")
 
             self._init_browser()
             self.login()
+            login_ok = True
             self._go_to_soh()
 
             # Snapshot session cookies to disk immediately after reaching SOH.
@@ -1087,8 +1089,9 @@ class BlinkitScraper:
             result["error"] = str(exc)
         finally:
             self._close_browser()
-            # Push updated profile back to Drive (no-op if not configured)
-            upload_profile("blinkit")
+            # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+            if login_ok:
+                upload_profile("blinkit")
 
         return result
 

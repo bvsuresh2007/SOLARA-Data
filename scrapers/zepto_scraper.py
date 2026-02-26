@@ -128,7 +128,7 @@ class ZeptoScraper(BaseScraper):
 
         if not otp:
             self._screenshot("otp_fetch_failed")
-            raise RuntimeError("Could not fetch Zepto OTP from automation@solara.in.")
+            raise RuntimeError("Could not fetch Zepto OTP from Gmail.")
 
         # --- Step 5: Enter OTP + confirm ---
         logger.info("[Zepto] Entering OTP: %s", otp)
@@ -249,11 +249,11 @@ class ZeptoScraper(BaseScraper):
             from profile_sync import download_session_file, upload_session_file
 
         download_session_file("zepto")
-        try:
-            result = super().run(report_date=report_date)
-        finally:
+        result = super().run(report_date=report_date)
+        # Only upload the session if login succeeded — login() writes SESSION_FILE on success,
+        # and deletes/leaves it absent on failure, so its existence is the reliable indicator.
+        if self.SESSION_FILE.exists():
             upload_session_file("zepto")
-
         return result
 
     # ------------------------------------------------------------------

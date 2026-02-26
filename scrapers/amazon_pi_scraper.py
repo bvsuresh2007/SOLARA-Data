@@ -651,12 +651,14 @@ class AmazonPIScraper:
         except ImportError:
             from profile_sync import download_profile, upload_profile
 
+        login_ok = False
         try:
             # Pull latest profile from Drive before launching browser (no-op if not configured)
             download_profile("amazon_pi")
 
             self._init_browser()
             self.login()
+            login_ok = True
             files = self.download_report(report_date)
             result["files"] = [str(f) for f in files]
             result["status"] = "success" if files else "partial"
@@ -682,8 +684,9 @@ class AmazonPIScraper:
 
         finally:
             self._close_browser()
-            # Push updated profile back to Drive (no-op if not configured)
-            upload_profile("amazon_pi")
+            # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+            if login_ok:
+                upload_profile("amazon_pi")
 
         return result
 
@@ -723,8 +726,10 @@ if __name__ == "__main__":
     download_profile("amazon_pi")
     scraper._init_browser()
 
+    login_ok = False
     try:
         scraper.login()
+        login_ok = True
         print("\n" + "=" * 60)
         print("LOGIN COMPLETE")
         print(f"URL: {scraper._page.url}")
@@ -757,5 +762,6 @@ if __name__ == "__main__":
             pass
     finally:
         scraper._close_browser()
-        # Push updated profile back to Drive (no-op if not configured)
-        upload_profile("amazon_pi")
+        # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+        if login_ok:
+            upload_profile("amazon_pi")

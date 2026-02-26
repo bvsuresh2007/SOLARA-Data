@@ -65,17 +65,17 @@ DOWNLOAD_TIMEOUT_S = 300   # max seconds to wait for report to be ready
 POLL_INTERVAL_S    = 10    # seconds between polls
 
 
-class EasyecomScraper:
-    """Downloads the daily Sales_Report from EasyEcom Sales Details."""
+class EasyecomBaseScraper:
+    """Shared browser lifecycle and login logic for all EasyEcom scrapers."""
 
-    portal_name = "easyecom"
+    portal_name: str  # defined by subclass
 
     def __init__(self, headless: bool = True, raw_data_path: str = None):
         self.headless = headless
         self.raw_data_path = Path(raw_data_path or os.getenv("RAW_DATA_PATH", "./data/raw"))
         self.out_dir = self.raw_data_path / self.portal_name
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self._log = __import__("logging").getLogger("scrapers.easyecom")
+        self._log = __import__("logging").getLogger(f"scrapers.{self.portal_name}")
 
     # ------------------------------------------------------------------
     # Browser lifecycle
@@ -124,6 +124,35 @@ class EasyecomScraper:
             pass
 
     # ------------------------------------------------------------------
+    # Popup dismissal (New Features modal, appears on every navigation)
+    # ------------------------------------------------------------------
+
+    def _dismiss_popups(self) -> None:
+        """Dismiss the 'New Features' modal. Its Close button has class 'new-ui-outline-btn'."""
+        try:
+            dismissed = self._page.evaluate("""
+                () => {
+                    const btn = document.querySelector(
+                        'button.new-ui-outline-btn, button[class*="new-ui-outline"]'
+                    );
+                    if (btn) {
+                        btn.dispatchEvent(
+                            new MouseEvent('click', {bubbles: true, cancelable: true, view: window})
+                        );
+                        return 'dismissed';
+                    }
+                    return 'not-found';
+                }
+            """)
+            if dismissed == 'dismissed':
+                self._log.info("[EasyEcom] Dismissed 'New Features' popup")
+                self._page.wait_for_timeout(1500)
+            else:
+                self._log.debug("[EasyEcom] 'New Features' popup not present")
+        except Exception as e:
+            self._log.debug("[EasyEcom] Popup dismiss error: %s", e)
+
+    # ------------------------------------------------------------------
     # Login: fresh Google OAuth via persistent profile
     # ------------------------------------------------------------------
 
@@ -131,13 +160,12 @@ class EasyecomScraper:
         """
         Always do a fresh Google OAuth. Google auto-approves using the
         Google session stored in the Chrome profile. This re-establishes
-        the PHP session that sales_dashboard.php requires.
+        the PHP session that EasyEcom requires.
         """
         self._log.info("[EasyEcom] Navigating to login page")
         self._page.goto(LOGIN_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(2000)
 
-        # Click "Continue with Google" — profile makes this auto-complete
         self._log.info("[EasyEcom] Clicking Continue with Google (auto via profile)")
         try:
             self._page.wait_for_selector(
@@ -149,20 +177,22 @@ class EasyecomScraper:
 
         self._page.click('button:has-text("Continue with Google")')
 
-        # Wait for redirect past all auth pages
         self._log.info("[EasyEcom] Waiting for dashboard redirect...")
+        # In visible mode give 5 min for manual Google login; in headless CI 60s is enough.
+        wait_timeout = 60_000 if self.headless else 300_000
         try:
+            # Use startswith to avoid matching accounts.google.com URLs that contain
+            # easyecom.io in the redirect_uri parameter (false positive on expired sessions).
             self._page.wait_for_url(
-                lambda u: "easyecom.io" in u and "/account/auth/" not in u,
-                timeout=60_000,
+                lambda u: u.startswith("https://app.easyecom.io") and "/account/auth/" not in u,
+                timeout=wait_timeout,
             )
         except Exception:
-            # May need to handle multiple-signin account selection
             if "multiple-signin" in self._page.url:
-                self._log.warning("[EasyEcom] Account selection page appeared — waiting 30s for user action")
+                self._log.warning("[EasyEcom] Account selection page — waiting 60s for user action")
                 self._page.wait_for_url(
-                    lambda u: "easyecom.io" in u and "/account/auth/" not in u,
-                    timeout=30_000,
+                    lambda u: u.startswith("https://app.easyecom.io") and "/account/auth/" not in u,
+                    timeout=60_000,
                 )
             else:
                 self._shot("login_timeout")
@@ -171,41 +201,11 @@ class EasyecomScraper:
         self._page.wait_for_timeout(2000)
         self._log.info("[EasyEcom] Logged in. Dashboard URL: %s", self._page.url)
 
-    # ------------------------------------------------------------------
-    # Popup dismissal (appears on every navigation to sales page)
-    # ------------------------------------------------------------------
 
-    def _dismiss_popups(self) -> None:
-        """
-        Dismiss the 'New Features' modal that appears on every navigation.
+class EasyecomScraper(EasyecomBaseScraper):
+    """Downloads the daily Sales_Report from EasyEcom Sales Details."""
 
-        The 'New Features' popup Close button has a unique class: 'new-ui-outline-btn'.
-        All other 'Close' buttons on the page use 'btn-default' (for other hidden modals).
-        We target the specific class to avoid clicking the wrong button.
-        """
-        try:
-            dismissed = self._page.evaluate("""
-                () => {
-                    // The "New Features" popup's Close button has class 'new-ui-outline-btn'
-                    const newFeaturesClose = document.querySelector(
-                        'button.new-ui-outline-btn, button[class*="new-ui-outline"]'
-                    );
-                    if (newFeaturesClose) {
-                        newFeaturesClose.dispatchEvent(
-                            new MouseEvent('click', {bubbles: true, cancelable: true, view: window})
-                        );
-                        return 'new-ui-outline';
-                    }
-                    return 'not-found';
-                }
-            """)
-            if dismissed == 'new-ui-outline':
-                self._log.info("[EasyEcom] Dismissed 'New Features' popup via .new-ui-outline-btn")
-                self._page.wait_for_timeout(1500)
-            else:
-                self._log.debug("[EasyEcom] 'New Features' popup not present")
-        except Exception as e:
-            self._log.debug("[EasyEcom] Popup dismiss error: %s", e)
+    portal_name = "easyecom"
 
     # ------------------------------------------------------------------
     # Navigate to Sales Details
@@ -752,12 +752,14 @@ class EasyecomScraper:
         except ImportError:
             from profile_sync import download_profile, upload_profile
 
+        login_ok = False
         try:
             # Pull latest profile from Drive before launching browser (no-op if not configured)
             download_profile("easyecom")
 
             self._init_browser()
             self.login()
+            login_ok = True
             self._go_to_sales_page()
             self._set_date_to_yesterday(report_date)   # raises if date not set correctly
             queued_at = time.time()
@@ -780,8 +782,9 @@ class EasyecomScraper:
             result["error"] = str(exc)
         finally:
             self._close_browser()
-            # Push updated profile back to Drive (no-op if not configured)
-            upload_profile("easyecom")
+            # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+            if login_ok:
+                upload_profile("easyecom")
 
         return result
 
