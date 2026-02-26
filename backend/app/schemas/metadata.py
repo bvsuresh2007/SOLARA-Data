@@ -88,8 +88,8 @@ class ImportFailure(BaseModel):
     portal_name: Optional[str]
     display_name: Optional[str]
     file_name: Optional[str]
-    import_date: str
-    start_time: str
+    import_date: Optional[str] = None
+    start_time: Optional[str] = None
     error_message: Optional[str]
     source_type: str
 

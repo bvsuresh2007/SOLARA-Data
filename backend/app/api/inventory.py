@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, case
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models.inventory import InventorySnapshot
@@ -50,11 +50,37 @@ def current_inventory(
             & (InventorySnapshot.snapshot_date == latest.c.max_date),
         )
     )
-    if portal_id:
+    if portal_id is not None:
         q = q.filter(InventorySnapshot.portal_id == portal_id)
-    if product_id:
+    if product_id is not None:
         q = q.filter(InventorySnapshot.product_id == product_id)
-    return q.order_by(_total_stock(InventorySnapshot).asc()).all()
+    rows = (
+        q.options(
+            joinedload(InventorySnapshot.portal),
+            joinedload(InventorySnapshot.product),
+        )
+        .order_by(_total_stock(InventorySnapshot).asc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "portal_id": r.portal_id,
+            "portal_name": r.portal.display_name if r.portal else None,
+            "product_id": r.product_id,
+            "product_name": r.product.product_name if r.product else None,
+            "snapshot_date": r.snapshot_date,
+            "portal_stock": r.portal_stock,
+            "backend_stock": r.backend_stock,
+            "frontend_stock": r.frontend_stock,
+            "solara_stock": r.solara_stock,
+            "amazon_fc_stock": r.amazon_fc_stock,
+            "open_po": r.open_po,
+            "doc": r.doc,
+            "imported_at": r.imported_at,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/trends", response_model=List[InventorySnapshotOut])
@@ -66,7 +92,7 @@ def inventory_trends(
     db: Session = Depends(get_db),
 ):
     q = db.query(InventorySnapshot).filter(InventorySnapshot.product_id == product_id)
-    if portal_id:
+    if portal_id is not None:
         q = q.filter(InventorySnapshot.portal_id == portal_id)
     if start_date:
         q = q.filter(InventorySnapshot.snapshot_date >= start_date)
@@ -106,7 +132,7 @@ def low_stock(
             & (InventorySnapshot.snapshot_date == latest.c.max_date),
         )
     )
-    if portal_id:
+    if portal_id is not None:
         q = q.filter(InventorySnapshot.portal_id == portal_id)
     rows = (
         q.group_by(Product.id, Product.product_name, Product.sku_code)

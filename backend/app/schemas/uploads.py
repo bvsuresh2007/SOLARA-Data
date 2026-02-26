@@ -15,6 +15,7 @@ class UploadFileType(str, Enum):
     SWIGGY_INVENTORY = "swiggy_inventory"
     ZEPTO_SALES = "zepto_sales"
     ZEPTO_INVENTORY = "zepto_inventory"
+    EASYECOM_SALES = "easyecom_sales"
     AMAZON_PI = "amazon_pi"
     SHOPIFY_SALES = "shopify_sales"
 
@@ -54,6 +55,11 @@ FILE_TYPE_META: dict[str, dict] = {
         "label": "Zepto Inventory CSV",
         "description": "Zepto portal inventory snapshot with SKU Number, Date, Units, City columns",
         "target_tables": ["inventory_snapshots"],
+    },
+    UploadFileType.EASYECOM_SALES: {
+        "label": "EasyEcom Sales CSV",
+        "description": "EasyEcom mini sales report (CSV from ZIP download) with SKU, Order Date, Shipping City, Selling Price, Item Quantity columns. Cancelled orders are excluded automatically.",
+        "target_tables": ["daily_sales"],
     },
     UploadFileType.AMAZON_PI: {
         "label": "Amazon PI ASIN Revenue Report",

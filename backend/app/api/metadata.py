@@ -5,7 +5,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..models.metadata import Portal, City, Warehouse
@@ -20,6 +20,12 @@ from ..config import settings
 from ..schemas.inventory import ImportLogOut
 
 logger = logging.getLogger(__name__)
+
+# Portals not yet integrated — excluded from action-items and health queries
+_EXCLUDED_PORTALS_SQL = "('myntra','flipkart')"
+
+# Maximum rows returned from mapping_gaps.csv (guards against huge files on every request)
+_MAX_GAPS_ROWS = 500
 
 
 def _find_gaps_csv() -> Path | None:
@@ -58,9 +64,9 @@ def list_warehouses(
     db: Session = Depends(get_db),
 ):
     q = db.query(Warehouse).filter(Warehouse.is_active == True)
-    if portal_id:
+    if portal_id is not None:
         q = q.filter(Warehouse.portal_id == portal_id)
-    if city_id:
+    if city_id is not None:
         q = q.filter(Warehouse.city_id == city_id)
     return q.order_by(Warehouse.name).all()
 
@@ -71,7 +77,7 @@ def get_action_items(db: Session = Depends(get_db)):
     total_products = db.execute(text("SELECT COUNT(*) FROM products")).scalar() or 0
 
     # Query A — mapped product count per portal
-    coverage_rows = db.execute(text("""
+    coverage_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
             po.display_name,
@@ -79,7 +85,7 @@ def get_action_items(db: Session = Depends(get_db)):
         FROM portals po
         LEFT JOIN product_portal_mapping ppm
             ON ppm.portal_id = po.id AND ppm.is_active = true
-        WHERE po.name NOT IN ('myntra','flipkart')
+        WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}
         GROUP BY po.id, po.name, po.display_name
         ORDER BY COUNT(DISTINCT ppm.product_id) DESC
     """)).fetchall()
@@ -96,11 +102,11 @@ def get_action_items(db: Session = Depends(get_db)):
     ]
 
     # Query B — products missing mapping for ≥1 portal
-    unmapped_rows = db.execute(text("""
+    unmapped_rows = db.execute(text(f"""
         WITH active_portals AS (
             SELECT id, name, display_name
             FROM portals
-            WHERE name NOT IN ('myntra','flipkart')
+            WHERE name NOT IN {_EXCLUDED_PORTALS_SQL}
         )
         SELECT
             p.id AS product_id,
@@ -133,7 +139,7 @@ def get_action_items(db: Session = Depends(get_db)):
     ]
 
     # Query C — last pipeline run per portal
-    health_rows = db.execute(text("""
+    health_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
             po.display_name,
@@ -146,7 +152,7 @@ def get_action_items(db: Session = Depends(get_db)):
         FROM portals po
         LEFT JOIN import_logs il
             ON il.portal_id = po.id AND il.source_type = 'portal_scraper'
-        WHERE po.name NOT IN ('myntra','flipkart')
+        WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}
         GROUP BY po.id, po.name, po.display_name
         ORDER BY MAX(il.end_time) DESC NULLS LAST
     """)).fetchall()
@@ -170,6 +176,8 @@ def get_action_items(db: Session = Depends(get_db)):
         try:
             with open(gaps_path, newline="", encoding="utf-8") as fh:
                 for row in csv.DictReader(fh):
+                    if len(portal_sku_gaps) >= _MAX_GAPS_ROWS:
+                        break
                     portal_sku_gaps.append(PortalSkuGap(
                         portal=row.get("portal", ""),
                         portal_sku=row.get("portal_sku", ""),
@@ -270,9 +278,27 @@ def list_scraping_logs(
     limit: int = Query(50, le=500),
     db: Session = Depends(get_db),
 ):
-    q = db.query(ImportLog)
-    if portal_id:
+    q = db.query(ImportLog).options(joinedload(ImportLog.portal))
+    if portal_id is not None:
         q = q.filter(ImportLog.portal_id == portal_id)
     if status:
         q = q.filter(ImportLog.status == status)
-    return q.order_by(ImportLog.created_at.desc()).limit(limit).all()
+    rows = q.order_by(ImportLog.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "source_type": r.source_type,
+            "portal_id": r.portal_id,
+            "portal_name": r.portal.display_name if r.portal else None,
+            "sheet_name": r.sheet_name,
+            "file_name": r.file_name,
+            "import_date": r.import_date,
+            "start_time": r.start_time,
+            "end_time": r.end_time,
+            "status": r.status,
+            "records_imported": r.records_imported,
+            "error_message": r.error_message,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]

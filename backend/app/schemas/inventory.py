@@ -7,7 +7,9 @@ from pydantic import BaseModel
 class InventorySnapshotOut(BaseModel):
     id: int
     portal_id: int
+    portal_name: Optional[str] = None
     product_id: int
+    product_name: Optional[str] = None
     snapshot_date: date
     portal_stock: Optional[Decimal]
     backend_stock: Optional[Decimal]
@@ -38,6 +40,7 @@ class ImportLogOut(BaseModel):
     id: int
     source_type: str
     portal_id: Optional[int]
+    portal_name: Optional[str] = None
     sheet_name: Optional[str]
     file_name: Optional[str]
     import_date: date
