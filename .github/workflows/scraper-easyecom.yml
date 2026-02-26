@@ -89,12 +89,14 @@ jobs:
 
           # Supabase direct DB (db.<ref>.supabase.co) is IPv6-only on GitHub Actions.
           # Rewrite to the connection pooler (<ref>.pooler.supabase.com) which has IPv4.
-          _h = os.environ.get("POSTGRES_HOST", "")
-          _m = re.match(r'^db\.([^.]+)\.supabase\.co$', _h) if _h else None
+          _h = os.environ.get("POSTGRES_HOST", "").strip()
+          _hparts = _h.split(".") if _h else []
+          print(f"[DB-DIAG] HOST={len(_hparts)}pts,ends={'.'.join(_hparts[-2:]) if len(_hparts)>=2 else (_h or 'empty')}", flush=True)
+          _m = re.match(r'^(?:db\.)?([a-zA-Z0-9-]+)\.supabase\.co$', _h) if _h else None
           if _m:
               _ref = _m.group(1)
               os.environ["POSTGRES_HOST"] = f"{_ref}.pooler.supabase.com"
-              print(f"[DB] Using Supabase pooler: {_h} -> {os.environ['POSTGRES_HOST']}")
+              print(f"[DB] Using Supabase pooler: {_h} -> {os.environ['POSTGRES_HOST']}", flush=True)
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:

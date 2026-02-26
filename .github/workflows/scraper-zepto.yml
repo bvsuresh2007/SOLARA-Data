@@ -96,18 +96,20 @@ jobs:
           def _pooler_url(url):
               if not url: return url
               _p = urlparse(url)
-              _m = re.match(r'^db\.([^.]+)\.supabase\.co$', _p.hostname or "")
+              _m = re.match(r'^(?:db\.)?([a-zA-Z0-9-]+)\.supabase\.co$', (_p.hostname or "").strip())
               if _m:
                   _ref = _m.group(1); _pooler = f"{_ref}.pooler.supabase.com"
-                  print(f"[DB] Supabase pooler: {_p.hostname} -> {_pooler}")
+                  print(f"[DB] Supabase pooler: {_p.hostname} -> {_pooler}", flush=True)
                   return urlunparse(_p._replace(netloc=_p.netloc.replace(_p.hostname, _pooler, 1)))
               return url
           os.environ["DATABASE_URL"] = _pooler_url(os.environ.get("DATABASE_URL", ""))
-          _h = os.environ.get("POSTGRES_HOST", "")
-          _m2 = re.match(r'^db\.([^.]+)\.supabase\.co$', _h) if _h else None
+          _h = os.environ.get("POSTGRES_HOST", "").strip()
+          _hparts = _h.split(".") if _h else []
+          print(f"[DB-DIAG] HOST={len(_hparts)}pts,ends={'.'.join(_hparts[-2:]) if len(_hparts)>=2 else (_h or 'empty')},DB_URL={'set' if os.environ.get('DATABASE_URL') else 'empty'}", flush=True)
+          _m2 = re.match(r'^(?:db\.)?([a-zA-Z0-9-]+)\.supabase\.co$', _h) if _h else None
           if _m2:
               os.environ["POSTGRES_HOST"] = f"{_m2.group(1)}.pooler.supabase.com"
-              print(f"[DB] Supabase pooler (HOST): {_h} -> {os.environ['POSTGRES_HOST']}")
+              print(f"[DB] Supabase pooler (HOST): {_h} -> {os.environ['POSTGRES_HOST']}", flush=True)
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
