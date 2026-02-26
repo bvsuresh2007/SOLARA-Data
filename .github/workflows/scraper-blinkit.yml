@@ -106,13 +106,6 @@ jobs:
           _h = os.environ.get("POSTGRES_HOST", "").strip()
           _hparts = _h.split(".") if _h else []
           print(f"[DB-DIAG] HOST={len(_hparts)}pts,ends={'.'.join(_hparts[-2:]) if len(_hparts)>=2 else (_h or 'empty')},DB_URL={'set' if os.environ.get('DATABASE_URL') else 'empty'}", flush=True)
-          _m2 = re.match(r'^(?:db\.)?([a-zA-Z0-9-]+)\.supabase\.co$', _h) if _h else None
-          if _m2:
-              os.environ["POSTGRES_HOST"] = f"{_m2.group(1)}.pooler.supabase.com"
-              print(f"[DB] Supabase pooler (HOST): {_h} -> {os.environ['POSTGRES_HOST']}", flush=True)
-              os.environ.pop("DATABASE_URL", None)  # Force settings to use patched POSTGRES_HOST
-              print("[DB] Cleared DATABASE_URL; using POSTGRES_HOST pooler endpoint", flush=True)
-
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
               from datetime import datetime
