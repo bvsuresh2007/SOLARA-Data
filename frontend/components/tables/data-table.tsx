@@ -33,8 +33,8 @@ export function ScrapingStatusTable({ logs }: { logs: ScrapingLog[] }) {
       <TableBody>
         {logs.map(log => (
           <TableRow key={log.id} className="border-zinc-800/50">
-            <TableCell className="py-2 px-2 text-xs text-zinc-400 max-w-[200px] truncate" title={log.sheet_name ?? log.file_name ?? String(log.portal_id ?? "—")}>
-              {log.sheet_name ?? log.file_name ?? `Portal ${log.portal_id ?? "—"}`}
+            <TableCell className="py-2 px-2 text-xs text-zinc-400 max-w-[200px] truncate" title={log.sheet_name ?? log.file_name ?? log.portal_name ?? String(log.portal_id ?? "—")}>
+              {log.sheet_name ?? log.file_name ?? log.portal_name ?? (log.portal_id ? `Portal ${log.portal_id}` : "—")}
             </TableCell>
             <TableCell className="py-2 px-2 text-xs text-zinc-400">{log.import_date ?? "—"}</TableCell>
             <TableCell className="py-2 px-2">

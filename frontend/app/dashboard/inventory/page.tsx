@@ -6,8 +6,6 @@ import {
 } from "@/components/ui/table";
 import Link from "next/link";
 
-export const revalidate = 300;
-
 const LOW_STOCK_PREVIEW = 20;
 
 export default async function InventoryDashboardPage() {
@@ -95,8 +93,8 @@ export default async function InventoryDashboardPage() {
               const portalStockNum = parseFloat(row.portal_stock ?? "0");
               return (
                 <TableRow key={row.id} className="border-zinc-800/50">
-                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">#{row.portal_id}</TableCell>
-                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">#{row.product_id}</TableCell>
+                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">{row.portal_name ?? `#${row.portal_id}`}</TableCell>
+                  <TableCell className="py-2 px-2 text-zinc-500 text-xs">{row.product_name ?? `#${row.product_id}`}</TableCell>
                   <TableCell className="py-2 px-2 text-zinc-600 text-xs">{row.snapshot_date}</TableCell>
                   <TableCell className={`py-2 px-2 text-right font-mono text-xs font-medium ${portalStockNum === 0 ? "text-red-400" : "text-green-400"}`}>
                     {row.portal_stock ?? "—"}

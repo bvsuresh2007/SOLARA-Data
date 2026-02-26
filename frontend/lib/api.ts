@@ -62,7 +62,9 @@ export interface TargetAchievement {
 export interface InventoryItem {
   id: number;
   portal_id: number;
+  portal_name: string | null;
   product_id: number;
+  product_name: string | null;
   snapshot_date: string;
   portal_stock: string | null;
   backend_stock: string | null;
@@ -152,6 +154,7 @@ export interface ImportFailure {
 export interface ScrapingLog {
   id: number;
   portal_id?: number;
+  portal_name?: string;
   sheet_name?: string;
   file_name?: string;
   import_date: string;

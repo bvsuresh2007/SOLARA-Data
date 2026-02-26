@@ -39,8 +39,8 @@ interface UploadResult {
 
 interface ParseError422 {
   message: string;
-  missing_columns: string[];
-  columns_found_in_file: string[];
+  missing_columns?: string[];
+  columns_found_in_file?: string[];
 }
 
 export default function UploadPage() {
@@ -223,22 +223,26 @@ export default function UploadPage() {
             </CardHeader>
             <CardContent className="space-y-3 text-xs">
               <p className="text-zinc-300 leading-relaxed">{parseError.message}</p>
-              <div className="space-y-1.5">
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Expected (missing from file)</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {parseError.missing_columns.map((c) => (
-                    <span key={c} className="bg-red-900/40 text-red-300 border border-red-800 rounded px-2 py-0.5 font-mono text-[11px]">{c}</span>
-                  ))}
+              {parseError.missing_columns && parseError.missing_columns.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Expected (missing from file)</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {parseError.missing_columns.map((c) => (
+                      <span key={c} className="bg-red-900/40 text-red-300 border border-red-800 rounded px-2 py-0.5 font-mono text-[11px]">{c}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Columns found in uploaded file</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {parseError.columns_found_in_file.map((c) => (
-                    <span key={c} className="bg-zinc-800 text-zinc-400 rounded px-2 py-0.5 font-mono text-[11px]">{c}</span>
-                  ))}
+              )}
+              {parseError.columns_found_in_file && parseError.columns_found_in_file.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Columns found in uploaded file</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {parseError.columns_found_in_file.map((c) => (
+                      <span key={c} className="bg-zinc-800 text-zinc-400 rounded px-2 py-0.5 font-mono text-[11px]">{c}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
               <p className="text-zinc-600 leading-relaxed">
                 Common causes: wrong file type selected, portal changed their export format, or file was re-saved in Excel.
               </p>
