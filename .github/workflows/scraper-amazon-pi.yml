@@ -95,17 +95,21 @@ jobs:
 
           # Supabase direct DB (db.<ref>.supabase.co) is IPv6-only on GitHub Actions.
           # Rewrite to the connection pooler (<ref>.pooler.supabase.com) which has IPv4.
-          _url = os.environ.get("DATABASE_URL", "")
-          if _url:
-              _p = urlparse(_url)
+          def _pooler_url(url):
+              if not url: return url
+              _p = urlparse(url)
               _m = re.match(r'^db\.([^.]+)\.supabase\.co$', _p.hostname or "")
               if _m:
-                  _ref = _m.group(1)
-                  _pooler = f"{_ref}.pooler.supabase.com"
-                  os.environ["DATABASE_URL"] = urlunparse(_p._replace(
-                      netloc=_p.netloc.replace(_p.hostname, _pooler, 1)
-                  ))
-                  print(f"[DB] Using Supabase pooler: {_p.hostname} -> {_pooler}")
+                  _ref = _m.group(1); _pooler = f"{_ref}.pooler.supabase.com"
+                  print(f"[DB] Supabase pooler: {_p.hostname} -> {_pooler}")
+                  return urlunparse(_p._replace(netloc=_p.netloc.replace(_p.hostname, _pooler, 1)))
+              return url
+          os.environ["DATABASE_URL"] = _pooler_url(os.environ.get("DATABASE_URL", ""))
+          _h = os.environ.get("POSTGRES_HOST", "")
+          _m2 = re.match(r'^db\.([^.]+)\.supabase\.co$', _h) if _h else None
+          if _m2:
+              os.environ["POSTGRES_HOST"] = f"{_m2.group(1)}.pooler.supabase.com"
+              print(f"[DB] Supabase pooler (HOST): {_h} -> {os.environ['POSTGRES_HOST']}")
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
