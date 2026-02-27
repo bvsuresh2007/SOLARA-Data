@@ -83,9 +83,16 @@ export default async function DashboardPage() {
               {byProduct.slice(0, 10).map((p, i) => (
                 <TableRow key={p.dimension_id} className="border-zinc-800/50">
                   <TableCell className="py-2 px-2 text-zinc-200">
-                    <span title={p.dimension_name} className="cursor-default">
-                      {i + 1}. {p.sku_code ?? p.dimension_name}
-                    </span>
+                    <div className="group relative inline-block">
+                      <span className="cursor-default">
+                        {i + 1}. {p.sku_code ?? p.dimension_name}
+                      </span>
+                      {p.sku_code && (
+                        <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-1.5 hidden w-max max-w-xs rounded border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-100 shadow-xl group-hover:block">
+                          {p.dimension_name}
+                        </div>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-2 px-2 text-right font-mono text-zinc-100">{formatCurrency(p.total_revenue)}</TableCell>
                   <TableCell className="py-2 px-2 text-right text-zinc-400">{formatNumber(p.total_quantity)}</TableCell>
