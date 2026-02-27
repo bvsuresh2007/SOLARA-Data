@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select, tuple_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -438,32 +439,36 @@ def _process_master_excel(
             inserted=0, skipped=0, errors=errors, import_log_id=None,
         )
 
-    keys = [(r["_portal_id"], r["_product_id"], r["_sale_date"]) for r in resolved]
-    existing = _fetch_existing_daily_keys(db, keys)
-    to_insert = [r for r in resolved if (r["_portal_id"], r["_product_id"], r["_sale_date"]) not in existing]
-    skipped = len(resolved) - len(to_insert)
-
+    # Single-pass upsert: INSERT ... ON CONFLICT (portal_id, product_id, sale_date) DO NOTHING
+    # This eliminates the separate fetch-existing-keys phase (was 667 round trips for 333K rows).
+    _INSERT_BATCH = 5000
     inserted = 0
     import_log_id = None
 
-    if to_insert:
-        try:
-            daily_rows = [
-                DailySales(
-                    portal_id=r["_portal_id"],
-                    product_id=r["_product_id"],
-                    sale_date=r["_sale_date"],
-                    units_sold=r["units_sold"],
-                    revenue=r["revenue"],
-                    asp=r["asp"],
-                    data_source="master_excel",
-                )
-                for r in to_insert
-            ]
-            db.bulk_save_objects(daily_rows)
-            inserted = len(daily_rows)
+    try:
+        for i in range(0, len(resolved), _INSERT_BATCH):
+            batch = resolved[i : i + _INSERT_BATCH]
+            stmt = pg_insert(DailySales).values([
+                {
+                    "portal_id": r["_portal_id"],
+                    "product_id": r["_product_id"],
+                    "sale_date": r["_sale_date"],
+                    "units_sold": r["units_sold"],
+                    "revenue": r["revenue"],
+                    "asp": r["asp"],
+                    "data_source": "master_excel",
+                }
+                for r in batch
+            ]).on_conflict_do_nothing(
+                index_elements=["portal_id", "product_id", "sale_date"]
+            )
+            result_proxy = db.execute(stmt)
+            inserted += result_proxy.rowcount
 
-            earliest = min(r["_sale_date"] for r in to_insert)
+        skipped = len(resolved) - inserted
+
+        if inserted > 0:
+            earliest = min(r["_sale_date"] for r in resolved)
             log = ImportLog(
                 source_type="excel_import",
                 file_name=filename,
@@ -475,12 +480,14 @@ def _process_master_excel(
             db.add(log)
             db.flush()
             import_log_id = log.id
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            inserted = 0
-            errors.append(UploadError(row=0, reason="Database conflict — no rows were inserted. Try re-uploading."))
-            logger.warning("IntegrityError during master Excel insert — all rows rolled back")
+
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        inserted = 0
+        skipped = 0
+        errors.append(UploadError(row=0, reason="Database conflict — no rows were inserted. Try re-uploading."))
+        logger.warning("IntegrityError during master Excel insert — all rows rolled back")
 
     return UploadResult(
         file_type="", file_name="", rows_parsed=0,
