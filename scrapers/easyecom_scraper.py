@@ -61,7 +61,7 @@ LOGIN_URL = "https://app.easyecom.io/V2/account/auth/login"
 SALES_URL = "https://app.easyecom.io/V2/sales_dashboard.php"
 
 # --- Timing ---
-DOWNLOAD_TIMEOUT_S = 300   # max seconds to wait for report to be ready
+DOWNLOAD_TIMEOUT_S = 900   # max seconds to wait for report to be ready (CI can take 5-10 min)
 POLL_INTERVAL_S    = 10    # seconds between polls
 
 
