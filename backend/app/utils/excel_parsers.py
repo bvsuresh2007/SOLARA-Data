@@ -133,7 +133,7 @@ def _i(val: Any, default: int = 0) -> int:
 # =============================================================================
 
 BLINKIT_SALES_REQUIRED = ["item_id", "date"]
-BLINKIT_INV_REQUIRED = ["item_id", "date"]
+BLINKIT_INV_REQUIRED = ["item_id"]   # date col accepted as "date" or "created_at"
 
 
 def parse_blinkit_sales(content: bytes, filename: str) -> list[dict]:
@@ -173,7 +173,7 @@ def parse_blinkit_inventory(content: bytes, filename: str) -> list[dict]:
                 "portal": "blinkit",
                 "snapshot_date": _parse_date_ymd(row.get("date", row.get("created_at"))),
                 "portal_product_id": str(row.get("item_id", "")).strip(),
-                "warehouse_name": str(row.get("facility_name", "")).strip(),
+                "warehouse_name": str(row.get("facility_name", row.get("backend_facility_name", ""))).strip(),
                 "city": str(row.get("city", "")).strip(),
                 "backend_stock": _f(row.get("backend_inv_qty", 0)),
                 "frontend_stock": _f(row.get("frontend_inv_qty", 0)),
