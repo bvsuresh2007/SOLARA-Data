@@ -559,9 +559,9 @@ def parse_shopify_sales(content: bytes, filename: str) -> list[dict]:
 def _ensure_scripts_on_path() -> None:
     """Add project root to sys.path so scripts/ is importable from the backend."""
     import sys
-    # backend/app/utils/excel_parsers.py → go up 4 levels to project root
+    # backend/app/utils/excel_parsers.py → up 3 dirs → backend/ → up 1 more → project root
     project_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     )
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
