@@ -18,7 +18,7 @@ export function CategoryChart({ data }: Props) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Category Breakdown</CardTitle>
+        <CardTitle className="text-base">Sub-category Breakdown</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={Math.max(180, sorted.length * 48)}>
