@@ -75,6 +75,13 @@ jobs:
               except Exception as e:
                   print(f"[DB] IPv4 resolution failed: {e}", flush=True)
 
+          # Guard: if host is still an IPv6 literal, connection will fail.
+          if host and ":" in host:
+              print(f"ERROR: DATABASE_URL contains IPv6 address literal ({host}).", flush=True)
+              print("Update DATABASE_URL secret to use the Supabase session-mode pooler hostname:", flush=True)
+              print("  Supabase Dashboard -> Settings -> Database -> Connection Pooling -> Session mode", flush=True)
+              sys.exit(1)
+
           try:
               import psycopg2
               conn = psycopg2.connect(url, connect_timeout=10)
