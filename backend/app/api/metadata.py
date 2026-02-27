@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 # Portals excluded from action-items and health queries:
 #   myntra, flipkart — not yet integrated
 #   easyecom — inactive aggregator portal (data is split into per-marketplace portals)
-_EXCLUDED_PORTALS_SQL = "('myntra','flipkart','easyecom')"
+#   amazon_pi — scraper-only portal used for import logs; sales data lives under 'amazon'
+_EXCLUDED_PORTALS_SQL = "('myntra','flipkart','easyecom','amazon_pi')"
 
 # Maximum rows returned from mapping_gaps.csv (guards against huge files on every request)
 _MAX_GAPS_ROWS = 500

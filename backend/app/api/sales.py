@@ -90,6 +90,7 @@ def sales_by_portal(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .filter(Portal.is_active == True)
+        .filter(Portal.name != "amazon_pi")
         .join(DailySales, DailySales.portal_id == Portal.id, isouter=True)
     )
     if start_date:
