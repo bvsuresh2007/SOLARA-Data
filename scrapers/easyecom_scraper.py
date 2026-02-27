@@ -82,6 +82,7 @@ class EasyecomBaseScraper:
     # ------------------------------------------------------------------
 
     def _init_browser(self):
+        import json
         from playwright.sync_api import sync_playwright
         profile = _profile_dir()
         if not profile.exists():
@@ -89,6 +90,17 @@ class EasyecomBaseScraper:
                 f"EasyEcom Chrome profile not found at {profile}. "
                 "Run auth_easyecom.py first to set up the profile."
             )
+
+        # If a portable session JSON exists, clear the OS-encrypted Cookies DB
+        # so that Chromium (especially on Linux CI with a Windows-created profile)
+        # doesn't try to decrypt it and fail. The JSON cookies will be injected instead.
+        session_file = profile.parent / "easyecom_session.json"
+        if session_file.exists():
+            cookies_db = profile / "Default" / "Cookies"
+            if cookies_db.exists():
+                cookies_db.unlink()
+                self._log.info("[EasyEcom] Cleared encrypted cookie DB; will restore from session JSON")
+
         self._pw = sync_playwright().__enter__()
         self._ctx = self._pw.chromium.launch_persistent_context(
             user_data_dir=str(profile),
@@ -102,6 +114,18 @@ class EasyecomBaseScraper:
                 "Chrome/122.0.0.0 Safari/537.36"
             ),
         )
+
+        # Inject platform-independent cookies (decrypted JSON — works on any OS)
+        if session_file.exists():
+            try:
+                state = json.loads(session_file.read_text())
+                cookies = state.get("cookies", [])
+                if cookies:
+                    self._ctx.add_cookies(cookies)
+                    self._log.info("[EasyEcom] Injected %d cookies from session JSON", len(cookies))
+            except Exception as exc:
+                self._log.warning("[EasyEcom] Could not inject session cookies: %s", exc)
+
         self._page = self._ctx.new_page()
         self._page.set_default_timeout(30_000)
 
@@ -748,18 +772,37 @@ class EasyecomScraper(EasyecomBaseScraper):
         }
 
         try:
-            from scrapers.profile_sync import download_profile, upload_profile
+            from scrapers.profile_sync import (
+                download_profile, upload_profile,
+                download_session_file, upload_session_file,
+            )
         except ImportError:
-            from profile_sync import download_profile, upload_profile
+            from profile_sync import (
+                download_profile, upload_profile,
+                download_session_file, upload_session_file,
+            )
 
         login_ok = False
         try:
-            # Pull latest profile from Drive before launching browser (no-op if not configured)
+            # Pull latest profile + portable session cookies from Drive
             download_profile("easyecom")
+            download_session_file("easyecom")  # platform-independent JSON cookies
 
             self._init_browser()
             self.login()
             login_ok = True
+
+            # Persist platform-independent session state so the next CI run
+            # (potentially on a different OS) can inject the cookies directly.
+            import json
+            session_file = _profile_dir().parent / "easyecom_session.json"
+            try:
+                state = self._ctx.storage_state()
+                session_file.write_text(json.dumps(state))
+                self._log.info("[EasyEcom] Saved session state (%d cookies)", len(state.get("cookies", [])))
+            except Exception as exc:
+                self._log.warning("[EasyEcom] Could not save session state: %s", exc)
+
             self._go_to_sales_page()
             self._set_date_to_yesterday(report_date)   # raises if date not set correctly
             queued_at = time.time()
@@ -782,9 +825,10 @@ class EasyecomScraper(EasyecomBaseScraper):
             result["error"] = str(exc)
         finally:
             self._close_browser()
-            # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
+            # Only upload profile/session if login succeeded — avoids overwriting Drive with a failed session
             if login_ok:
                 upload_profile("easyecom")
+                upload_session_file("easyecom")  # platform-independent JSON cookies
 
         return result
 
