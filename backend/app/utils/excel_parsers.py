@@ -299,7 +299,7 @@ def parse_swiggy_inventory(content: bytes, filename: str) -> list[dict]:
 # =============================================================================
 
 ZEPTO_SALES_REQUIRED = ["SKU Number", "Date"]
-ZEPTO_INV_REQUIRED = ["SKU Number", "Date"]
+ZEPTO_INV_REQUIRED = []   # column names differ across formats — validated inline
 
 
 def parse_zepto_sales(content: bytes, filename: str) -> list[dict]:
@@ -338,18 +338,51 @@ def parse_zepto_sales(content: bytes, filename: str) -> list[dict]:
 
 
 def parse_zepto_inventory(content: bytes, filename: str) -> list[dict]:
+    """
+    Handles two known Zepto inventory export formats:
+
+    Old format columns: SKU Number (UUID), Date, City, Units
+    New format columns: EAN, SKU Code, SKU Name, City, Units,
+                        SKU Category, SKU Sub Category, Brand Name, ...
+                        (no Date column — today's date used as snapshot_date)
+    """
     suffix = os.path.splitext(filename)[1] or ".csv"
     path = _write_temp(content, suffix)
     try:
         df = _clean(_read_file(path))
-        _require_columns(df, ZEPTO_INV_REQUIRED, "zepto_inventory")
+        cols = set(df.columns)
+
+        is_new_format = "EAN" in cols or "SKU Code" in cols
+        is_old_format = "SKU Number" in cols
+
+        if not is_new_format and not is_old_format:
+            raise ColumnMismatchError(
+                missing=["EAN (or SKU Number)"],
+                found=sorted(cols),
+                file_type="zepto_inventory",
+            )
+
+        from datetime import date as _date
         rows = []
         for row in df.to_dict("records"):
+            if is_new_format:
+                # Use EAN as portal_product_id — consistent with zepto_sales parser
+                ean = str(row.get("EAN", "")).strip()
+                if not ean or ean in ("0", "nan", ""):
+                    continue
+                portal_product_id = ean
+                snapshot_date = _parse_date_dmy(row.get("Date")) or _date.today()
+            else:
+                portal_product_id = str(row.get("SKU Number", "")).strip()
+                snapshot_date = _parse_date_dmy(row.get("Date"))
+                if not portal_product_id:
+                    continue
+
             stock = _f(row.get("Units", 0))
             rows.append({
                 "portal": "zepto",
-                "snapshot_date": _parse_date_dmy(row.get("Date")),
-                "portal_product_id": str(row.get("SKU Number", "")).strip(),
+                "snapshot_date": snapshot_date,
+                "portal_product_id": portal_product_id,
                 "city": str(row.get("City", "")).strip(),
                 "warehouse_name": "",
                 "backend_stock": stock,
