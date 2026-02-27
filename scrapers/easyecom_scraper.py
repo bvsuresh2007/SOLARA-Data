@@ -548,14 +548,20 @@ class EasyecomScraper(EasyecomBaseScraper):
                         const cellTexts = cells.map(c => (c.innerText || '').trim());
                         const fullText  = cellTexts.join(' ').toLowerCase();
 
-                        // In-progress / pending check — stop early to avoid false "complete"
-                        const inProgress = fullText.includes('in-progress')
-                            || fullText.includes('in progress')
-                            || fullText.includes('pending')
-                            || fullText.includes('processing')
-                            || fullText.includes('queued');
+                        // In-progress / pending check — use STATUS column (index 6) only,
+                        // NOT fullText, to avoid false positives from "Total Processing Time"
+                        // column which may contain "processing" even on completed rows.
+                        const statusText = (cellTexts[6] || '').toLowerCase();
+                        const inProgress = statusText.includes('in-progress')
+                            || statusText.includes('in progress')
+                            || statusText.includes('pending')
+                            || statusText.includes('processing')
+                            || statusText.includes('queued')
+                            || statusText.includes('new')
+                            || statusText.includes('running')
+                            || statusText.includes('generating');
                         if (inProgress) {
-                            return {not_ready: true, status: 'in_progress', cellTexts};
+                            return {not_ready: true, status: statusText, cellTexts};
                         }
 
                         // Completion check 1: "Download Ended At" column (index 4) is non-empty
@@ -563,16 +569,18 @@ class EasyecomScraper(EasyecomBaseScraper):
                         const hasEndedAt = endedAt.length > 2
                             && endedAt !== '-' && endedAt.toLowerCase() !== 'n/a';
 
-                        // Completion check 2: Status column contains keywords
-                        const hasCompletionKw = fullText.includes('complet')
-                            || fullText.includes('success')
-                            || fullText.includes('processed')
-                            || fullText.includes('ready')
-                            || fullText.includes('done')
-                            || fullText.includes('finish');
+                        // Completion check 2: Status column (index 6) contains keywords
+                        const hasCompletionKw = statusText.includes('complet')
+                            || statusText.includes('success')
+                            || statusText.includes('processed')
+                            || statusText.includes('ready')
+                            || statusText.includes('done')
+                            || statusText.includes('finish')
+                            || statusText.includes('exported')
+                            || statusText.includes('generated');
 
                         if (!hasEndedAt && !hasCompletionKw) {
-                            return {not_ready: true, status: 'unknown', cellTexts};
+                            return {not_ready: true, status: 'unknown: ' + statusText, cellTexts};
                         }
 
                         // Row is complete — find download link in Action column (last td)
