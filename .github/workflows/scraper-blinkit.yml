@@ -41,21 +41,42 @@ jobs:
         run: mkdir -p data/raw/blinkit
 
       - name: Check DB connection
+        # Fail fast before the scraper if the database is unreachable.
+        # Also sets PGHOSTADDR to a concrete IPv4 address so that libpq
+        # bypasses DNS (which prefers IPv6 on ubuntu-22.04 but outbound
+        # IPv6 is blocked on GitHub Actions runners).
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          # GitHub Actions ubuntu-22.04 prefers IPv6 but blocks outbound IPv6.
-          # Force IPv4 so libpq uses A records for the Supabase pooler hostname.
-          echo "precedence ::ffff:0:0/96  100" | sudo tee -a /etc/gai.conf
           pip install psycopg2-binary -q
           python - <<'EOF'
-          import os, sys
+          import os, sys, socket
+          from urllib.parse import urlparse
+
+          url = os.environ.get("DATABASE_URL", "")
+          if not url:
+              print("DATABASE_URL not set — skipping pre-check")
+              sys.exit(0)
+
+          # Resolve hostname to an IPv4 address; set PGHOSTADDR so that
+          # libpq connects to that address directly (no further DNS lookup).
+          host = urlparse(url).hostname or ""
+          if host and not host[0].isdigit() and ":" not in host:
+              try:
+                  addrs = socket.getaddrinfo(host, None, socket.AF_INET)
+                  if addrs:
+                      ipv4 = addrs[0][4][0]
+                      os.environ["PGHOSTADDR"] = ipv4
+                      github_env = os.environ.get("GITHUB_ENV", "")
+                      if github_env:
+                          with open(github_env, "a") as f:
+                              f.write(f"PGHOSTADDR={ipv4}\n")
+                      print(f"[DB] Resolved {host} -> {ipv4} (IPv4); PGHOSTADDR set", flush=True)
+              except Exception as e:
+                  print(f"[DB] IPv4 resolution failed: {e}", flush=True)
+
           try:
               import psycopg2
-              url = os.environ.get("DATABASE_URL", "")
-              if not url:
-                  print("DATABASE_URL not set — skipping pre-check")
-                  sys.exit(0)
               conn = psycopg2.connect(url, connect_timeout=10)
               conn.close()
               print("DB connection: OK", flush=True)
