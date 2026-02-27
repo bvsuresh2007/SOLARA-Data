@@ -207,6 +207,7 @@ def sales_by_category(
     portal_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
+    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
     q = (
         db.query(
             ProductCategory.l1_name.label("category"),
@@ -216,6 +217,7 @@ def sales_by_category(
         )
         .join(Product, DailySales.product_id == Product.id)
         .join(ProductCategory, Product.category_id == ProductCategory.id)
+        .filter(DailySales.portal_id.in_(active_portal_ids))
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
