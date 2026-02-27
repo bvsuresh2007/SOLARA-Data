@@ -65,10 +65,17 @@ def _month_sort_key(sheet_name: str) -> int:
     return 999  # unknown months go last
 
 
+_SKIP_SUFFIXES = ("summary", "combo")
+
 def discover_az_in_sheets(file_path: str) -> list[str]:
-    """Return all 'AZ IN *' sheet names from the workbook, oldest first."""
+    """Return monthly 'AZ IN <Month-YY>' sheet names from the workbook, oldest first.
+    Skips Summary and Combo sheets which have a different layout."""
     xl = pd.ExcelFile(file_path)
-    sheets = [s for s in xl.sheet_names if str(s).startswith("AZ IN")]
+    sheets = [
+        s for s in xl.sheet_names
+        if str(s).startswith("AZ IN")
+        and not any(str(s).lower().endswith(skip) for skip in _SKIP_SUFFIXES)
+    ]
     sheets.sort(key=_month_sort_key)
     return sheets
 
