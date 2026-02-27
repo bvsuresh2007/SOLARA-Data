@@ -139,7 +139,12 @@ jobs:
 
           from scrapers.orchestrator import populate_portal_data
           result = populate_portal_data(portal_name="swiggy", report_date=report_date)
-          print("DB populate result:", result)
+          try:
+              print("DB populate result:", result, flush=True)
+          except Exception:
+              pass  # logging inside orchestrator already shows the result
+          if result.get("status") == "failed":
+              sys.exit(1)
           EOF
 
       - name: Upload data artifacts
