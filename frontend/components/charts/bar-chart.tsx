@@ -45,7 +45,7 @@ export default function SalesBarChart({
 
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <BarChart data={data} margin={{ bottom: 24 }}>
+      <BarChart data={data} margin={{ bottom: 24, left: 10 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
         <XAxis dataKey="name" tick={axisStyle} angle={-20} textAnchor="end" />
         <YAxis tickFormatter={fmt} tick={axisStyle} />
