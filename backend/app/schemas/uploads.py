@@ -17,7 +17,6 @@ class UploadFileType(str, Enum):
     ZEPTO_INVENTORY = "zepto_inventory"
     EASYECOM_SALES = "easyecom_sales"
     AMAZON_PI = "amazon_pi"
-    SHOPIFY_SALES = "shopify_sales"
 
 
 FILE_TYPE_META: dict[str, dict] = {
@@ -66,11 +65,6 @@ FILE_TYPE_META: dict[str, dict] = {
         "description": "Amazon PI ASIN-wise revenue and unit sales report (xlsx/csv)",
         "target_tables": ["daily_sales"],
     },
-    UploadFileType.SHOPIFY_SALES: {
-        "label": "Shopify Orders CSV",
-        "description": "Shopify orders export with Lineitem sku, Created at, Lineitem quantity, Subtotal columns",
-        "target_tables": ["daily_sales"],
-    },
 }
 
 
@@ -94,3 +88,4 @@ class UploadResult(BaseModel):
     skipped: int
     errors: list[UploadError]
     import_log_id: Optional[int] = None
+    time_taken_s: Optional[float] = None

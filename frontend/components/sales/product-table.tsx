@@ -25,8 +25,10 @@ export function ProductTable({ data, totalRevenue }: Props) {
   const [search, setSearch] = useState("");
 
   const rows = useMemo(() => {
+    const q = search.toLowerCase();
     let filtered = data.filter((d) =>
-      d.dimension_name.toLowerCase().includes(search.toLowerCase())
+      d.dimension_name.toLowerCase().includes(q) ||
+      (d.sku_code ?? "").toLowerCase().includes(q)
     );
     filtered = [...filtered].sort((a, b) => {
       let av = 0, bv = 0;
@@ -104,7 +106,16 @@ export function ProductTable({ data, totalRevenue }: Props) {
                   <tr key={p.dimension_id} className="hover:bg-zinc-800/40 transition-colors">
                     <td className="py-2.5 text-zinc-600 text-xs">{i + 1}</td>
                     <td className="py-2.5 text-zinc-200 max-w-xs">
-                      <span className="line-clamp-1">{p.dimension_name}</span>
+                      <div className="group relative inline-block max-w-full">
+                        <span className="line-clamp-1 cursor-default">
+                          {p.sku_code ?? p.dimension_name}
+                        </span>
+                        {p.sku_code && (
+                          <div className="pointer-events-none absolute bottom-full left-0 z-50 mb-1.5 hidden w-max max-w-xs rounded border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-100 shadow-xl group-hover:block">
+                            {p.dimension_name}
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 text-right text-zinc-100 font-medium font-mono text-xs">{fmtRevenue(p.total_revenue)}</td>
                     <td className="py-2.5 text-right text-zinc-400 text-xs">{fmtNum(p.total_quantity)}</td>

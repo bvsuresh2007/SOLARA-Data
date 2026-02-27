@@ -22,9 +22,12 @@ from ..schemas.inventory import ImportLogOut
 logger = logging.getLogger(__name__)
 
 # Portals excluded from action-items and health queries:
-#   myntra, flipkart — not yet integrated
-#   easyecom — inactive aggregator portal (data is split into per-marketplace portals)
-_EXCLUDED_PORTALS_SQL = "('myntra','flipkart','easyecom')"
+#   easyecom  — inactive aggregator portal (data is split into per-marketplace portals)
+#   amazon_pi — scraper-only portal used for import logs; sales data lives under 'amazon'
+# NOTE: myntra and flipkart are intentionally NOT excluded — they are active portals
+# populated via manual Excel uploads (master Excel has Flipkart/Myntra sheets).
+# They have no scraper so Pipeline Health will show "never run", which is correct.
+_EXCLUDED_PORTALS_SQL = "('easyecom','amazon_pi')"
 
 # Maximum rows returned from mapping_gaps.csv (guards against huge files on every request)
 _MAX_GAPS_ROWS = 500

@@ -35,6 +35,7 @@ interface UploadResult {
   skipped: number;
   errors: RowError[];
   import_log_id: number | null;
+  time_taken_s: number | null;
 }
 
 interface ParseError422 {
@@ -320,9 +321,14 @@ export default function UploadPage() {
                 </div>
               )}
 
-              {result.import_log_id && (
-                <p className="text-[10px] text-zinc-600">Audit log ID: {result.import_log_id}</p>
-              )}
+              <div className="flex items-center gap-4 text-[10px] text-zinc-600">
+                {result.import_log_id && (
+                  <span>Audit log ID: {result.import_log_id}</span>
+                )}
+                {result.time_taken_s != null && (
+                  <span className="ml-auto">Processed in {result.time_taken_s}s</span>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}

@@ -15,4 +15,8 @@ export const TOOLTIP_STYLE = {
   border: "1px solid #3f3f46",
   borderRadius: "8px",
   fontSize: "12px",
+  color: "#e4e4e7",
 } as const;
+
+export const TOOLTIP_LABEL_STYLE = { color: "#a1a1aa" } as const;
+export const TOOLTIP_ITEM_STYLE  = { color: "#e4e4e7" } as const;

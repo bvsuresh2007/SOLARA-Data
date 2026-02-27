@@ -54,7 +54,12 @@ if not _DB_URL:
         f"{os.environ.get('POSTGRES_DB', 'solara_dashboard')}"
     )
 
-engine = create_engine(_DB_URL, pool_pre_ping=True)
+_ssl = os.environ.get("DB_SSL", "").lower() in ("true", "1", "yes")
+engine = create_engine(
+    _DB_URL,
+    pool_pre_ping=True,
+    connect_args={"sslmode": "require"} if _ssl else {},
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 logger = logging.getLogger(__name__)

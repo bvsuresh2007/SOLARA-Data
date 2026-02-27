@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { TOOLTIP_STYLE } from "@/lib/chart-colors";
+import { TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE } from "@/lib/chart-colors";
 
 interface DataPoint { name: string; value: number }
 
@@ -36,7 +36,7 @@ export default function SalesBarChart({
           <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={gridColor} />
           <XAxis type="number" tickFormatter={fmt} tick={axisStyle} />
           <YAxis dataKey="name" type="category" tick={axisStyle} width={100} />
-          <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} />
+          <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} />
           <Bar dataKey={dataKey} fill={color} radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -45,11 +45,11 @@ export default function SalesBarChart({
 
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <BarChart data={data} margin={{ bottom: 24 }}>
+      <BarChart data={data} margin={{ bottom: 24, left: 10 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
         <XAxis dataKey="name" tick={axisStyle} angle={-20} textAnchor="end" />
         <YAxis tickFormatter={fmt} tick={axisStyle} />
-        <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} />
+        <Tooltip formatter={(v: number) => [fmt(v), label]} contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} itemStyle={TOOLTIP_ITEM_STYLE} />
         <Bar dataKey={dataKey} fill={color} radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>

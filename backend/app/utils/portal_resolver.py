@@ -26,6 +26,8 @@ class PortalResolver:
         self._product_portals_loaded: set[int] = set()
         # Tracks whether all cities have been bulk-loaded into _city_cache
         self._cities_loaded: bool = False
+        # Tracks whether all products have been bulk-loaded into _sku_cache
+        self._skus_loaded: bool = False
 
     def portal_id(self, portal_name: str) -> Optional[int]:
         name = portal_name.lower().strip()
@@ -52,13 +54,17 @@ class PortalResolver:
 
     def product_id_by_sku(self, sku_code: str) -> Optional[int]:
         """Look up product_id by SOL- sku_code (used for master Excel which has raw SKU codes)."""
+        # Bulk-load all products on first call — 1 query instead of N+1
+        if not self._skus_loaded:
+            for row in self._db.query(Product.id, Product.sku_code).all():
+                if row.sku_code:
+                    self._sku_cache[row.sku_code.strip()] = row.id
+            self._skus_loaded = True
         sku = sku_code.strip()
-        if sku not in self._sku_cache:
-            row = self._db.query(Product).filter(Product.sku_code == sku).first()
-            self._sku_cache[sku] = row.id if row else None
-            if row is None:
-                logger.debug("Product not found by sku_code: %s", sku_code)
-        return self._sku_cache[sku]
+        result = self._sku_cache.get(sku)
+        if result is None:
+            logger.debug("Product not found by sku_code: %s", sku_code)
+        return result
 
     def city_id(self, city_name: str) -> Optional[int]:
         name = city_name.lower().strip()

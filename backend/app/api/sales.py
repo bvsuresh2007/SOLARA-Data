@@ -90,6 +90,7 @@ def sales_by_portal(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .filter(Portal.is_active == True)
+        .filter(Portal.name != "amazon_pi")
         .join(DailySales, DailySales.portal_id == Portal.id, isouter=True)
     )
     if start_date:
@@ -134,6 +135,7 @@ def sales_by_product(
     q = (
         db.query(
             Product.id.label("dimension_id"),
+            Product.sku_code.label("sku_code"),
             Product.product_name.label("dimension_name"),
             func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
@@ -147,7 +149,7 @@ def sales_by_product(
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
     rows = (
-        q.group_by(Product.id, Product.product_name)
+        q.group_by(Product.id, Product.sku_code, Product.product_name)
         .order_by(text("total_revenue DESC NULLS LAST"))
         .limit(limit)
         .all()
@@ -155,6 +157,7 @@ def sales_by_product(
     return [
         SalesByDimension(
             dimension_id=r.dimension_id,
+            sku_code=r.sku_code,
             dimension_name=r.dimension_name,
             total_revenue=float(r.total_revenue),
             total_quantity=float(r.total_quantity),
@@ -207,15 +210,19 @@ def sales_by_category(
     portal_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
+    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
     q = (
         db.query(
-            ProductCategory.l1_name.label("category"),
+            ProductCategory.l2_name.label("category"),
             func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
             func.count(func.distinct(DailySales.product_id)).label("product_count"),
         )
         .join(Product, DailySales.product_id == Product.id)
         .join(ProductCategory, Product.category_id == ProductCategory.id)
+        .filter(DailySales.portal_id.in_(active_portal_ids))
+        .filter(ProductCategory.l2_name.isnot(None))
+        .filter(func.lower(ProductCategory.l2_name) != "select a category")
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
@@ -225,7 +232,7 @@ def sales_by_category(
         q = q.filter(DailySales.portal_id == portal_id)
 
     rows = (
-        q.group_by(ProductCategory.l1_name)
+        q.group_by(ProductCategory.l2_name)
         .having(func.sum(DailySales.revenue) > 0)
         .order_by(text("total_revenue DESC NULLS LAST"))
         .all()

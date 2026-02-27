@@ -44,6 +44,7 @@ class SalesSummary(BaseModel):
 class SalesByDimension(BaseModel):
     dimension_id: int
     dimension_name: str
+    sku_code: Optional[str] = None              # populated for product queries only
     total_revenue: float
     total_net_revenue: Optional[float] = None   # not yet in DB schema
     total_quantity: float

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { format, subDays, subMonths } from "date-fns";
+import { format, subDays, subMonths, startOfMonth, endOfMonth } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,11 +11,12 @@ import { cn } from "@/lib/utils";
 import type { Portal } from "@/lib/api";
 
 const PRESETS = [
-  { label: "7D",  days: 7 },
-  { label: "30D", days: 30 },
-  { label: "3M",  months: 3 },
-  { label: "6M",  months: 6 },
-  { label: "All", clear: true },
+  { label: "7D",     days: 7 },
+  { label: "30D",    days: 30 },
+  { label: "3M",     months: 3 },
+  { label: "This M", thisMonth: true },
+  { label: "Last M", lastMonth: true },
+  { label: "All",    clear: true },
 ] as const;
 
 interface Props {
@@ -43,6 +44,17 @@ export function SalesFilters({ portals }: Props) {
   function applyPreset(preset: (typeof PRESETS)[number]) {
     if ("clear" in preset) {
       push({ start_date: null, end_date: null });
+    } else if ("thisMonth" in preset) {
+      push({
+        start_date: format(startOfMonth(today), "yyyy-MM-dd"),
+        end_date:   format(today, "yyyy-MM-dd"),
+      });
+    } else if ("lastMonth" in preset) {
+      const lastMonth = subMonths(today, 1);
+      push({
+        start_date: format(startOfMonth(lastMonth), "yyyy-MM-dd"),
+        end_date:   format(endOfMonth(lastMonth), "yyyy-MM-dd"),
+      });
     } else {
       const end = format(today, "yyyy-MM-dd");
       const start = "months" in preset
@@ -59,6 +71,14 @@ export function SalesFilters({ portals }: Props) {
         {PRESETS.map((preset) => {
           const isActive = "clear" in preset
             ? !startDate && !endDate
+            : "thisMonth" in preset
+            ? startDate === format(startOfMonth(today), "yyyy-MM-dd") && endDate === format(today, "yyyy-MM-dd")
+            : "lastMonth" in preset
+            ? (() => {
+                const lm = subMonths(today, 1);
+                return startDate === format(startOfMonth(lm), "yyyy-MM-dd")
+                    && endDate   === format(endOfMonth(lm),   "yyyy-MM-dd");
+              })()
             : (() => {
                 if (!startDate || !endDate) return false;
                 const expectedEnd = format(today, "yyyy-MM-dd");

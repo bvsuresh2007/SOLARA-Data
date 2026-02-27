@@ -6,7 +6,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SalesByCategory } from "@/lib/api";
 import { fmtRevenue } from "@/lib/format";
-import { CHART_COLORS, TOOLTIP_STYLE } from "@/lib/chart-colors";
+import { CHART_COLORS, TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE } from "@/lib/chart-colors";
 
 interface Props {
   data: SalesByCategory[];
@@ -18,7 +18,7 @@ export function CategoryChart({ data }: Props) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Category Breakdown</CardTitle>
+        <CardTitle className="text-base">Sub-category Breakdown</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={Math.max(180, sorted.length * 48)}>
@@ -45,6 +45,8 @@ export function CategoryChart({ data }: Props) {
             />
             <Tooltip
               contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
               formatter={(v: number, _: string, item) => {
                 const p = item.payload as SalesByCategory | undefined;
                 return [`${fmtRevenue(v)}${p ? ` · ${p.product_count} SKUs` : ""}`, "Revenue"];
