@@ -598,7 +598,10 @@ def parse_master_excel(content: bytes, filename: str) -> list[dict]:
         today = _dt.today().date()
 
         xl = _pd.ExcelFile(path)
-        sheets = iter_sheets(xl)
+        try:
+            sheets = iter_sheets(xl)
+        finally:
+            xl.close()  # release file handle before os.unlink (required on Windows)
         if not sheets:
             raise ValueError(
                 "Master Excel file produced no parseable sheets. "
@@ -634,7 +637,10 @@ def parse_master_excel(content: bytes, filename: str) -> list[dict]:
 
         return rows
     finally:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass  # best-effort; on Windows the handle may still be held briefly
 
 
 # =============================================================================
