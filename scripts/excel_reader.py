@@ -368,15 +368,29 @@ def _ws_to_df(ws) -> pd.DataFrame:
               first row (index 0) is skipped, rows 2+ are data.
     Empty cells come through as None (vs NaN from pd.read_excel) — both
     are handled correctly by _float() and clean_sku().
+
+    Uses ws.max_row / ws.max_column (from the sheet's declared dimensions)
+    to avoid iterating past the last used row/column.  Also stops early
+    after the 'Total Revenue' sentinel row — everything below is summary
+    data, not SKU rows (same marker _parse_sheet_df uses).
     """
     try:
-        rows = list(ws.iter_rows(values_only=True))
+        max_row = getattr(ws, "max_row", None)
+        max_col = getattr(ws, "max_column", None)
+        rows: list[list] = []
+        for row in ws.iter_rows(values_only=True, max_row=max_row, max_col=max_col):
+            rows.append(list(row))
+            # Skip stop-check on title (row 0) and header (row 1)
+            if len(rows) > 2 and any(
+                v is not None and "total revenue" in str(v).lower() for v in row
+            ):
+                break
     except Exception:
         return pd.DataFrame()
     if len(rows) < 2:
         return pd.DataFrame()
-    headers = list(rows[1])          # row index 1 → header row
-    data = [list(r) for r in rows[2:]]  # rows 2+ → data
+    headers = rows[1]          # row index 1 → header row
+    data = rows[2:]            # rows 2+ → data
     return pd.DataFrame(data, columns=headers)
 
 
