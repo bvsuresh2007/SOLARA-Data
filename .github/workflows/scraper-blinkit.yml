@@ -41,12 +41,8 @@ jobs:
         run: mkdir -p data/raw/blinkit
 
       - name: Check DB connection
-        # Fail fast before the scraper if the database is unreachable.
-        # Also sets PGHOSTADDR to a concrete IPv4 address so that libpq
-        # bypasses DNS (which prefers IPv6 on ubuntu-22.04 but outbound
-        # IPv6 is blocked on GitHub Actions runners).
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
         run: |
           pip install psycopg2-binary -q
           python - <<'EOF'
@@ -128,7 +124,7 @@ jobs:
       - name: Populate DB from downloaded data
         if: success()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}

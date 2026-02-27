@@ -42,7 +42,7 @@ jobs:
 
       - name: Check DB connection
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
         run: |
           pip install psycopg2-binary -q
           python - <<'EOF'
@@ -123,7 +123,7 @@ jobs:
       - name: Populate DB from downloaded data
         if: success()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
