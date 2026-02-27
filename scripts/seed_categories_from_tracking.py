@@ -119,10 +119,14 @@ def seed_sheet(session, file_path: str, sheet_name: str) -> tuple[int, int, int]
             skipped += 1
             continue
 
+        _PLACEHOLDER = ("nan", "none", "", "select a category")
+
         l1 = str(row.get(col_map["l1"], "")).strip()
         l2 = str(row.get(col_map["l2"], "")).strip()
-        if not l1 or l1.lower() in ("nan", "none", ""):
+        if not l1 or l1.lower() in _PLACEHOLDER:
             l1 = "Uncategorised"
+        if l2.lower() in _PLACEHOLDER:
+            l2 = ""  # treat as no L2
 
         product_name = sku_code  # fallback
         if "name" in col_map:

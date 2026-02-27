@@ -219,6 +219,7 @@ def sales_by_category(
         .join(ProductCategory, Product.category_id == ProductCategory.id)
         .filter(DailySales.portal_id.in_(active_portal_ids))
         .filter(ProductCategory.l2_name.isnot(None))
+        .filter(func.lower(ProductCategory.l2_name) != "select a category")
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
