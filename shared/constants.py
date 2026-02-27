@@ -13,7 +13,6 @@ PORTAL_ZEPTO    = "zepto"
 PORTAL_SHOPIFY  = "shopify"
 PORTAL_MYNTRA   = "myntra"
 PORTAL_FLIPKART = "flipkart"
-PORTAL_EASYECOM = "easyecom"
 
 ALL_PORTALS = [
     PORTAL_SWIGGY,
@@ -23,7 +22,6 @@ ALL_PORTALS = [
     PORTAL_SHOPIFY,
     PORTAL_MYNTRA,
     PORTAL_FLIPKART,
-    PORTAL_EASYECOM,
 ]
 
 # ---------------------------------------------------------------------------

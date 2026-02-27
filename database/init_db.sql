@@ -173,5 +173,5 @@ INSERT INTO portals (name, display_name) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO portals (name, display_name, is_active) VALUES
-    ('easyecom', 'EasyEcom', true)
-ON CONFLICT (name) DO UPDATE SET display_name = 'EasyEcom', is_active = true;
+    ('easyecom', 'EasyEcom (Aggregator)', false)
+ON CONFLICT (name) DO NOTHING;

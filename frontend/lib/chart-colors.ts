@@ -5,7 +5,6 @@ export const CHART_COLORS = [
   "#3b82f6", // blue    — Blinkit
   "#22c55e", // green   — Amazon
   "#a855f7", // purple  — Zepto
-  "#06b6d4", // cyan    — EasyEcom
   "#eab308", // yellow  — Flipkart
   "#ec4899", // pink    — Myntra
   "#71717a", // zinc    — others
