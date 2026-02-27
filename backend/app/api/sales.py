@@ -134,6 +134,7 @@ def sales_by_product(
     q = (
         db.query(
             Product.id.label("dimension_id"),
+            Product.sku_code.label("sku_code"),
             Product.product_name.label("dimension_name"),
             func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
@@ -147,7 +148,7 @@ def sales_by_product(
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
     rows = (
-        q.group_by(Product.id, Product.product_name)
+        q.group_by(Product.id, Product.sku_code, Product.product_name)
         .order_by(text("total_revenue DESC NULLS LAST"))
         .limit(limit)
         .all()
@@ -155,6 +156,7 @@ def sales_by_product(
     return [
         SalesByDimension(
             dimension_id=r.dimension_id,
+            sku_code=r.sku_code,
             dimension_name=r.dimension_name,
             total_revenue=float(r.total_revenue),
             total_quantity=float(r.total_quantity),

@@ -29,6 +29,7 @@ export interface SalesSummary {
 export interface SalesByDimension {
   dimension_id: number;
   dimension_name: string;
+  sku_code?: string | null;
   total_revenue: number;
   total_net_revenue: number | null;
   total_quantity: number;
