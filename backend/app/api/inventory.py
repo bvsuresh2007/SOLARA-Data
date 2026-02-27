@@ -59,7 +59,7 @@ def current_inventory(
             joinedload(InventorySnapshot.portal),
             joinedload(InventorySnapshot.product),
         )
-        .order_by(_total_stock(InventorySnapshot).asc())
+        .order_by(_total_stock(InventorySnapshot).desc())
         .all()
     )
     return [
