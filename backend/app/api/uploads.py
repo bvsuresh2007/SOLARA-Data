@@ -11,6 +11,7 @@ Duplicate behaviour:
 """
 
 import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -97,6 +98,8 @@ async def upload_file(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File exceeds 50 MB limit")
 
+    _t_start = time.monotonic()
+
     # ── 1. Parse file ─────────────────────────────────────────────────────────
     try:
         raw_rows = parse_file(file_type.value, content, filename)
@@ -137,6 +140,7 @@ async def upload_file(
     result.rows_parsed = rows_parsed
     result.file_name = filename
     result.file_type = file_type.value
+    result.time_taken_s = round(time.monotonic() - _t_start, 1)
     return result
 
 

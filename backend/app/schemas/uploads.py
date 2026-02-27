@@ -94,3 +94,4 @@ class UploadResult(BaseModel):
     skipped: int
     errors: list[UploadError]
     import_log_id: Optional[int] = None
+    time_taken_s: Optional[float] = None

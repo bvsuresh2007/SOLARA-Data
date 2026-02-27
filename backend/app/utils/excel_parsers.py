@@ -586,8 +586,7 @@ def parse_master_excel(content: bytes, filename: str) -> list[dict]:
     try:
         _ensure_scripts_on_path()
         try:
-            import pandas as _pd
-            from scripts.excel_reader import iter_sheets, clean_sku, _float  # type: ignore
+            from scripts.excel_reader import iter_sheets_ro, clean_sku, _float  # type: ignore
         except ImportError as exc:
             raise ValueError(
                 f"Could not import scripts/excel_reader.py: {exc}. "
@@ -597,11 +596,7 @@ def parse_master_excel(content: bytes, filename: str) -> list[dict]:
         from datetime import datetime as _dt
         today = _dt.today().date()
 
-        xl = _pd.ExcelFile(path)
-        try:
-            sheets = iter_sheets(xl)
-        finally:
-            xl.close()  # release file handle before os.unlink (required on Windows)
+        sheets = iter_sheets_ro(path)
         if not sheets:
             raise ValueError(
                 "Master Excel file produced no parseable sheets. "
