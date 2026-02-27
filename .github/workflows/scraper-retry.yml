@@ -1,7 +1,7 @@
 name: Scraper — Retry Failed Runs
 
-# Runs once daily at 11:42 AM IST (06:12 UTC) — 2 minutes after the last
-# scheduled scraper (Amazon PI at 10:10 AM IST, 90 min timeout) can finish.
+# Runs once daily at 10:37 AM IST (05:07 UTC) — 2 minutes after the last
+# scheduled scraper (Amazon PI at 10:10 AM IST, 25 min timeout) can finish.
 #
 # What it does:
 #   1. Checks the GitHub API for today's SCHEDULED run of each scraper workflow.
@@ -22,7 +22,7 @@ name: Scraper — Retry Failed Runs
 
 on:
   schedule:
-    - cron: "12 6 * * *"   # 11:42 AM IST = 06:12 UTC
+    - cron: "7 5 * * *"    # 10:37 AM IST = 05:07 UTC
   workflow_dispatch:
     inputs:
       report_date:

@@ -16,7 +16,7 @@ jobs:
   run-scraper:
     name: Run Swiggy scraper
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 25
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
