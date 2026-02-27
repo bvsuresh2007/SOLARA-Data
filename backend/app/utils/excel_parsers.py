@@ -188,7 +188,7 @@ def parse_blinkit_inventory(content: bytes, filename: str) -> list[dict]:
 # =============================================================================
 
 SWIGGY_SALES_REQUIRED = ["item_code"]   # date col checked separately (two known names)
-SWIGGY_INV_REQUIRED   = ["item_code"]
+SWIGGY_INV_REQUIRED   = []   # column names differ across formats — validated inline
 
 
 def _swiggy_parse_date(row: dict) -> date | None:
@@ -232,21 +232,62 @@ def parse_swiggy_sales(content: bytes, filename: str) -> list[dict]:
 
 
 def parse_swiggy_inventory(content: bytes, filename: str) -> list[dict]:
+    """
+    Handles two known Swiggy inventory export formats:
+
+    Old format columns: item_code, facility_name, area_name, date,
+                        backend_inv_qty, frontend_inv_qty
+    New format columns: SkuCode, FacilityName, City, WarehouseQtyAvailable,
+                        DaysOnHand, OpenPoQuantity, ShelfLifeDays, ...
+                        (no date column — today's date used as snapshot_date)
+    """
     suffix = os.path.splitext(filename)[1] or ".csv"
     path = _write_temp(content, suffix)
     try:
         df = _clean(_read_file(path))
-        _require_columns(df, SWIGGY_INV_REQUIRED, "swiggy_inventory")
+        cols = set(df.columns)
+
+        # Detect format by presence of the old vs new SKU column name
+        is_new_format = "SkuCode" in cols
+        is_old_format = "item_code" in cols or "ITEM_CODE" in cols
+
+        if not is_new_format and not is_old_format:
+            raise ColumnMismatchError(
+                missing=["SkuCode (or item_code)"],
+                found=sorted(cols),
+                file_type="swiggy_inventory",
+            )
+
+        from datetime import date as _date
         rows = []
         for row in df.to_dict("records"):
+            if is_new_format:
+                # New format: no date column → use today as snapshot date
+                snapshot_date = _date.today()
+                portal_product_id = str(row.get("SkuCode", "")).strip()
+                warehouse_name = str(row.get("FacilityName", "")).strip()
+                city = str(row.get("City", "")).strip()
+                stock = _f(row.get("WarehouseQtyAvailable", 0))
+                backend_stock = stock
+                frontend_stock = stock
+            else:
+                snapshot_date = _parse_date_ymd(row.get("date"))
+                portal_product_id = str(row.get("item_code", row.get("ITEM_CODE", ""))).strip()
+                warehouse_name = str(row.get("facility_name", "")).strip()
+                city = str(row.get("area_name", "")).strip()
+                backend_stock = _f(row.get("backend_inv_qty", 0))
+                frontend_stock = _f(row.get("frontend_inv_qty", 0))
+
+            if not portal_product_id:
+                continue
             rows.append({
                 "portal": "swiggy",
-                "snapshot_date": _parse_date_ymd(row.get("date")),
-                "portal_product_id": str(row.get("ITEM_CODE", "")).strip(),
-                "warehouse_name": str(row.get("facility_name", "")).strip(),
-                "city": str(row.get("area_name", "")).strip(),
-                "backend_stock": _f(row.get("backend_inv_qty", 0)),
-                "frontend_stock": _f(row.get("frontend_inv_qty", 0)),
+                "snapshot_date": snapshot_date,
+                "portal_product_id": portal_product_id,
+                "warehouse_name": warehouse_name,
+                "city": city,
+                "backend_stock": backend_stock,
+                "frontend_stock": frontend_stock,
             })
         return rows
     finally:
