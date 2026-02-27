@@ -7,7 +7,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { SalesByDimension } from "@/lib/api";
 import { fmtRevenue } from "@/lib/format";
-import { CHART_COLORS, TOOLTIP_STYLE } from "@/lib/chart-colors";
+import { CHART_COLORS, TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE } from "@/lib/chart-colors";
 
 interface Props {
   data: SalesByDimension[];
@@ -43,6 +43,8 @@ export function PortalBreakdown({ data }: Props) {
               </Pie>
               <Tooltip
                 contentStyle={TOOLTIP_STYLE}
+                labelStyle={TOOLTIP_LABEL_STYLE}
+                itemStyle={TOOLTIP_ITEM_STYLE}
                 formatter={(v: number, name: string) => [
                   `${fmtRevenue(v)} (${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%)`,
                   name,
@@ -100,6 +102,8 @@ export function PortalBreakdown({ data }: Props) {
               />
               <Tooltip
                 contentStyle={TOOLTIP_STYLE}
+                labelStyle={TOOLTIP_LABEL_STYLE}
+                itemStyle={TOOLTIP_ITEM_STYLE}
                 formatter={(v: number) => [fmtRevenue(v), "Revenue"]}
                 cursor={{ fill: "#27272a" }}
               />
