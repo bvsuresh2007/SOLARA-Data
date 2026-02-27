@@ -81,6 +81,7 @@ def _upsert_sales(db, rows: list[dict]) -> int:
     from collections import defaultdict
     from sqlalchemy.dialects.postgresql import insert
     from backend.app.models.sales import CityDailySales
+    rows = [r for r in rows if r.get("sale_date") is not None]
     if not rows:
         return 0
     # Pre-aggregate rows that share the same unique key to avoid
@@ -116,6 +117,7 @@ def _upsert_daily_sales(db, city_rows: list[dict]) -> int:
     from collections import defaultdict
     from sqlalchemy.dialects.postgresql import insert
     from backend.app.models.sales import DailySales
+    city_rows = [r for r in city_rows if r.get("sale_date") is not None]
     if not city_rows:
         return 0
 

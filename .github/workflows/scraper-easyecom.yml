@@ -52,9 +52,10 @@ jobs:
           INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
           python - <<'EOF'
-          import sys, os
+          import sys, os, logging
           from datetime import date, timedelta
           sys.path.insert(0, '.')
+          logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:
@@ -66,7 +67,7 @@ jobs:
           from scrapers.easyecom_scraper import EasyecomScraper
           result = EasyecomScraper(headless=True).run(report_date=report_date)
           print("Result:", result)
-          if result.get("status") == "error":
+          if result.get("status") in ("error", "failed"):
               sys.exit(1)
           EOF
 
@@ -80,10 +81,24 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           INPUT_REPORT_DATE: ${{ github.event.inputs.report_date }}
         run: |
+          pip install -r backend/requirements.txt -q
           python - <<'EOF'
-          import sys, os
+          import sys, os, re
           from datetime import date, timedelta
           sys.path.insert(0, '.')
+
+          # Supabase direct DB (db.<ref>.supabase.co) is IPv6-only on GitHub Actions.
+          # Rewrite to the connection pooler (<ref>.pooler.supabase.com) which has IPv4.
+          _h = os.environ.get("POSTGRES_HOST", "").strip()
+          _hparts = _h.split(".") if _h else []
+          print(f"[DB-DIAG] HOST={len(_hparts)}pts,ends={'.'.join(_hparts[-2:]) if len(_hparts)>=2 else (_h or 'empty')}", flush=True)
+          _m = re.match(r'^(?:db\.)?([a-zA-Z0-9-]+)\.supabase\.co$', _h) if _h else None
+          if _m:
+              _ref = _m.group(1)
+              os.environ["POSTGRES_HOST"] = f"{_ref}.pooler.supabase.com"
+              print(f"[DB] Using Supabase pooler: {_h} -> {os.environ['POSTGRES_HOST']}", flush=True)
+              os.environ.pop("DATABASE_URL", None)
+              print("[DB] Cleared DATABASE_URL; using POSTGRES_HOST pooler endpoint", flush=True)
 
           report_date_str = os.environ.get("INPUT_REPORT_DATE", "").strip()
           if report_date_str:

@@ -40,6 +40,51 @@ jobs:
       - name: Create data directories
         run: mkdir -p data/raw/swiggy
 
+      - name: Check DB connection
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
+        run: |
+          pip install psycopg2-binary -q
+          python - <<'EOF'
+          import os, sys, socket
+          from urllib.parse import urlparse
+
+          url = os.environ.get("DATABASE_URL", "")
+          if not url:
+              print("DATABASE_URL not set — skipping pre-check")
+              sys.exit(0)
+
+          host = urlparse(url).hostname or ""
+          if ":" in host:
+              print(f"ERROR: DATABASE_URL contains IPv6 address literal ({host}).", flush=True)
+              print("Update DATABASE_URL secret to use the Supabase session-mode pooler hostname:", flush=True)
+              print("  Supabase Dashboard -> Settings -> Database -> Connection Pooling -> Session mode", flush=True)
+              sys.exit(1)
+
+          if host and not host[0].isdigit():
+              try:
+                  addrs = socket.getaddrinfo(host, None, socket.AF_INET)
+                  if addrs:
+                      ipv4 = addrs[0][4][0]
+                      os.environ["PGHOSTADDR"] = ipv4
+                      github_env = os.environ.get("GITHUB_ENV", "")
+                      if github_env:
+                          with open(github_env, "a") as f:
+                              f.write(f"PGHOSTADDR={ipv4}\n")
+                      print(f"[DB] Resolved {host} -> {ipv4} (IPv4); PGHOSTADDR set", flush=True)
+              except Exception as e:
+                  print(f"[DB] IPv4 resolution failed: {e}", flush=True)
+
+          try:
+              import psycopg2
+              conn = psycopg2.connect(url, connect_timeout=10)
+              conn.close()
+              print("DB connection: OK", flush=True)
+          except Exception as e:
+              print(f"DB connection FAILED: {e}", flush=True)
+              sys.exit(1)
+          EOF
+
       - name: Run Swiggy scraper
         env:
           SWIGGY_LINK: ${{ secrets.SWIGGY_LINK }}
@@ -71,7 +116,7 @@ jobs:
       - name: Populate DB from downloaded data
         if: success()
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
@@ -94,7 +139,12 @@ jobs:
 
           from scrapers.orchestrator import populate_portal_data
           result = populate_portal_data(portal_name="swiggy", report_date=report_date)
-          print("DB populate result:", result)
+          try:
+              print("DB populate result:", result, flush=True)
+          except Exception:
+              pass  # logging inside orchestrator already shows the result
+          if result.get("status") == "failed":
+              sys.exit(1)
           EOF
 
       - name: Upload data artifacts
@@ -121,5 +171,5 @@ jobs:
           curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d '{
-              "text": ":warning: *Swiggy scraper failed* — OTP session may have expired.\n\n*Action needed:*\n1. Run locally in visible mode: `python scrapers/swiggy_scraper.py`\n2. Complete the OTP login in the browser window\n3. Profile will auto-upload to Drive\n4. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-swiggy.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
+              "text": ":warning: *Swiggy scraper failed* — Gmail OTP token has likely expired.\n\n*Action needed:*\n1. Run locally: `python scrapers/auth_gmail.py` (re-authorize Gmail API)\n2. Base64-encode the new token: `base64 -w0 token.json`\n3. Update the *GOOGLE_TOKEN_JSON* GitHub secret with the new value\n4. Re-run the workflow: https://github.com/${{ github.repository }}/actions/workflows/scraper-swiggy.yml\n\n_Run:_ <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_id }}>"
             }'

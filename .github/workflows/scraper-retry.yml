@@ -56,6 +56,7 @@ jobs:
             "scraper-easyecom.yml|EasyEcom"
             "scraper-zepto.yml|Zepto"
             "scraper-amazon-pi.yml|Amazon PI"
+            "scraper-swiggy.yml|Swiggy"
             "scraper-blinkit.yml|Blinkit"
           )
 
