@@ -34,6 +34,7 @@ class ProductPortalMapping(Base):
     portal_id           = Column(Integer, ForeignKey("portals.id",   ondelete="CASCADE"), nullable=False)
     portal_sku          = Column(String(500), nullable=False)   # ASIN / Swiggy Code / Style ID / FSN / EAN
     portal_product_name = Column(String(500))
+    bau_asp             = Column(Numeric(10, 2))               # Portal-specific BAU ASP
     is_active           = Column(Boolean, default=True, nullable=False)
     created_at          = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at          = Column(DateTime, onupdate=func.now())

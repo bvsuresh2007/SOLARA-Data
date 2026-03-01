@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { label: "Overview",  href: "/dashboard" },
   { label: "Sales",     href: "/dashboard/sales" },
   { label: "Inventory", href: "/dashboard/inventory" },
   { label: "Upload",    href: "/dashboard/upload" },
@@ -17,9 +16,7 @@ export function NavTabs() {
   return (
     <nav className="flex gap-4 text-sm font-medium">
       {NAV_ITEMS.map(({ label, href }) => {
-        const isActive = href === "/dashboard"
-          ? pathname === href
-          : pathname.startsWith(href);
+        const isActive = pathname.startsWith(href);
         return (
           <Link
             key={href}
