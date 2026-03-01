@@ -124,13 +124,14 @@ function SalesContent() {
   }, [startDate, endDate, portalId, prevPeriod]);
 
   const fetchPortalDaily = useCallback(async () => {
-    if (!portalId) { setDailyData(null); return; }
     if (!portals.length) return;
     setDailyLoading(true);
     try {
-      const portalName = portals.find(p => p.id === portalId)?.name;
+      const portalSlug = portalId
+        ? portals.find(p => p.id === portalId)?.name ?? "all"
+        : "all";
       setDailyData(await api.portalDaily({
-        ...(portalName ? { portal: portalName }    : {}),
+        portal: portalSlug,
         ...(startDate  ? { start_date: startDate } : {}),
         ...(endDate    ? { end_date: endDate }     : {}),
       }));

@@ -25,6 +25,13 @@ function StatusBadge({ status }: { status: string | null }) {
   return <Badge variant="muted">No data</Badge>
 }
 
+/** Returns true if the last import is older than `days` days ago */
+function isStale(isoDate: string | null, days = 2): boolean {
+  if (!isoDate) return false  // "Never" — handled by StatusBadge
+  const ms = Date.now() - new Date(isoDate).getTime()
+  return ms > days * 86_400_000
+}
+
 export function PipelineHealthSection({
   importHealth,
   noApiData,
@@ -91,7 +98,14 @@ export function PipelineHealthSection({
                       {row.display_name}
                     </span>
                   </TableCell>
-                  <TableCell className="py-2 px-2 text-zinc-400 text-sm">{formatDate(row.last_import_at)}</TableCell>
+                  <TableCell className="py-2 px-2 text-sm">
+                    <span className={isStale(row.last_import_at) ? "text-yellow-500" : "text-zinc-400"}>
+                      {formatDate(row.last_import_at)}
+                    </span>
+                    {isStale(row.last_import_at) && (
+                      <span className="ml-1.5 text-[10px] text-yellow-600 font-medium">STALE</span>
+                    )}
+                  </TableCell>
                   <TableCell className="py-2 px-2"><StatusBadge status={row.last_status} /></TableCell>
                   <TableCell className="py-2 px-2 text-right text-zinc-400 font-mono text-sm">{row.total_imports}</TableCell>
                   <TableCell className={`py-2 px-2 text-right font-mono text-sm ${row.failed_runs > 0 ? "text-red-400 font-bold" : "text-zinc-500"}`}>

@@ -150,7 +150,7 @@ def get_action_items(db: Session = Depends(get_db)):
         for r in unmapped_rows
     ]
 
-    # Query C — last pipeline run per portal (all import sources)
+    # Query C — last pipeline run per portal (all import sources, active portals only)
     health_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
@@ -164,7 +164,8 @@ def get_action_items(db: Session = Depends(get_db)):
         FROM portals po
         LEFT JOIN import_logs il
             ON il.portal_id = po.id
-        WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}
+        WHERE po.is_active = true
+          AND po.name NOT IN {_EXCLUDED_PORTALS_SQL}
         GROUP BY po.id, po.name, po.display_name
         ORDER BY MAX(il.end_time) DESC NULLS LAST
     """)).fetchall()

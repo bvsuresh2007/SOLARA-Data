@@ -55,20 +55,10 @@ function frozenStyle(col: { w: number; left: number }) {
 interface Props {
   data: PortalDailyResponse | null;
   loading: boolean;
-  portalSelected: boolean;
+  portalSelected?: boolean; // kept for backwards compat, but no longer used
 }
 
-export function PortalDailyTable({ data, loading, portalSelected }: Props) {
-  if (!portalSelected) {
-    return (
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-6 py-10 text-center">
-        <p className="text-sm text-zinc-500">
-          Select a specific portal above to see the daily units breakdown.
-        </p>
-      </div>
-    );
-  }
-
+export function PortalDailyTable({ data, loading }: Props) {
   if (loading) return <Skeleton className="w-full rounded-xl" style={{ height: 360 }} />;
 
   if (!data || data.rows.length === 0) {

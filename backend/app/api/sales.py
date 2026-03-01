@@ -393,7 +393,7 @@ def list_products(db: Session = Depends(get_db)):
 
 @router.get("/portal-daily", response_model=PortalDailyResponse)
 def portal_daily_sales(
-    portal: str = Query("swiggy", description="Portal name slug, e.g. swiggy, blinkit, zepto, amazon, flipkart, myntra, shopify"),
+    portal: str = Query("all", description="Portal name slug (e.g. swiggy, blinkit) or 'all' for cross-portal aggregation"),
     start_date: Optional[date] = Query(None, description="Start of date range (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="End of date range (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
@@ -404,19 +404,30 @@ def portal_daily_sales(
     if not start_date:
         start_date = today.replace(day=1)
 
-    # 1. Resolve portal by name slug (+ any aliases that map here)
-    portal_obj = db.query(Portal).filter(func.lower(Portal.name) == portal.lower()).first()
-    if not portal_obj:
-        return PortalDailyResponse(portal_name=portal, dates=[], rows=[])
+    is_all_portals = portal.lower() == "all"
 
-    # Collect portal IDs that should be included (canonical + aliases)
-    portal_ids_for_query = [portal_obj.id]
-    all_portals = {p.name: p for p in db.query(Portal).all()}
-    for alias, canonical in _PORTAL_ALIASES.items():
-        if canonical == portal_obj.name:
-            alias_portal = all_portals.get(alias)
-            if alias_portal:
-                portal_ids_for_query.append(alias_portal.id)
+    if is_all_portals:
+        # Cross-portal aggregation: include all active portals + aliases
+        portal_ids_for_query = _included_portal_ids(db)
+        portal_display_name = "All Portals"
+        portal_obj_id = None  # used for portal_sku / inventory lookups
+    else:
+        # 1. Resolve portal by name slug (+ any aliases that map here)
+        portal_obj = db.query(Portal).filter(func.lower(Portal.name) == portal.lower()).first()
+        if not portal_obj:
+            return PortalDailyResponse(portal_name=portal, dates=[], rows=[])
+
+        portal_display_name = portal_obj.display_name
+        portal_obj_id = portal_obj.id
+
+        # Collect portal IDs that should be included (canonical + aliases)
+        portal_ids_for_query = [portal_obj.id]
+        all_portals_map = {p.name: p for p in db.query(Portal).all()}
+        for alias, canonical in _PORTAL_ALIASES.items():
+            if canonical == portal_obj.name:
+                alias_portal = all_portals_map.get(alias)
+                if alias_portal:
+                    portal_ids_for_query.append(alias_portal.id)
 
     # 2. Build ordered dates list for the range
     dates: List[str] = []
@@ -425,8 +436,25 @@ def portal_daily_sales(
         dates.append(str(d))
         d += _dt.timedelta(days=1)
 
-    # 3. Products mapped to this portal (with category + portal SKU)
-    product_rows = (
+    # 3. Discover products that actually have sales in this portal + date range.
+    #    Previously this required product_portal_mapping entries (which are often
+    #    incomplete), causing many products to be invisible in the daily table
+    #    even though they had sales data.  Now we query daily_sales directly and
+    #    LEFT JOIN the mapping for the optional portal_sku column.
+    sales_product_ids = (
+        db.query(func.distinct(DailySales.product_id))
+        .filter(
+            DailySales.portal_id.in_(portal_ids_for_query),
+            DailySales.sale_date >= start_date,
+            DailySales.sale_date <= end_date,
+        )
+        .all()
+    )
+    product_ids = [r[0] for r in sales_product_ids]
+    if not product_ids:
+        return PortalDailyResponse(portal_name=portal_display_name, dates=dates, rows=[])
+
+    pq = (
         db.query(
             Product.id,
             Product.sku_code,
@@ -434,19 +462,22 @@ def portal_daily_sales(
             ProductCategory.l2_name.label("category"),
             ProductPortalMapping.portal_sku,
         )
-        .join(
+        .outerjoin(ProductCategory, Product.category_id == ProductCategory.id)
+    )
+    if portal_obj_id is not None:
+        pq = pq.outerjoin(
             ProductPortalMapping,
             (ProductPortalMapping.product_id == Product.id)
-            & (ProductPortalMapping.portal_id == portal_obj.id),
+            & (ProductPortalMapping.portal_id == portal_obj_id),
         )
-        .outerjoin(ProductCategory, Product.category_id == ProductCategory.id)
-        .filter(ProductPortalMapping.is_active == True)
-        .all()
-    )
+    else:
+        # "All portals" — no meaningful single portal_sku; left join so column exists as NULL
+        pq = pq.outerjoin(
+            ProductPortalMapping,
+            (ProductPortalMapping.id == None),  # always NULL for the "all" case
+        )
+    product_rows = pq.filter(Product.id.in_(product_ids)).all()
     product_map = {r.id: r for r in product_rows}
-    product_ids = list(product_map.keys())
-    if not product_ids:
-        return PortalDailyResponse(portal_name=portal_obj.display_name, dates=dates, rows=[])
 
     # 4. Daily sales in the date range (include aliased portal IDs)
     sales_rows = (
@@ -466,41 +497,47 @@ def portal_daily_sales(
         .all()
     )
 
-    # 5. Latest inventory snapshot per product for this portal
-    latest_sq = (
-        db.query(
-            InventorySnapshot.product_id,
-            func.max(InventorySnapshot.snapshot_date).label("max_date"),
+    # 5. Latest inventory snapshot per product
+    inv_map: dict[int, float | None] = {}
+    if portal_obj_id is not None:
+        # Specific portal — show portal stock
+        latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == portal_obj_id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
         )
-        .filter(
-            InventorySnapshot.portal_id == portal_obj.id,
-            InventorySnapshot.product_id.in_(product_ids),
+        inv_rows = (
+            db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
+            .join(
+                latest_sq,
+                (InventorySnapshot.product_id == latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == portal_obj_id)
+            .all()
         )
-        .group_by(InventorySnapshot.product_id)
-        .subquery()
-    )
-    inv_rows = (
-        db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
-        .join(
-            latest_sq,
-            (InventorySnapshot.product_id == latest_sq.c.product_id)
-            & (InventorySnapshot.snapshot_date == latest_sq.c.max_date),
-        )
-        .filter(InventorySnapshot.portal_id == portal_obj.id)
-        .all()
-    )
-    inv_map = {
-        r.product_id: float(r.portal_stock) if r.portal_stock is not None else None
-        for r in inv_rows
-    }
+        inv_map = {
+            r.product_id: float(r.portal_stock) if r.portal_stock is not None else None
+            for r in inv_rows
+        }
+    # "All portals" — skip inventory (no single portal stock to show)
 
-    # 6. Pivot: aggregate sales per product
+    # 6. Pivot: aggregate sales per product (SUM across portals for same product+date)
     sales_agg = defaultdict(lambda: {"daily": {}, "asps": [], "total_units": 0, "total_value": 0.0})
     for row in sales_rows:
         pid = row.product_id
         date_str = str(row.sale_date)
-        units = int(row.units_sold) if row.units_sold is not None else None
-        sales_agg[pid]["daily"][date_str] = units
+        units = int(row.units_sold) if row.units_sold is not None else 0
+        # Sum units across portals (critical for "All Portals" mode where
+        # the same product may appear on multiple portals on the same day)
+        sales_agg[pid]["daily"][date_str] = sales_agg[pid]["daily"].get(date_str, 0) + units
         if row.asp is not None:
             sales_agg[pid]["asps"].append(float(row.asp))
         if row.units_sold and row.units_sold > 0:
@@ -532,7 +569,7 @@ def portal_daily_sales(
     result_rows.sort(key=lambda r: r.mtd_units, reverse=True)
 
     return PortalDailyResponse(
-        portal_name=portal_obj.display_name,
+        portal_name=portal_display_name,
         dates=dates,
         rows=result_rows,
     )

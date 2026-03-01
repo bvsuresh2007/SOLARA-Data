@@ -249,7 +249,7 @@ def ask_question(body: AMARequest, db: Session = Depends(get_db)):
     if not settings.llm_api_key:
         raise HTTPException(
             status_code=503,
-            detail="AI feature is not configured. Set ANTHROPIC_API_KEY in .env.",
+            detail="AI feature is not configured. Set LLM_API_KEY in .env.",
         )
 
     # ----- 1. Build context about active dashboard filters ----- #
@@ -275,13 +275,24 @@ def ask_question(body: AMARequest, db: Session = Depends(get_db)):
 
     user_message = body.question + context_msg
 
+    # Inject today's date so the model knows the current year (its training
+    # data may predate the actual calendar date, causing it to reject valid
+    # dates as "future").
+    today_str = date.today().isoformat()
+    system_prompt = (
+        DB_SCHEMA_PROMPT
+        + f"\n\n## CURRENT DATE\nToday is {today_str}. All dates up to and including today "
+        "contain real historical data. Never say data is in the future if the date "
+        "is on or before today."
+    )
+
     # ----- 2. Call Claude to generate SQL ----- #
     try:
         client = Anthropic(api_key=settings.llm_api_key)
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1024,
-            system=DB_SCHEMA_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
         ai_text = response.content[0].text.strip()

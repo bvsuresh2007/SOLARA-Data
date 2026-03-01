@@ -28,6 +28,7 @@ export function SalesFilters({ portals }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const today = new Date();
+  const yesterday = subDays(today, 1);
 
   const startDate   = params.get("start_date");
   const endDate     = params.get("end_date");
@@ -57,7 +58,9 @@ export function SalesFilters({ portals }: Props) {
         end_date:   format(endOfMonth(lastMonth), "yyyy-MM-dd"),
       });
     } else {
-      const end = format(today, "yyyy-MM-dd");
+      // Use yesterday as end date — today's data is typically incomplete
+      // and would make growth comparisons look artificially negative.
+      const end = format(yesterday, "yyyy-MM-dd");
       const start = "months" in preset
         ? format(subMonths(today, preset.months), "yyyy-MM-dd")
         : format(subDays(today, preset.days), "yyyy-MM-dd");
@@ -82,7 +85,7 @@ export function SalesFilters({ portals }: Props) {
               })()
             : (() => {
                 if (!startDate || !endDate) return false;
-                const expectedEnd = format(today, "yyyy-MM-dd");
+                const expectedEnd = format(yesterday, "yyyy-MM-dd");
                 if (endDate !== expectedEnd) return false;
                 const expectedStart = "months" in preset
                   ? format(subMonths(today, preset.months), "yyyy-MM-dd")
