@@ -56,6 +56,7 @@ export interface SalesSummary {
   total_orders: number | null;
   total_discount: number | null;
   record_count: number;
+  active_skus: number;
 }
 
 export interface SalesByDimension {
@@ -182,6 +183,12 @@ export interface ImportFailure {
   start_time: string;
   error_message: string | null;
   source_type: string;
+}
+
+export interface AMAResponse {
+  answer: string;
+  sql?: string | null;
+  error?: string | null;
 }
 
 export interface ScrapingLog {

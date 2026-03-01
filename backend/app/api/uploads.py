@@ -244,20 +244,21 @@ def _process_sales(
             db.bulk_save_objects(daily_rows)
             inserted = len(agg_to_insert)
 
-            earliest = min(r["sale_date"] for r in agg_to_insert) if agg_to_insert else date.today()
+            # Create one import log per portal so pipeline health tracks each
             portal_ids = {r["portal_id"] for r in agg_to_insert}
-            portal_id_for_log = next(iter(portal_ids)) if len(portal_ids) == 1 else None
-
-            log = ImportLog(
-                source_type="portal_csv",
-                portal_id=portal_id_for_log,
-                file_name=filename,
-                import_date=earliest,
-                end_time=datetime.now(timezone.utc),
-                status="success",
-                records_imported=inserted,
-            )
-            db.add(log)
+            now = datetime.now(timezone.utc)
+            for pid in portal_ids:
+                pid_rows = [r for r in agg_to_insert if r["portal_id"] == pid]
+                log = ImportLog(
+                    source_type="portal_csv",
+                    portal_id=pid,
+                    file_name=filename,
+                    import_date=min(r["sale_date"] for r in pid_rows),
+                    end_time=now,
+                    status="success",
+                    records_imported=len(pid_rows),
+                )
+                db.add(log)
             db.flush()
             import_log_id = log.id
             db.commit()
@@ -350,20 +351,21 @@ def _process_inventory(
             db.bulk_save_objects(snap_rows)
             inserted = len(snap_rows)
 
-            earliest = min(r["_snap_date"] for r in to_insert)
+            # Create one import log per portal so pipeline health tracks each
             portal_ids = {r["_portal_id"] for r in to_insert}
-            portal_id_for_log = next(iter(portal_ids)) if len(portal_ids) == 1 else None
-
-            log = ImportLog(
-                source_type="portal_csv",
-                portal_id=portal_id_for_log,
-                file_name=filename,
-                import_date=earliest,
-                end_time=datetime.now(timezone.utc),
-                status="success",
-                records_imported=inserted,
-            )
-            db.add(log)
+            now = datetime.now(timezone.utc)
+            for pid in portal_ids:
+                pid_rows = [r for r in to_insert if r["_portal_id"] == pid]
+                log = ImportLog(
+                    source_type="portal_csv",
+                    portal_id=pid,
+                    file_name=filename,
+                    import_date=min(r["_snap_date"] for r in pid_rows),
+                    end_time=now,
+                    status="success",
+                    records_imported=len(pid_rows),
+                )
+                db.add(log)
             db.flush()
             import_log_id = log.id
             db.commit()
@@ -468,16 +470,21 @@ def _process_master_excel(
         skipped = len(resolved) - inserted
 
         if inserted > 0:
-            earliest = min(r["_sale_date"] for r in resolved)
-            log = ImportLog(
-                source_type="excel_import",
-                file_name=filename,
-                import_date=earliest,
-                end_time=datetime.now(timezone.utc),
-                status="success",
-                records_imported=inserted,
-            )
-            db.add(log)
+            # Create one import log per portal so pipeline health tracks each
+            portal_ids = {r["_portal_id"] for r in resolved}
+            now = datetime.now(timezone.utc)
+            for pid in portal_ids:
+                pid_rows = [r for r in resolved if r["_portal_id"] == pid]
+                log = ImportLog(
+                    source_type="excel_import",
+                    portal_id=pid,
+                    file_name=filename,
+                    import_date=min(r["_sale_date"] for r in pid_rows),
+                    end_time=now,
+                    status="success",
+                    records_imported=len(pid_rows),
+                )
+                db.add(log)
             db.flush()
             import_log_id = log.id
 

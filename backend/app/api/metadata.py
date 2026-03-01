@@ -150,7 +150,7 @@ def get_action_items(db: Session = Depends(get_db)):
         for r in unmapped_rows
     ]
 
-    # Query C — last pipeline run per portal
+    # Query C — last pipeline run per portal (all import sources)
     health_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
@@ -163,7 +163,7 @@ def get_action_items(db: Session = Depends(get_db)):
             COUNT(CASE WHEN il.status = 'failed' THEN 1 END) AS failed_runs
         FROM portals po
         LEFT JOIN import_logs il
-            ON il.portal_id = po.id AND il.source_type = 'portal_scraper'
+            ON il.portal_id = po.id
         WHERE po.name NOT IN {_EXCLUDED_PORTALS_SQL}
         GROUP BY po.id, po.name, po.display_name
         ORDER BY MAX(il.end_time) DESC NULLS LAST

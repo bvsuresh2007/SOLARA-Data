@@ -39,6 +39,7 @@ class SalesSummary(BaseModel):
     total_orders: Optional[int] = None          # not yet in DB schema
     total_discount: Optional[float] = None      # not yet in DB schema
     record_count: int
+    active_skus: int = 0
 
 
 class SalesByDimension(BaseModel):

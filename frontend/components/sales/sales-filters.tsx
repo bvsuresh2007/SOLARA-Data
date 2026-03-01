@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { Portal } from "@/lib/api";
+import { AMAInput } from "@/components/sales/ama-input";
 
 const PRESETS = [
   { label: "7D",     days: 7 },
@@ -141,6 +142,14 @@ export function SalesFilters({ portals }: Props) {
           ))}
         </SelectContent>
       </Select>
+
+      {/* Separator + Ask Me Anything */}
+      <div className="h-6 w-px bg-zinc-700" />
+      <AMAInput
+        startDate={startDate ?? undefined}
+        endDate={endDate ?? undefined}
+        portalId={activePortal !== "all" ? Number(activePortal) : undefined}
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ from .sales import router as sales_router
 from .inventory import router as inventory_router
 from .imports import router as imports_router
 from .uploads import router as uploads_router
+from .ama import router as ama_router
 
 api_router = APIRouter()
 api_router.include_router(metadata_router, prefix="/metadata", tags=["Metadata"])
@@ -11,3 +12,4 @@ api_router.include_router(sales_router,    prefix="/sales",    tags=["Sales"])
 api_router.include_router(inventory_router, prefix="/inventory", tags=["Inventory"])
 api_router.include_router(imports_router,  prefix="/imports",  tags=["Imports"])
 api_router.include_router(uploads_router,  prefix="/uploads",  tags=["Uploads"])
+api_router.include_router(ama_router,      prefix="/ama",      tags=["Ask Me Anything"])

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Database SSL — set DB_SSL=true for Supabase/cloud Postgres; false for local Docker
     db_ssl: bool = False
 
+    # AI / LLM (Ask Me Anything feature)
+    llm_api_key: str = ""
+
     def get_db_url(self) -> str:
         if self.database_url:
             return self.database_url

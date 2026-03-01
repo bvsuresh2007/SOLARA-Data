@@ -77,12 +77,14 @@ def sales_summary(
         func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
         func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         func.count(DailySales.id).label("record_count"),
+        func.count(func.distinct(DailySales.product_id)).label("active_skus"),
     ).one()
     rev = float(row.total_revenue)
     return SalesSummary(
         total_revenue=rev,
         total_quantity=float(row.total_quantity),
         record_count=row.record_count,
+        active_skus=row.active_skus,
     )
 
 
@@ -201,6 +203,7 @@ def sales_by_product(
     end_date: Optional[date] = Query(None),
     portal_id: Optional[int] = Query(None),
     limit: int = Query(50, le=200),
+    sort_by: str = Query("revenue", description="Sort by 'revenue' or 'units'"),
     db: Session = Depends(get_db),
 ):
     included = _included_portal_ids(db)
@@ -221,9 +224,10 @@ def sales_by_product(
         q = q.filter(DailySales.sale_date <= end_date)
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
+    order_col = "total_quantity" if sort_by == "units" else "total_revenue"
     rows = (
         q.group_by(Product.id, Product.sku_code, Product.product_name)
-        .order_by(text("total_revenue DESC NULLS LAST"))
+        .order_by(text(f"{order_col} DESC NULLS LAST"))
         .limit(limit)
         .all()
     )

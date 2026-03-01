@@ -33,6 +33,7 @@ export const MOCK_SALES_SUMMARY: SalesSummary = {
   total_orders:      2_10_450,
   total_discount:    13_32_00_000,
   record_count:      78_540,
+  active_skus:       142,
 };
 
 // ── Sales by Portal ──────────────────────────────────────

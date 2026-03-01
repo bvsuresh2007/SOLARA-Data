@@ -14,6 +14,7 @@ function formatDate(iso: string | null): string {
   return new Date(iso).toLocaleString("en-IN", {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZone: "Asia/Kolkata",
   })
 }
 
@@ -79,11 +80,14 @@ export function PipelineHealthSection({
                 >
                   <TableCell className="py-2 px-2 font-medium text-zinc-200">
                     <span className="inline-flex items-center gap-1.5">
-                      {row.failed_runs > 0 && (
-                        expanded === row.portal_name
-                          ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
-                          : <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
-                      )}
+                      {/* Always reserve space for chevron so names align */}
+                      <span className="w-3.5 h-3.5 flex-shrink-0 inline-flex items-center justify-center">
+                        {row.failed_runs > 0 && (
+                          expanded === row.portal_name
+                            ? <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
+                            : <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+                        )}
+                      </span>
                       {row.display_name}
                     </span>
                   </TableCell>
