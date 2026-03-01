@@ -223,7 +223,18 @@ class EasyecomBaseScraper:
                 raise RuntimeError(f"EasyEcom login timeout. URL: {self._page.url}")
 
         self._page.wait_for_timeout(2000)
-        self._log.info("[EasyEcom] Logged in. Dashboard URL: %s", self._page.url)
+
+        # Post-login verification: the page may briefly redirect to the dashboard
+        # then bounce back to login if the PHP session wasn't established.
+        current_url = self._page.url
+        if "/account/auth/" in current_url:
+            self._shot("login_bounce_back")
+            raise RuntimeError(
+                f"EasyEcom login appeared to succeed but page redirected back to login. "
+                f"URL: {current_url}. Google OAuth session in the profile may have expired — "
+                f"run auth_easyecom.py locally to refresh it."
+            )
+        self._log.info("[EasyEcom] Logged in. Dashboard URL: %s", current_url)
 
 
 class EasyecomScraper(EasyecomBaseScraper):
