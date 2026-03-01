@@ -454,27 +454,35 @@ def portal_daily_sales(
     if not product_ids:
         return PortalDailyResponse(portal_name=portal_display_name, dates=dates, rows=[])
 
-    pq = (
-        db.query(
-            Product.id,
-            Product.sku_code,
-            Product.product_name,
-            ProductCategory.l2_name.label("category"),
-            ProductPortalMapping.portal_sku,
-        )
-        .outerjoin(ProductCategory, Product.category_id == ProductCategory.id)
-    )
     if portal_obj_id is not None:
-        pq = pq.outerjoin(
-            ProductPortalMapping,
-            (ProductPortalMapping.product_id == Product.id)
-            & (ProductPortalMapping.portal_id == portal_obj_id),
+        # Specific portal: LEFT JOIN mapping for portal_sku
+        pq = (
+            db.query(
+                Product.id,
+                Product.sku_code,
+                Product.product_name,
+                ProductCategory.l2_name.label("category"),
+                ProductPortalMapping.portal_sku,
+            )
+            .outerjoin(ProductCategory, Product.category_id == ProductCategory.id)
+            .outerjoin(
+                ProductPortalMapping,
+                (ProductPortalMapping.product_id == Product.id)
+                & (ProductPortalMapping.portal_id == portal_obj_id),
+            )
         )
     else:
-        # "All portals" — no meaningful single portal_sku; left join so column exists as NULL
-        pq = pq.outerjoin(
-            ProductPortalMapping,
-            (ProductPortalMapping.id == None),  # always NULL for the "all" case
+        # "All portals" — no single portal_sku to show; use NULL literal
+        from sqlalchemy import literal
+        pq = (
+            db.query(
+                Product.id,
+                Product.sku_code,
+                Product.product_name,
+                ProductCategory.l2_name.label("category"),
+                literal(None).label("portal_sku"),
+            )
+            .outerjoin(ProductCategory, Product.category_id == ProductCategory.id)
         )
     product_rows = pq.filter(Product.id.in_(product_ids)).all()
     product_map = {r.id: r for r in product_rows}

@@ -25,10 +25,15 @@ function StatusBadge({ status }: { status: string | null }) {
   return <Badge variant="muted">No data</Badge>
 }
 
-/** Returns true if the last import is older than `days` days ago */
-function isStale(isoDate: string | null, days = 2): boolean {
-  if (!isoDate) return false  // "Never" — handled by StatusBadge
-  const ms = Date.now() - new Date(isoDate).getTime()
+/** Returns true if the latest sale_date is older than `days` days before yesterday.
+ *  We compare against yesterday because today's data hasn't been scraped yet. */
+function isStale(latestSaleDate: string | null, days = 3): boolean {
+  if (!latestSaleDate) return false  // no sales data at all — handled separately
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  yesterday.setHours(0, 0, 0, 0)
+  const saleDate = new Date(latestSaleDate + "T00:00:00")
+  const ms = yesterday.getTime() - saleDate.getTime()
   return ms > days * 86_400_000
 }
 
@@ -99,10 +104,10 @@ export function PipelineHealthSection({
                     </span>
                   </TableCell>
                   <TableCell className="py-2 px-2 text-sm">
-                    <span className={isStale(row.last_import_at) ? "text-yellow-500" : "text-zinc-400"}>
+                    <span className={isStale(row.latest_sale_date) ? "text-yellow-500" : "text-zinc-400"}>
                       {formatDate(row.last_import_at)}
                     </span>
-                    {isStale(row.last_import_at) && (
+                    {isStale(row.latest_sale_date) && (
                       <span className="ml-1.5 text-[10px] text-yellow-600 font-medium">STALE</span>
                     )}
                   </TableCell>

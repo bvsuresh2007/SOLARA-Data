@@ -151,6 +151,8 @@ def get_action_items(db: Session = Depends(get_db)):
     ]
 
     # Query C — last pipeline run per portal (all import sources, active portals only)
+    # Also includes latest_sale_date from daily_sales so the frontend can show
+    # staleness based on actual data freshness, not just when the scraper ran.
     health_rows = db.execute(text(f"""
         SELECT
             po.name         AS portal_name,
@@ -160,7 +162,9 @@ def get_action_items(db: Session = Depends(get_db)):
              WHERE il2.portal_id = po.id
              ORDER BY il2.end_time DESC NULLS LAST LIMIT 1) AS last_status,
             COUNT(il.id)    AS total_imports,
-            COUNT(CASE WHEN il.status = 'failed' THEN 1 END) AS failed_runs
+            COUNT(CASE WHEN il.status = 'failed' THEN 1 END) AS failed_runs,
+            (SELECT MAX(ds.sale_date)::text FROM daily_sales ds
+             WHERE ds.portal_id = po.id) AS latest_sale_date
         FROM portals po
         LEFT JOIN import_logs il
             ON il.portal_id = po.id
@@ -178,6 +182,7 @@ def get_action_items(db: Session = Depends(get_db)):
             last_status=r.last_status,
             total_imports=r.total_imports,
             failed_runs=r.failed_runs,
+            latest_sale_date=r.latest_sale_date,
         )
         for r in health_rows
     ]

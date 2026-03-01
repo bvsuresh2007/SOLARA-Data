@@ -142,6 +142,7 @@ export interface PortalImportHealth {
   last_status: string | null;
   total_imports: number;
   failed_runs: number;
+  latest_sale_date: string | null;  // MAX(sale_date) from daily_sales
 }
 export interface PortalCoverage {
   portal_name: string;

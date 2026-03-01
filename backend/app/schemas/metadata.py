@@ -44,6 +44,7 @@ class PortalImportHealth(BaseModel):
     last_status: Optional[str] = None
     total_imports: int
     failed_runs: int
+    latest_sale_date: Optional[str] = None  # MAX(sale_date) from daily_sales
 
 
 class PortalCoverage(BaseModel):
