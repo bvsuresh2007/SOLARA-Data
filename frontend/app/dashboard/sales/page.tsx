@@ -5,16 +5,15 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type {
   SalesSummary, SalesByDimension, SalesTrend,
-  SalesByCategory, TargetAchievement, Portal, PortalDailyResponse,
+  TargetAchievement, Portal, PortalDailyResponse,
 } from "@/lib/api";
 
 import { SalesFilters }           from "@/components/sales/sales-filters";
 import { KpiStrip }               from "@/components/sales/kpi-strip";
 import { RevenueTrend }           from "@/components/sales/revenue-trend";
 import { PortalBreakdown }        from "@/components/sales/portal-breakdown";
-import { CategoryChart }          from "@/components/sales/category-chart";
+
 import { TargetAchievementPanel } from "@/components/sales/target-achievement";
-import { ProductTable }           from "@/components/sales/product-table";
 import { PortalDailyTable }       from "@/components/sales/portal-daily-table";
 import { Skeleton }               from "@/components/ui/skeleton";
 import { NavTabs }                from "@/components/ui/nav-tabs";
@@ -47,8 +46,6 @@ function SalesContent() {
   const [summary,    setSummary]    = useState<SalesSummary | null>(null);
   const [byPortal,   setByPortal]   = useState<SalesByDimension[]>([]);
   const [trend,      setTrend]      = useState<SalesTrend[]>([]);
-  const [byCategory, setByCategory] = useState<SalesByCategory[]>([]);
-  const [byProduct,  setByProduct]  = useState<SalesByDimension[]>([]);
   const [targets,    setTargets]    = useState<TargetAchievement[]>([]);
 
   const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
@@ -65,21 +62,17 @@ function SalesContent() {
         ...(endDate   ? { end_date: endDate }      : {}),
         ...(portalId  ? { portal_id: portalId }    : {}),
       };
-      const [portalsRes, summaryRes, byPortalRes, trendRes, byCatRes, byProdRes] =
+      const [portalsRes, summaryRes, byPortalRes, trendRes] =
         await Promise.allSettled([
           api.portals(),
           api.salesSummary(fp),
           api.salesByPortal(fp),
           api.salesTrend(fp),
-          api.salesByCategory(fp),
-          api.salesByProduct({ ...fp, limit: 50 }),
         ]);
       if (portalsRes.status  === "fulfilled") setPortals(portalsRes.value);
       if (summaryRes.status  === "fulfilled") setSummary(summaryRes.value);
       if (byPortalRes.status === "fulfilled") setByPortal(byPortalRes.value);
       if (trendRes.status    === "fulfilled") setTrend(trendRes.value);
-      if (byCatRes.status    === "fulfilled") setByCategory(byCatRes.value);
-      if (byProdRes.status   === "fulfilled") setByProduct(byProdRes.value);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
     } finally { setLoading(false); }
@@ -127,21 +120,16 @@ function SalesContent() {
         <div className="rounded-lg border border-red-800 bg-red-950/30 px-4 py-3 text-sm text-red-400">{error}</div>
       )}
 
-      {loading || !summary ? <KpiSkeleton /> : <KpiStrip summary={summary} productCount={byProduct.length} />}
+      {loading || !summary ? <KpiSkeleton /> : <KpiStrip summary={summary} productCount={0} />}
       {loading ? <ChartSkeleton h={320} /> : <RevenueTrend data={trend} />}
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <ChartSkeleton h={360} /><ChartSkeleton h={360} />
-        </div>
-      ) : <PortalBreakdown data={byPortal} />}
-      {loading ? <ChartSkeleton h={260} /> : <CategoryChart data={byCategory} />}
+      {loading ? <ChartSkeleton h={360} /> : <PortalBreakdown data={byPortal} />}
+
       {targetsLoading ? <ChartSkeleton h={220} /> : (
         <TargetAchievementPanel
           data={targets} year={targetYear} month={targetMonth}
           onMonthChange={(y, m) => { setTargetYear(y); setTargetMonth(m); }}
         />
       )}
-      {loading ? <ChartSkeleton h={400} /> : <ProductTable data={byProduct} totalRevenue={summary?.total_revenue ?? 0} />}
       <PortalDailyTable data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
     </main>
   );

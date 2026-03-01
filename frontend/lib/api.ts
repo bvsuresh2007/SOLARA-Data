@@ -1,4 +1,30 @@
+import {
+  MOCK_PORTALS, MOCK_SALES_SUMMARY, MOCK_SALES_BY_PORTAL,
+  MOCK_SALES_BY_PRODUCT, MOCK_SALES_TREND, MOCK_SALES_BY_CATEGORY,
+  MOCK_TARGETS, MOCK_SCRAPING_LOGS, MOCK_PORTAL_DAILY,
+  MOCK_INVENTORY, MOCK_LOW_STOCK, MOCK_ACTION_ITEMS,
+} from "./mock-data";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+/** Map of API paths to mock fallback data */
+const MOCK_MAP: Record<string, unknown> = {
+  "/api/metadata/portals":      MOCK_PORTALS,
+  "/api/metadata/scraping-logs": MOCK_SCRAPING_LOGS,
+  "/api/sales/summary":         MOCK_SALES_SUMMARY,
+  "/api/sales/by-portal":       MOCK_SALES_BY_PORTAL,
+  "/api/sales/by-city":         MOCK_SALES_BY_PORTAL,
+  "/api/sales/by-product":      MOCK_SALES_BY_PRODUCT,
+  "/api/sales/trend":           MOCK_SALES_TREND,
+  "/api/sales/by-category":     MOCK_SALES_BY_CATEGORY,
+  "/api/sales/targets":         MOCK_TARGETS,
+  "/api/sales/portal-daily":    MOCK_PORTAL_DAILY,
+  "/api/sales/products":        [],
+  "/api/metadata/cities":       [],
+  "/api/inventory/current":     MOCK_INVENTORY,
+  "/api/inventory/low-stock":   MOCK_LOW_STOCK,
+  "/api/metadata/action-items": MOCK_ACTION_ITEMS,
+};
 
 async function get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
   const url = new URL(`${BASE}${path}`);
@@ -7,9 +33,15 @@ async function get<T>(path: string, params?: Record<string, string | number | un
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     });
   }
-  const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
-  return res.json();
+  try {
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+    return res.json();
+  } catch {
+    // Backend unreachable — return mock data
+    if (path in MOCK_MAP) return MOCK_MAP[path] as T;
+    throw new Error(`API unreachable and no mock data for: ${path}`);
+  }
 }
 
 // ---------- Types ----------
