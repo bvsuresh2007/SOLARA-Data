@@ -14,6 +14,13 @@ from shared.constants import normalise_city
 
 logger = logging.getLogger(__name__)
 
+# Portal name aliases — map scraper-only portal names to the canonical portal
+# that the dashboard reads from.  Prevents data from landing under an inactive
+# portal (e.g. "amazon_pi" → "amazon") if the parser ever emits the wrong slug.
+PORTAL_ALIASES: dict[str, str] = {
+    "amazon_pi": "amazon",
+}
+
 
 # ---------------------------------------------------------------------------
 # Transformer
@@ -29,12 +36,15 @@ class DataTransformer:
         self._sku_cache: dict[str, int] = {}         # sku_code → product_id (direct lookup)
 
     def _get_portal_id(self, name: str) -> int | None:
-        if name not in self._portal_cache:
+        canonical = PORTAL_ALIASES.get(name, name)
+        if canonical not in self._portal_cache:
             from backend.app.models.metadata import Portal
-            portal = self.db.query(Portal).filter_by(name=name).first()
+            portal = self.db.query(Portal).filter_by(name=canonical).first()
             if portal:
-                self._portal_cache[name] = portal.id
-        return self._portal_cache.get(name)
+                self._portal_cache[canonical] = portal.id
+        if name != canonical:
+            self._portal_cache[name] = self._portal_cache.get(canonical)
+        return self._portal_cache.get(canonical)
 
     def _get_or_create_city(self, city_name: str) -> int | None:
         canonical = normalise_city(city_name)
