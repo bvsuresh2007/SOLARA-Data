@@ -483,6 +483,7 @@ def portal_daily_sales(
                 Product.id,
                 Product.sku_code,
                 Product.product_name,
+                Product.default_asp,
                 ProductCategory.l2_name.label("category"),
                 ProductPortalMapping.portal_sku,
             )
@@ -501,6 +502,7 @@ def portal_daily_sales(
                 Product.id,
                 Product.sku_code,
                 Product.product_name,
+                Product.default_asp,
                 ProductCategory.l2_name.label("category"),
                 literal(None).label("portal_sku"),
             )
@@ -580,8 +582,13 @@ def portal_daily_sales(
         if pid not in product_map:
             continue
         p = product_map[pid]
-        asps = agg["asps"]
-        bau_asp = round(sum(asps) / len(asps), 2) if asps else None
+        # Use BAU ASP from products.default_asp (master file) if available;
+        # fall back to calculated average from daily_sales.asp
+        if p.default_asp is not None and float(p.default_asp) > 0:
+            bau_asp = float(p.default_asp)
+        else:
+            asps = agg["asps"]
+            bau_asp = round(sum(asps) / len(asps), 2) if asps else None
         result_rows.append(
             PortalDailyRow(
                 sku_code=p.sku_code,
