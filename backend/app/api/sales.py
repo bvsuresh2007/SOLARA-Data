@@ -5,13 +5,25 @@ from typing import List, Optional
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, extract, text
+from sqlalchemy import func, extract, text, case, and_
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.sales import DailySales, Product, ProductPortalMapping
 from ..models.metadata import Portal, ProductCategory
 from ..models.inventory import MonthlyTargets, InventorySnapshot
+
+
+def _bau_revenue_expr():
+    """SQL expression: use BAU ASP (products.default_asp * units_sold) when
+    default_asp is set and > 0; otherwise fall back to daily_sales.revenue."""
+    return case(
+        (
+            and_(Product.default_asp.isnot(None), Product.default_asp > 0),
+            Product.default_asp * DailySales.units_sold,
+        ),
+        else_=DailySales.revenue,
+    )
 from ..schemas.sales import (
     SalesDataOut, SalesSummary, SalesByDimension, ProductOut,
     SalesTrend, SalesByCategory, TargetAchievement,
@@ -46,6 +58,20 @@ def _included_portal_ids(db) -> list[int]:
     return list(ids)
 
 
+def _mapped_product_ids(db, portal_id: int) -> list[int]:
+    """Return product IDs that have a valid product_portal_mapping entry for
+    the given portal_id.  Only products explicitly listed in the SKU mapping
+    file (with a non-empty portal_sku) are considered 'mapped'.
+    When portal_id is None (All Portals), returns an empty list meaning no filter."""
+    rows = (
+        db.query(ProductPortalMapping.product_id)
+        .filter(ProductPortalMapping.portal_id == portal_id)
+        .filter(ProductPortalMapping.is_active == True)
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
 def _base_query(db, start_date, end_date, portal_id, product_id=None):
     # Exclude data rows belonging to inactive portals (e.g. EasyEcom — an aggregator
     # whose data duplicates the individual portal rows already in the DB).
@@ -72,16 +98,32 @@ def sales_summary(
     product_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
-    q = _base_query(db, start_date, end_date, portal_id, product_id)
-    row = q.with_entities(
-        func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
-        func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
-        func.count(DailySales.id).label("record_count"),
-        func.count(func.distinct(DailySales.product_id)).label("active_skus"),
-    ).one()
-    rev = float(row.total_revenue)
+    included = _included_portal_ids(db)
+    bau_rev = _bau_revenue_expr()
+    q = (
+        db.query(
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
+            func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
+            func.count(DailySales.id).label("record_count"),
+            func.count(func.distinct(DailySales.product_id)).label("active_skus"),
+        )
+        .join(Product, DailySales.product_id == Product.id)
+        .filter(DailySales.portal_id.in_(included))
+    )
+    if start_date:
+        q = q.filter(DailySales.sale_date >= start_date)
+    if end_date:
+        q = q.filter(DailySales.sale_date <= end_date)
+    if portal_id:
+        q = q.filter(DailySales.portal_id == portal_id)
+        mapped = _mapped_product_ids(db, portal_id)
+        if mapped:
+            q = q.filter(DailySales.product_id.in_(mapped))
+    if product_id:
+        q = q.filter(DailySales.product_id == product_id)
+    row = q.one()
     return SalesSummary(
-        total_revenue=rev,
+        total_revenue=float(row.total_revenue),
         total_quantity=float(row.total_quantity),
         record_count=row.record_count,
         active_skus=row.active_skus,
@@ -111,15 +153,17 @@ def sales_by_portal(
     end_date: Optional[date] = Query(None),
     db: Session = Depends(get_db),
 ):
+    bau_rev = _bau_revenue_expr()
     q = (
         db.query(
             Portal.id.label("dimension_id"),
             Portal.display_name.label("dimension_name"),
-            func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .filter(Portal.is_active == True)
         .join(DailySales, DailySales.portal_id == Portal.id, isouter=True)
+        .outerjoin(Product, DailySales.product_id == Product.id)
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
@@ -140,14 +184,14 @@ def sales_by_portal(
             alias_target_ids[src.id] = tgt.id
 
     if alias_target_ids:
-        # Fetch aliased portal revenue separately and merge into canonical row
         alias_ids = list(alias_target_ids.keys())
         alias_q = (
             db.query(
                 DailySales.portal_id,
-                func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
+                func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
                 func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
             )
+            .join(Product, DailySales.product_id == Product.id)
             .filter(DailySales.portal_id.in_(alias_ids))
         )
         if start_date:
@@ -207,12 +251,13 @@ def sales_by_product(
     db: Session = Depends(get_db),
 ):
     included = _included_portal_ids(db)
+    bau_rev = _bau_revenue_expr()
     q = (
         db.query(
             Product.id.label("dimension_id"),
             Product.sku_code.label("sku_code"),
             Product.product_name.label("dimension_name"),
-            func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .join(DailySales, DailySales.product_id == Product.id)
@@ -224,6 +269,9 @@ def sales_by_product(
         q = q.filter(DailySales.sale_date <= end_date)
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
+        mapped = _mapped_product_ids(db, portal_id)
+        if mapped:
+            q = q.filter(DailySales.product_id.in_(mapped))
     order_col = "total_quantity" if sort_by == "units" else "total_revenue"
     rows = (
         q.group_by(Product.id, Product.sku_code, Product.product_name)
@@ -256,18 +304,25 @@ def sales_trend(
         start_date = end_date - _dt.timedelta(days=90)
 
     included = _included_portal_ids(db)
-    q = db.query(
-        DailySales.sale_date.label("dt"),
-        func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
-        func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
-        func.coalesce(func.avg(DailySales.asp), Decimal("0")).label("avg_asp"),
-    ).filter(DailySales.portal_id.in_(included))
+    bau_rev = _bau_revenue_expr()
+    q = (
+        db.query(
+            DailySales.sale_date.label("dt"),
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
+            func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
+        )
+        .join(Product, DailySales.product_id == Product.id)
+        .filter(DailySales.portal_id.in_(included))
+    )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
     if end_date:
         q = q.filter(DailySales.sale_date <= end_date)
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
+        mapped = _mapped_product_ids(db, portal_id)
+        if mapped:
+            q = q.filter(DailySales.product_id.in_(mapped))
 
     rows = q.group_by(DailySales.sale_date).order_by(DailySales.sale_date.asc()).all()
     return [
@@ -275,7 +330,7 @@ def sales_trend(
             date=str(r.dt),
             total_revenue=float(r.total_revenue),
             total_quantity=float(r.total_quantity),
-            avg_asp=float(r.avg_asp),
+            avg_asp=float(r.total_revenue) / float(r.total_quantity) if float(r.total_quantity) > 0 else 0.0,
         )
         for r in rows
     ]
@@ -289,10 +344,11 @@ def sales_by_category(
     db: Session = Depends(get_db),
 ):
     included = _included_portal_ids(db)
+    bau_rev = _bau_revenue_expr()
     q = (
         db.query(
             ProductCategory.l2_name.label("category"),
-            func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
             func.count(func.distinct(DailySales.product_id)).label("product_count"),
         )
@@ -308,6 +364,9 @@ def sales_by_category(
         q = q.filter(DailySales.sale_date <= end_date)
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
+        mapped = _mapped_product_ids(db, portal_id)
+        if mapped:
+            q = q.filter(DailySales.product_id.in_(mapped))
 
     rows = (
         q.group_by(ProductCategory.l2_name)
@@ -339,12 +398,14 @@ def sales_targets(
         month = today.month
 
     # Actual sales sub-query for the given year/month
+    bau_rev = _bau_revenue_expr()
     actual_sq = (
         db.query(
             DailySales.portal_id.label("portal_id"),
-            func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("actual_revenue"),
+            func.coalesce(func.sum(bau_rev), Decimal("0")).label("actual_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("actual_units"),
         )
+        .join(Product, DailySales.product_id == Product.id)
         .filter(extract("year", DailySales.sale_date) == year)
         .filter(extract("month", DailySales.sale_date) == month)
         .group_by(DailySales.portal_id)
@@ -459,19 +520,21 @@ def portal_daily_sales(
         d += _dt.timedelta(days=1)
 
     # 3. Discover products that actually have sales in this portal + date range.
-    #    Previously this required product_portal_mapping entries (which are often
-    #    incomplete), causing many products to be invisible in the daily table
-    #    even though they had sales data.  Now we query daily_sales directly and
-    #    LEFT JOIN the mapping for the optional portal_sku column.
-    sales_product_ids = (
+    #    For specific portals, only include products that have a valid mapping
+    #    (i.e. listed in the SKU mapping file with a portal code).
+    sales_q = (
         db.query(func.distinct(DailySales.product_id))
         .filter(
             DailySales.portal_id.in_(portal_ids_for_query),
             DailySales.sale_date >= start_date,
             DailySales.sale_date <= end_date,
         )
-        .all()
     )
+    if portal_obj_id is not None:
+        mapped = _mapped_product_ids(db, portal_obj_id)
+        if mapped:
+            sales_q = sales_q.filter(DailySales.product_id.in_(mapped))
+    sales_product_ids = sales_q.all()
     product_ids = [r[0] for r in sales_product_ids]
     if not product_ids:
         return PortalDailyResponse(portal_name=portal_display_name, dates=dates, rows=[])
@@ -589,6 +652,11 @@ def portal_daily_sales(
         else:
             asps = agg["asps"]
             bau_asp = round(sum(asps) / len(asps), 2) if asps else None
+        # MTD value: use BAU ASP * units when available, else raw revenue
+        if bau_asp is not None and bau_asp > 0:
+            mtd_value = round(bau_asp * agg["total_units"], 0)
+        else:
+            mtd_value = round(agg["total_value"], 0)
         result_rows.append(
             PortalDailyRow(
                 sku_code=p.sku_code,
@@ -599,7 +667,7 @@ def portal_daily_sales(
                 wh_stock=inv_map.get(pid),
                 daily_units={d: agg["daily"].get(d) for d in dates},
                 mtd_units=agg["total_units"],
-                mtd_value=round(agg["total_value"], 0),
+                mtd_value=mtd_value,
             )
         )
 
