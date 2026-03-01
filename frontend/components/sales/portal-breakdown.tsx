@@ -43,51 +43,57 @@ export function PortalBreakdown({ data }: Props) {
         <CardTitle className="text-base">Revenue Share</CardTitle>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={280}>
-          <PieChart>
-            <Pie
-              data={sorted}
-              dataKey="total_revenue"
-              nameKey="dimension_name"
-              cx="50%"
-              cy="50%"
-              innerRadius={60}
-              outerRadius={110}
-              paddingAngle={2}
-              label={renderLabel}
-              labelLine={false}
-            >
-              {sorted.map((_, i) => (
-                <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={TOOLTIP_STYLE}
-              labelStyle={TOOLTIP_LABEL_STYLE}
-              itemStyle={TOOLTIP_ITEM_STYLE}
-              formatter={(v: number, name: string) => [
-                `${fmtRevenue(v)} (${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%)`,
-                name,
-              ]}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-        {/* Legend */}
-        <div className="mt-3 space-y-1.5">
-          {sorted.map((d, i) => (
-            <div key={d.dimension_id} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span
-                  className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+        <div className="flex flex-col lg:flex-row items-center lg:items-start gap-6">
+          {/* Pie chart — left side */}
+          <div className="w-full lg:w-1/2 flex-shrink-0" style={{ minHeight: 280 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie
+                  data={sorted}
+                  dataKey="total_revenue"
+                  nameKey="dimension_name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={110}
+                  paddingAngle={2}
+                  label={renderLabel}
+                  labelLine={false}
+                >
+                  {sorted.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={TOOLTIP_STYLE}
+                  labelStyle={TOOLTIP_LABEL_STYLE}
+                  itemStyle={TOOLTIP_ITEM_STYLE}
+                  formatter={(v: number, name: string) => [
+                    `${fmtRevenue(v)} (${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%)`,
+                    name,
+                  ]}
                 />
-                <span className="text-zinc-400">{d.dimension_name}</span>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Legend — right side */}
+          <div className="w-full lg:w-1/2 space-y-2 lg:pt-4">
+            {sorted.map((d, i) => (
+              <div key={d.dimension_id} className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                  />
+                  <span className="text-zinc-400">{d.dimension_name}</span>
+                </div>
+                <span className="text-zinc-300 font-medium tabular-nums">
+                  {fmtRevenue(d.total_revenue)} &middot; {total > 0 ? ((d.total_revenue / total) * 100).toFixed(1) : 0}%
+                </span>
               </div>
-              <span className="text-zinc-300 font-medium">
-                {fmtRevenue(d.total_revenue)} &middot; {total > 0 ? ((d.total_revenue / total) * 100).toFixed(1) : 0}%
-              </span>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -18,6 +18,15 @@ function formatDate(iso: string | null): string {
   })
 }
 
+function formatSaleDate(iso: string | null): string {
+  if (!iso) return "—"
+  const d = new Date(iso + "T00:00:00")
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+    timeZone: "Asia/Kolkata",
+  })
+}
+
 function StatusBadge({ status }: { status: string | null }) {
   if (status === "success") return <Badge variant="success">Success</Badge>
   if (status === "failed")  return <Badge variant="danger">Failed</Badge>
@@ -26,9 +35,10 @@ function StatusBadge({ status }: { status: string | null }) {
 }
 
 /** Returns true if the latest sale_date is older than `days` days before yesterday.
- *  We compare against yesterday because today's data hasn't been scraped yet. */
+ *  We compare against yesterday because today's data hasn't been scraped yet.
+ *  Returns false if no sale data exists at all (portal has no data). */
 function isStale(latestSaleDate: string | null, days = 3): boolean {
-  if (!latestSaleDate) return false  // no sales data at all — handled separately
+  if (!latestSaleDate) return false
   const yesterday = new Date()
   yesterday.setDate(yesterday.getDate() - 1)
   yesterday.setHours(0, 0, 0, 0)
@@ -70,6 +80,7 @@ export function PipelineHealthSection({
             <TableRow className="border-zinc-800">
               <TableHead className="h-9 px-2 text-zinc-500 font-medium">Portal</TableHead>
               <TableHead className="h-9 px-2 text-zinc-500 font-medium">Last Import</TableHead>
+              <TableHead className="h-9 px-2 text-zinc-500 font-medium">Data Through</TableHead>
               <TableHead className="h-9 px-2 text-zinc-500 font-medium">Status</TableHead>
               <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Total Runs</TableHead>
               <TableHead className="h-9 px-2 text-right text-zinc-500 font-medium">Failures</TableHead>
@@ -78,7 +89,7 @@ export function PipelineHealthSection({
           <TableBody>
             {importHealth.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-zinc-600">
+                <TableCell colSpan={6} className="py-8 text-center text-zinc-600">
                   {noApiData ? "—" : "No import runs recorded yet"}
                 </TableCell>
               </TableRow>
@@ -92,7 +103,6 @@ export function PipelineHealthSection({
                 >
                   <TableCell className="py-2 px-2 font-medium text-zinc-200">
                     <span className="inline-flex items-center gap-1.5">
-                      {/* Always reserve space for chevron so names align */}
                       <span className="w-3.5 h-3.5 flex-shrink-0 inline-flex items-center justify-center">
                         {row.failed_runs > 0 && (
                           expanded === row.portal_name
@@ -103,9 +113,12 @@ export function PipelineHealthSection({
                       {row.display_name}
                     </span>
                   </TableCell>
+                  <TableCell className="py-2 px-2 text-sm text-zinc-400">
+                    {formatDate(row.last_import_at)}
+                  </TableCell>
                   <TableCell className="py-2 px-2 text-sm">
-                    <span className={isStale(row.latest_sale_date) ? "text-yellow-500" : "text-zinc-400"}>
-                      {formatDate(row.last_import_at)}
+                    <span className={isStale(row.latest_sale_date) ? "text-yellow-500 font-medium" : "text-zinc-400"}>
+                      {formatSaleDate(row.latest_sale_date)}
                     </span>
                     {isStale(row.latest_sale_date) && (
                       <span className="ml-1.5 text-[10px] text-yellow-600 font-medium">STALE</span>
@@ -120,7 +133,7 @@ export function PipelineHealthSection({
 
                 {expanded === row.portal_name && (
                   <TableRow className="border-zinc-800/50 bg-red-950/10">
-                    <TableCell colSpan={5} className="px-4 pb-3 pt-0">
+                    <TableCell colSpan={6} className="px-4 pb-3 pt-0">
                       {loadingFailures ? (
                         <p className="text-xs text-zinc-600 py-2">Loading…</p>
                       ) : portalFailures(row.portal_name).length === 0 ? (

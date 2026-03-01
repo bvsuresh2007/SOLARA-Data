@@ -238,5 +238,9 @@ export const api = {
   portalDaily: (params: { portal?: string; start_date?: string; end_date?: string }) =>
     get<PortalDailyResponse>("/api/sales/portal-daily", params),
 
+  /** Latest sale_date in DB — optionally per portal. Used to anchor date presets. */
+  latestDate: (params?: { portal_id?: number }) =>
+    get<{ date: string | null }>("/api/sales/latest-date", params),
+
   actionItems: () => get<ActionItemsResponse>("/api/metadata/action-items"),
 };

@@ -47,11 +47,19 @@ function SalesContent() {
   const [topByUnits,    setTopByUnits]    = useState<SalesByDimension | null>(null);
 
   const [prevSummary,    setPrevSummary]    = useState<SalesSummary | null>(null);
+  const [latestDate,     setLatestDate]     = useState<string | null>(null);
 
   const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
   const [dailyLoading,   setDailyLoading]   = useState(false);
   const [loading,        setLoading]        = useState(true);
   const [error,          setError]          = useState<string | null>(null);
+
+  // Fetch the latest sale_date in DB — anchors presets to real data
+  useEffect(() => {
+    api.latestDate(portalId ? { portal_id: portalId } : undefined)
+      .then(r => setLatestDate(r.date))
+      .catch(() => {});
+  }, [portalId]);
 
   // Calculate previous period dates for growth comparison
   const prevPeriod = useMemo(() => {
@@ -152,7 +160,7 @@ function SalesContent() {
         <NavTabs />
       </header>
 
-      <SalesFilters portals={portals} />
+      <SalesFilters portals={portals} latestDate={latestDate} />
 
       {error && (
         <div className="rounded-lg border border-red-800 bg-red-950/30 px-4 py-3 text-sm text-red-400">{error}</div>

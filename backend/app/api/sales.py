@@ -386,6 +386,28 @@ def sales_targets(
     ]
 
 
+@router.get("/latest-date")
+def latest_sale_date(
+    portal_id: Optional[int] = Query(None, description="Filter by portal; omit for cross-portal max"),
+    db: Session = Depends(get_db),
+):
+    """Return the most recent sale_date present in daily_sales.
+
+    When portal_id is supplied, returns the latest date for that specific
+    portal.  Otherwise returns the global max across all included (active +
+    aliased) portals.  The frontend uses this to anchor date-range presets
+    to real data instead of the calendar date.
+    """
+    included = _included_portal_ids(db)
+    q = db.query(func.max(DailySales.sale_date)).filter(
+        DailySales.portal_id.in_(included),
+    )
+    if portal_id:
+        q = q.filter(DailySales.portal_id == portal_id)
+    latest = q.scalar()
+    return {"date": str(latest) if latest else None}
+
+
 @router.get("/products", response_model=List[ProductOut])
 def list_products(db: Session = Depends(get_db)):
     return db.query(Product).order_by(Product.product_name).all()
