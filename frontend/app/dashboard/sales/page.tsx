@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type {
   SalesSummary, SalesByDimension, SalesTrend,
-  TargetAchievement, Portal, PortalDailyResponse,
+  Portal, PortalDailyResponse,
 } from "@/lib/api";
 
 import { SalesFilters }           from "@/components/sales/sales-filters";
@@ -13,7 +13,6 @@ import { KpiStrip }               from "@/components/sales/kpi-strip";
 import { RevenueTrend }           from "@/components/sales/revenue-trend";
 import { PortalBreakdown }        from "@/components/sales/portal-breakdown";
 
-import { TargetAchievementPanel } from "@/components/sales/target-achievement";
 import { PortalDailyTable }       from "@/components/sales/portal-daily-table";
 import { Skeleton }               from "@/components/ui/skeleton";
 import { NavTabs }                from "@/components/ui/nav-tabs";
@@ -39,19 +38,14 @@ function SalesContent() {
   const portalIdStr = params.get("portal_id")   ?? undefined;
   const portalId    = portalIdStr ? Number(portalIdStr) : undefined;
 
-  const [targetYear,  setTargetYear]  = useState(() => new Date().getFullYear());
-  const [targetMonth, setTargetMonth] = useState(() => new Date().getMonth() + 1);
-
   const [portals,    setPortals]    = useState<Portal[]>([]);
   const [summary,    setSummary]    = useState<SalesSummary | null>(null);
   const [byPortal,   setByPortal]   = useState<SalesByDimension[]>([]);
   const [trend,      setTrend]      = useState<SalesTrend[]>([]);
-  const [targets,    setTargets]    = useState<TargetAchievement[]>([]);
 
   const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
   const [dailyLoading,   setDailyLoading]   = useState(false);
   const [loading,        setLoading]        = useState(true);
-  const [targetsLoading, setTargetsLoading] = useState(true);
   const [error,          setError]          = useState<string | null>(null);
 
   const fetchMain = useCallback(async () => {
@@ -78,13 +72,6 @@ function SalesContent() {
     } finally { setLoading(false); }
   }, [startDate, endDate, portalId]);
 
-  const fetchTargets = useCallback(async () => {
-    setTargetsLoading(true);
-    try { setTargets(await api.salesTargets({ year: targetYear, month: targetMonth })); }
-    catch { setTargets([]); }
-    finally { setTargetsLoading(false); }
-  }, [targetYear, targetMonth]);
-
   const fetchPortalDaily = useCallback(async () => {
     if (!portalId) { setDailyData(null); return; }
     if (!portals.length) return;
@@ -101,7 +88,6 @@ function SalesContent() {
   }, [portalId, portals, startDate, endDate]);
 
   useEffect(() => { fetchMain(); },        [fetchMain]);
-  useEffect(() => { fetchTargets(); },     [fetchTargets]);
   useEffect(() => { fetchPortalDaily(); }, [fetchPortalDaily]);
 
   return (
@@ -123,13 +109,6 @@ function SalesContent() {
       {loading || !summary ? <KpiSkeleton /> : <KpiStrip summary={summary} productCount={0} />}
       {loading ? <ChartSkeleton h={320} /> : <RevenueTrend data={trend} />}
       {loading ? <ChartSkeleton h={360} /> : <PortalBreakdown data={byPortal} />}
-
-      {targetsLoading ? <ChartSkeleton h={220} /> : (
-        <TargetAchievementPanel
-          data={targets} year={targetYear} month={targetMonth}
-          onMonthChange={(y, m) => { setTargetYear(y); setTargetMonth(m); }}
-        />
-      )}
       <PortalDailyTable data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
     </main>
   );
