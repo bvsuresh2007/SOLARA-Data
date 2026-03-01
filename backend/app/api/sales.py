@@ -90,7 +90,6 @@ def sales_by_portal(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .filter(Portal.is_active == True)
-        .filter(Portal.name != "amazon_pi")
         .join(DailySales, DailySales.portal_id == Portal.id, isouter=True)
     )
     if start_date:
@@ -132,6 +131,7 @@ def sales_by_product(
     limit: int = Query(50, le=200),
     db: Session = Depends(get_db),
 ):
+    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
     q = (
         db.query(
             Product.id.label("dimension_id"),
@@ -141,6 +141,7 @@ def sales_by_product(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .join(DailySales, DailySales.product_id == Product.id)
+        .filter(DailySales.portal_id.in_(active_portal_ids))
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
@@ -178,12 +179,13 @@ def sales_trend(
         end_date = _dt.date.today()
         start_date = end_date - _dt.timedelta(days=90)
 
+    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
     q = db.query(
         DailySales.sale_date.label("dt"),
         func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
         func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         func.coalesce(func.avg(DailySales.asp), Decimal("0")).label("avg_asp"),
-    )
+    ).filter(DailySales.portal_id.in_(active_portal_ids))
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
     if end_date:
