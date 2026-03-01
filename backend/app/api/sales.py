@@ -21,11 +21,38 @@ from ..schemas.sales import (
 router = APIRouter()
 
 
+# Portal aliases: scraper-only portals whose data should be included under
+# their canonical active portal.  If data accidentally lands under an aliased
+# portal_id, these mappings ensure it still appears in dashboard queries.
+_PORTAL_ALIASES: dict[str, str] = {
+    "amazon_pi": "amazon",
+}
+
+
+def _included_portal_ids(db) -> list[int]:
+    """Return portal IDs whose data the dashboard should show.
+
+    Includes all active portals plus any aliased inactive portals whose
+    canonical target is active (e.g. amazon_pi → amazon).
+    """
+    portals = db.query(Portal.id, Portal.name, Portal.is_active).all()
+    portal_by_name = {p.name: p for p in portals}
+    ids = {p.id for p in portals if p.is_active}
+    for alias, canonical in _PORTAL_ALIASES.items():
+        target = portal_by_name.get(canonical)
+        source = portal_by_name.get(alias)
+        if target and target.is_active and source:
+            ids.add(source.id)
+    return list(ids)
+
+
 def _base_query(db, start_date, end_date, portal_id, product_id=None):
     # Exclude data rows belonging to inactive portals (e.g. EasyEcom — an aggregator
     # whose data duplicates the individual portal rows already in the DB).
-    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
-    q = db.query(DailySales).filter(DailySales.portal_id.in_(active_portal_ids))
+    # Also include aliased portals (e.g. amazon_pi) whose data belongs to an
+    # active canonical portal.
+    included = _included_portal_ids(db)
+    q = db.query(DailySales).filter(DailySales.portal_id.in_(included))
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
     if end_date:
@@ -101,6 +128,51 @@ def sales_by_portal(
         .order_by(text("total_revenue DESC NULLS LAST"))
         .all()
     )
+    # Merge aliased portal revenue into canonical portal (e.g. amazon_pi → Amazon)
+    alias_target_ids: dict[int, int] = {}
+    portals_by_name = {p.name: p for p in db.query(Portal).all()}
+    for alias, canonical in _PORTAL_ALIASES.items():
+        src = portals_by_name.get(alias)
+        tgt = portals_by_name.get(canonical)
+        if src and tgt:
+            alias_target_ids[src.id] = tgt.id
+
+    if alias_target_ids:
+        # Fetch aliased portal revenue separately and merge into canonical row
+        alias_ids = list(alias_target_ids.keys())
+        alias_q = (
+            db.query(
+                DailySales.portal_id,
+                func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
+                func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
+            )
+            .filter(DailySales.portal_id.in_(alias_ids))
+        )
+        if start_date:
+            alias_q = alias_q.filter(DailySales.sale_date >= start_date)
+        if end_date:
+            alias_q = alias_q.filter(DailySales.sale_date <= end_date)
+        alias_rows = alias_q.group_by(DailySales.portal_id).all()
+
+        extra: dict[int, dict] = {}
+        for ar in alias_rows:
+            target_id = alias_target_ids.get(ar.portal_id)
+            if target_id:
+                if target_id not in extra:
+                    extra[target_id] = {"revenue": 0.0, "quantity": 0.0}
+                extra[target_id]["revenue"] += float(ar.total_revenue)
+                extra[target_id]["quantity"] += float(ar.total_quantity)
+
+        return [
+            SalesByDimension(
+                dimension_id=r.dimension_id,
+                dimension_name=r.dimension_name,
+                total_revenue=float(r.total_revenue) + extra.get(r.dimension_id, {}).get("revenue", 0.0),
+                total_quantity=float(r.total_quantity) + extra.get(r.dimension_id, {}).get("quantity", 0.0),
+            )
+            for r in rows
+        ]
+
     return [
         SalesByDimension(
             dimension_id=r.dimension_id,
@@ -131,7 +203,7 @@ def sales_by_product(
     limit: int = Query(50, le=200),
     db: Session = Depends(get_db),
 ):
-    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
+    included = _included_portal_ids(db)
     q = (
         db.query(
             Product.id.label("dimension_id"),
@@ -141,7 +213,7 @@ def sales_by_product(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         )
         .join(DailySales, DailySales.product_id == Product.id)
-        .filter(DailySales.portal_id.in_(active_portal_ids))
+        .filter(DailySales.portal_id.in_(included))
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
@@ -179,13 +251,13 @@ def sales_trend(
         end_date = _dt.date.today()
         start_date = end_date - _dt.timedelta(days=90)
 
-    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
+    included = _included_portal_ids(db)
     q = db.query(
         DailySales.sale_date.label("dt"),
         func.coalesce(func.sum(DailySales.revenue), Decimal("0")).label("total_revenue"),
         func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
         func.coalesce(func.avg(DailySales.asp), Decimal("0")).label("avg_asp"),
-    ).filter(DailySales.portal_id.in_(active_portal_ids))
+    ).filter(DailySales.portal_id.in_(included))
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
     if end_date:
@@ -212,7 +284,7 @@ def sales_by_category(
     portal_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
-    active_portal_ids = db.query(Portal.id).filter(Portal.is_active == True).subquery()
+    included = _included_portal_ids(db)
     q = (
         db.query(
             ProductCategory.l2_name.label("category"),
@@ -222,7 +294,7 @@ def sales_by_category(
         )
         .join(Product, DailySales.product_id == Product.id)
         .join(ProductCategory, Product.category_id == ProductCategory.id)
-        .filter(DailySales.portal_id.in_(active_portal_ids))
+        .filter(DailySales.portal_id.in_(included))
         .filter(ProductCategory.l2_name.isnot(None))
         .filter(func.lower(ProductCategory.l2_name) != "select a category")
     )
@@ -328,10 +400,19 @@ def portal_daily_sales(
     if not start_date:
         start_date = today.replace(day=1)
 
-    # 1. Resolve portal by name slug
+    # 1. Resolve portal by name slug (+ any aliases that map here)
     portal_obj = db.query(Portal).filter(func.lower(Portal.name) == portal.lower()).first()
     if not portal_obj:
         return PortalDailyResponse(portal_name=portal, dates=[], rows=[])
+
+    # Collect portal IDs that should be included (canonical + aliases)
+    portal_ids_for_query = [portal_obj.id]
+    all_portals = {p.name: p for p in db.query(Portal).all()}
+    for alias, canonical in _PORTAL_ALIASES.items():
+        if canonical == portal_obj.name:
+            alias_portal = all_portals.get(alias)
+            if alias_portal:
+                portal_ids_for_query.append(alias_portal.id)
 
     # 2. Build ordered dates list for the range
     dates: List[str] = []
@@ -363,7 +444,7 @@ def portal_daily_sales(
     if not product_ids:
         return PortalDailyResponse(portal_name=portal_obj.display_name, dates=dates, rows=[])
 
-    # 4. Daily sales in the date range
+    # 4. Daily sales in the date range (include aliased portal IDs)
     sales_rows = (
         db.query(
             DailySales.product_id,
@@ -373,7 +454,7 @@ def portal_daily_sales(
             DailySales.revenue,
         )
         .filter(
-            DailySales.portal_id == portal_obj.id,
+            DailySales.portal_id.in_(portal_ids_for_query),
             DailySales.product_id.in_(product_ids),
             DailySales.sale_date >= start_date,
             DailySales.sale_date <= end_date,
