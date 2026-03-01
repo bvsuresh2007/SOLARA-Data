@@ -255,11 +255,18 @@ def populate_portal_data(
     total_records = 0
     error_msg = None
 
+    skipped_files = []
     try:
         for file in files:
             logger.info("[%s] Parsing %s", portal_name, file.name)
 
-            sales_rows = parser.parse_sales(file)
+            try:
+                sales_rows = parser.parse_sales(file)
+            except Exception as file_exc:
+                logger.warning("[%s] Skipping %s — parse error: %s", portal_name, file.name, file_exc)
+                skipped_files.append(str(file))
+                continue
+
             # EasyEcom rows already carry the correct portal slug from MP Name
             # splitting; product is resolved via sku_code (no portal mapping needed).
             if portal_name == "easyecom":
@@ -274,9 +281,13 @@ def populate_portal_data(
                 transformed_inv = transformer.transform_inventory_rows(inv_rows)
                 total_records += _upsert_inventory(db, transformed_inv)
 
-        _log_scrape(db, portal_name, report_date, "success", total_records)
-        logger.info("[%s] DB populate success — %d records", portal_name, total_records)
-        return {"status": "success", "records_imported": total_records, "files": [str(f) for f in files]}
+        status = "success" if not skipped_files else "partial"
+        _log_scrape(db, portal_name, report_date, status, total_records,
+                    f"Skipped {len(skipped_files)} file(s)" if skipped_files else None)
+        logger.info("[%s] DB populate %s — %d records (%d files skipped)",
+                    portal_name, status, total_records, len(skipped_files))
+        return {"status": status, "records_imported": total_records,
+                "files": [str(f) for f in files], "skipped": skipped_files}
 
     except Exception as exc:
         error_msg = str(exc)
