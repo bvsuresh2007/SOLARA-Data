@@ -89,3 +89,6 @@ htmlcov/
 database/alembic/versions/__pycache__/
 .claude/settings.local.json
 frontend/next-env.d.ts
+gitignore.txt
+frontend/package-lock.json
+frontend/package-lock.json

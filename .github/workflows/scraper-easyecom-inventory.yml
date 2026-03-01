@@ -5,7 +5,7 @@ on:
     - cron: "30 4 * * *"  # 10:00 AM IST daily (UTC+5:30)
   workflow_dispatch:
     inputs:
-      snapshot_date:
+      report_date:
         description: "Snapshot date (YYYY-MM-DD). Defaults to today."
         required: false
         default: ""
@@ -42,7 +42,7 @@ jobs:
         env:
           PROFILE_STORAGE_DRIVE_FOLDER_ID: ${{ secrets.PROFILE_STORAGE_DRIVE_FOLDER_ID }}
           RAW_DATA_PATH: ./data/raw
-          INPUT_SNAPSHOT_DATE: ${{ github.event.inputs.snapshot_date }}
+          INPUT_SNAPSHOT_DATE: ${{ github.event.inputs.report_date }}
         run: |
           python - <<'EOF'
           import sys, os
@@ -57,7 +57,7 @@ jobs:
               snapshot_date = date.today()
 
           from scrapers.easyecom_inventory_scraper import EasyecomInventoryScraper
-          result = EasyecomInventoryScraper(headless=True).run(snapshot_date=snapshot_date)
+          result = EasyecomInventoryScraper(headless=True).run(report_date=snapshot_date)
           print("Result:", result)
           if result.get("status") == "failed":
               sys.exit(1)
@@ -72,7 +72,7 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          INPUT_SNAPSHOT_DATE: ${{ github.event.inputs.snapshot_date }}
+          INPUT_SNAPSHOT_DATE: ${{ github.event.inputs.report_date }}
         run: |
           python - <<'EOF'
           import sys, os

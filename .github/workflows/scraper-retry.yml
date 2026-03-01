@@ -54,6 +54,7 @@ jobs:
           # Workflow file | Portal display name
           WORKFLOWS=(
             "scraper-easyecom.yml|EasyEcom"
+            "scraper-easyecom-inventory.yml|EasyEcom Inventory"
             "scraper-zepto.yml|Zepto"
             "scraper-amazon-pi.yml|Amazon PI"
             "scraper-swiggy.yml|Swiggy"
