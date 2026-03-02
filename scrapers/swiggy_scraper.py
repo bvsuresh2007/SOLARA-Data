@@ -454,13 +454,23 @@ class SwiggyScraper:
         )
 
         # --- Click the "Select Date" dropdown inside the modal ---
+        # After the start date is set, its text changes from "Select Date" to the actual
+        # date, so for the end date (dropdown_index=1) there may only be 1 remaining
+        # "Select Date" element — which is the end date at index 0.
         dropdown_opened = False
         try:
             locs = self._page.get_by_text("Select Date").all()
             visible_locs = [loc for loc in locs if loc.is_visible()]
             self._log.info("[Swiggy] Found %d visible 'Select Date' elements", len(visible_locs))
-            if len(visible_locs) > dropdown_index:
-                visible_locs[dropdown_index].click()
+            actual_idx = dropdown_index
+            if actual_idx >= len(visible_locs) and len(visible_locs) > 0:
+                actual_idx = len(visible_locs) - 1  # click the last remaining one
+                self._log.info(
+                    "[Swiggy] Adjusted dropdown index from %d to %d (start date already set)",
+                    dropdown_index, actual_idx,
+                )
+            if len(visible_locs) > actual_idx:
+                visible_locs[actual_idx].click()
                 dropdown_opened = True
                 self._log.info("[Swiggy] Clicked %s date dropdown via Playwright", label)
         except Exception as exc:
@@ -483,7 +493,9 @@ class SwiggyScraper:
                     const unique = candidates.filter((el, _i, arr) =>
                         !arr.some(other => other !== el && el.contains(other))
                     );
-                    if (unique.length > idx) { unique[idx].click(); return true; }
+                    // After start date is set, only 1 "Select Date" remains for end date
+                    const actualIdx = idx < unique.length ? idx : unique.length - 1;
+                    if (unique.length > 0 && actualIdx >= 0) { unique[actualIdx].click(); return true; }
                     return false;
                 }
             """, dropdown_index)
