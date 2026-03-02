@@ -41,8 +41,8 @@ except ImportError:
     except Exception:
         _upload_to_drive = None
 
-# Force UTF-8 output on Windows
-if hasattr(sys.stdout, "buffer"):
+# Force UTF-8 output on Windows (skip on Linux CI to avoid "I/O on closed file" errors)
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # --- URLs ---

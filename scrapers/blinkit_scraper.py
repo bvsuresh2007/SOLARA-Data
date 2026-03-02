@@ -56,7 +56,7 @@ except ImportError:
     except Exception:
         _fetch_otp = None
 
-if hasattr(sys.stdout, "buffer"):
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # --- Paths ---

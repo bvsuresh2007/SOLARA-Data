@@ -42,8 +42,8 @@ except ImportError:
     except Exception:
         _upload_to_drive = None
 
-# Force UTF-8 output to avoid Windows cp1252 encoding errors
-if hasattr(sys.stdout, "buffer"):
+# Force UTF-8 output to avoid Windows cp1252 encoding errors (skip on Linux CI)
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # --- Paths ---
