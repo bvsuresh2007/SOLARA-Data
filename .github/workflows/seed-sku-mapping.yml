@@ -11,6 +11,7 @@ on:
 jobs:
   seed:
     runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.modified, 'data/Sku_mapping.xlsx'))
     steps:
       - uses: actions/checkout@v4
 
@@ -36,8 +37,51 @@ jobs:
             exit 1
           fi
 
+      - name: Check DB connection
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
+        run: |
+          python - <<'EOF'
+          import os, sys, socket
+          from urllib.parse import urlparse
+
+          url = os.environ.get("DATABASE_URL", "")
+          if not url:
+              print("DATABASE_URL not set — skipping pre-check")
+              sys.exit(0)
+
+          host = urlparse(url).hostname or ""
+          if ":" in host:
+              print(f"ERROR: DATABASE_URL contains IPv6 address literal ({host}).", flush=True)
+              sys.exit(1)
+
+          if host and not host[0].isdigit():
+              try:
+                  addrs = socket.getaddrinfo(host, None, socket.AF_INET)
+                  if addrs:
+                      ipv4 = addrs[0][4][0]
+                      os.environ["PGHOSTADDR"] = ipv4
+                      github_env = os.environ.get("GITHUB_ENV", "")
+                      if github_env:
+                          with open(github_env, "a") as f:
+                              f.write(f"PGHOSTADDR={ipv4}\n")
+                      print(f"[DB] Resolved {host} -> {ipv4} (IPv4); PGHOSTADDR set", flush=True)
+              except Exception as e:
+                  print(f"[DB] IPv4 resolution failed: {e}", flush=True)
+
+          try:
+              import psycopg2
+              conn = psycopg2.connect(url, connect_timeout=10)
+              conn.close()
+              print("DB connection: OK", flush=True)
+          except Exception as e:
+              print(f"DB connection FAILED: {e}", flush=True)
+              sys.exit(1)
+          EOF
+
       - name: Seed SKU mappings from master file
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_SESSIONMODE }}
           POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
           POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
