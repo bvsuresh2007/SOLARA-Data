@@ -180,13 +180,36 @@ class EasyecomBaseScraper:
     # Login: fresh Google OAuth via persistent profile
     # ------------------------------------------------------------------
 
-    def login(self) -> None:
+    def login(self, _max_attempts: int = 3) -> None:
         """
         Always do a fresh Google OAuth. Google auto-approves using the
         Google session stored in the Chrome profile. This re-establishes
         the PHP session that EasyEcom requires.
+
+        Retries up to _max_attempts times because the first attempt
+        sometimes fails (Google OAuth redirects briefly to the dashboard,
+        then EasyEcom bounces back to login before the PHP session is
+        established). A retry with the refreshed Google cookies succeeds.
         """
-        self._log.info("[EasyEcom] Navigating to login page")
+        last_error = None
+        for attempt in range(1, _max_attempts + 1):
+            try:
+                self._try_login(attempt)
+                return  # success
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt < _max_attempts:
+                    self._log.warning(
+                        "[EasyEcom] Login attempt %d/%d failed: %s — retrying in 5s",
+                        attempt, _max_attempts, exc,
+                    )
+                    self._page.wait_for_timeout(5000)
+                else:
+                    raise
+
+    def _try_login(self, attempt: int = 1) -> None:
+        """Single login attempt — navigate, click Google, wait for redirect."""
+        self._log.info("[EasyEcom] Navigating to login page (attempt %d)", attempt)
         self._page.goto(LOGIN_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(2000)
 
@@ -222,7 +245,7 @@ class EasyecomBaseScraper:
                 self._shot("login_timeout")
                 raise RuntimeError(f"EasyEcom login timeout. URL: {self._page.url}")
 
-        self._page.wait_for_timeout(2000)
+        self._page.wait_for_timeout(3000)
 
         # Post-login verification: the page may briefly redirect to the dashboard
         # then bounce back to login if the PHP session wasn't established.

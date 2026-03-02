@@ -82,7 +82,7 @@ SWIGGY_OTP_SENDER = "no-reply@swiggy.in"
 # --- Timing ---
 REPORT_POLL_INTERVAL_S = 30     # seconds between polls for report readiness (reload every 30s)
 REPORT_MAX_POLLS       = 20     # 20 × 30s = 10 minutes max wait
-OTP_WAIT_S             = 120    # max seconds to wait for OTP email
+OTP_WAIT_S             = 180    # max seconds to wait for OTP email (120s was too tight)
 
 
 class SwiggyScraper:
