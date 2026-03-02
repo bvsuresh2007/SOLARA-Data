@@ -103,6 +103,7 @@ jobs:
             --set-env-vars "\
           NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }},\
           AUTH_SECRET=${{ secrets.AUTH_SECRET }},\
+          AUTH_URL=https://solara-frontend-891651347357.asia-south1.run.app,\
           AUTH_TRUST_HOST=true,\
           GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},\
           GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
