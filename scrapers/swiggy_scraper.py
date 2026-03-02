@@ -429,6 +429,166 @@ class SwiggyScraper:
     # Set date range
     # ------------------------------------------------------------------
 
+    def _pick_date_in_modal(self, target_date: date, dropdown_index: int) -> None:
+        """
+        Click the nth 'Select Date' dropdown inside the Custom Date Range modal
+        and navigate the resulting calendar to pick the target day.
+
+        dropdown_index: 0 = Start date, 1 = End date.
+        """
+        label = "Start" if dropdown_index == 0 else "End"
+        day_str = str(target_date.day)  # no leading zero
+        target_my = target_date.strftime("%B %Y")  # e.g. "February 2026"
+
+        self._log.info(
+            "[Swiggy] Picking %s date: %s (day=%s, month=%s)",
+            label, target_date, day_str, target_my,
+        )
+
+        # --- Click the dropdown inside the modal ---
+        # The modal has "Start date" / "End date" labels followed by "Select Date ∨" dropdowns.
+        # We scope to the modal to avoid clicking random page elements.
+        clicked = self._page.evaluate("""
+            (idx) => {
+                // Find the modal overlay — try common patterns
+                const modal = document.querySelector(
+                    '[role="dialog"], [class*="modal" i], [class*="Modal"], [class*="overlay" i]'
+                );
+                const root = modal || document;
+
+                // Find all "Select Date" elements inside the modal (leaf-level clickable ones)
+                const candidates = Array.from(root.querySelectorAll('*')).filter(el => {
+                    const txt = (el.innerText || '').trim();
+                    const rect = el.getBoundingClientRect();
+                    return (txt === 'Select Date' || txt.startsWith('Select Date'))
+                        && rect.width > 50 && rect.height > 10 && rect.height < 80;
+                });
+
+                // De-duplicate: if a parent and child both match, keep the deepest one
+                const unique = candidates.filter((el, _i, arr) =>
+                    !arr.some(other => other !== el && el.contains(other))
+                );
+
+                if (unique.length > idx) {
+                    unique[idx].click();
+                    return {clicked: true, total: unique.length};
+                }
+
+                return {clicked: false, total: unique.length};
+            }
+        """, dropdown_index)
+        self._log.info("[Swiggy] %s date dropdown click result: %s", label, clicked)
+
+        if not clicked or not clicked.get("clicked"):
+            self._log.warning("[Swiggy] Could not click %s date dropdown — trying Playwright locator", label)
+            # Playwright fallback: find all visible "Select Date" text elements
+            try:
+                locs = self._page.get_by_text("Select Date").all()
+                visible_locs = [loc for loc in locs if loc.is_visible()]
+                if len(visible_locs) > dropdown_index:
+                    visible_locs[dropdown_index].click()
+                    self._log.info("[Swiggy] Clicked %s date via Playwright locator", label)
+                else:
+                    self._log.warning("[Swiggy] Only %d visible 'Select Date' elements", len(visible_locs))
+                    return
+            except Exception as exc:
+                self._log.warning("[Swiggy] Playwright locator fallback failed: %s", exc)
+                return
+
+        self._page.wait_for_timeout(1000)
+        self._shot(f"calendar_opened_{label.lower()}")
+
+        # --- Navigate calendar to the target month ---
+        for nav_attempt in range(13):  # max 12 months back
+            current_my = self._page.evaluate("""
+                () => {
+                    // Calendar month/year headers (e.g. "March 2026", "February 2026")
+                    const els = Array.from(document.querySelectorAll('*')).filter(el => {
+                        const txt = (el.innerText || '').trim();
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 30 && rect.height > 5 && rect.height < 60
+                            && /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}$/i.test(txt);
+                    });
+                    return els.length > 0 ? els[els.length - 1].innerText.trim() : null;
+                }
+            """)
+            self._log.info("[Swiggy] Calendar shows: %s (target: %s)", current_my, target_my)
+
+            if current_my and current_my.lower() == target_my.lower():
+                break  # correct month visible
+
+            if nav_attempt >= 12:
+                self._log.warning("[Swiggy] Could not navigate to %s after 12 attempts", target_my)
+                break
+
+            # Click previous-month arrow
+            prev_ok = self._page.evaluate("""
+                () => {
+                    // Look for prev-month navigation: buttons with <, ‹, ←, or aria-label*=prev
+                    const btns = Array.from(document.querySelectorAll(
+                        'button, [role="button"]'
+                    )).filter(el => {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 5 || rect.width > 60 || rect.height < 5) return false;
+                        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                        const txt  = (el.innerText || '').trim();
+                        const cls  = (el.className || '').toString().toLowerCase();
+                        return aria.includes('prev') || aria.includes('back')
+                            || txt === '<' || txt === '‹' || txt === '←' || txt === '\\u2039'
+                            || cls.includes('prev') || cls.includes('left');
+                    });
+                    if (btns.length > 0) { btns[0].click(); return true; }
+
+                    // Fallback: find SVG-based arrow buttons positioned on the left
+                    const svgBtns = Array.from(document.querySelectorAll('svg')).map(s => s.closest('button, [role="button"]')).filter(Boolean);
+                    const leftBtns = svgBtns.filter(el => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.x < 500 && rect.width < 60;
+                    });
+                    if (leftBtns.length > 0) { leftBtns[0].click(); return true; }
+                    return false;
+                }
+            """)
+            if not prev_ok:
+                self._log.warning("[Swiggy] Could not find prev-month button")
+                break
+            self._page.wait_for_timeout(600)
+
+        # --- Click the target day number ---
+        day_clicked = self._page.evaluate("""
+            (day) => {
+                // Find visible day-number cells inside a calendar-like container
+                const cells = Array.from(document.querySelectorAll(
+                    'button, td, [role="gridcell"], [role="option"]'
+                )).filter(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 10 || rect.width > 60 || rect.height < 10 || rect.height > 60) return false;
+                    const txt = (el.innerText || '').trim();
+                    if (txt !== day) return false;
+                    // Exclude disabled / greyed-out cells
+                    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                    return !disabled;
+                });
+                if (cells.length > 0) {
+                    cells[0].click();
+                    return {clicked: true, total: cells.length};
+                }
+                // Broader fallback: any element with just the day number
+                const broad = Array.from(document.querySelectorAll('div, span')).filter(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 10 || rect.width > 55 || rect.height < 10 || rect.height > 55) return false;
+                    return (el.innerText || '').trim() === day && el.children.length === 0;
+                });
+                if (broad.length > 0) {
+                    broad[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    return {clicked: true, total: broad.length, fallback: true};
+                }
+                return {clicked: false, total: 0};
+            }
+        """, day_str)
+        self._log.info("[Swiggy] %s date day-click result: %s", label, day_clicked)
+        self._page.wait_for_timeout(600)
+
     def _set_date_range(self, start_date: date, end_date: date) -> None:
         """
         Set the custom date range on the Swiggy Instamart sales page.
@@ -565,137 +725,15 @@ class SwiggyScraper:
 
         self._shot("after_custom_range_click")
 
-        # --- Step 4: Fill date inputs ---
-        filled = self._page.evaluate("""
-            ([iso_start, iso_end, ddmm_start, ddmm_end]) => {
-                const inputs = Array.from(document.querySelectorAll('input[type="date"], input[type="text"]'))
-                    .filter(el => {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width < 10) return false;
-                        const ph = (el.placeholder || '').toLowerCase();
-                        const nm = (el.name   || '').toLowerCase();
-                        const id = (el.id     || '').toLowerCase();
-                        return ph.includes('date') || ph.includes('from') || ph.includes('start') || ph.includes('to') ||
-                               nm.includes('date') || nm.includes('start') || nm.includes('end') ||
-                               id.includes('date') || id.includes('from') || id.includes('to') ||
-                               el.type === 'date';
-                    });
+        # --- Step 4: Pick start date via the modal's dropdown date picker ---
+        self._pick_date_in_modal(start_date, dropdown_index=0)
+        self._page.wait_for_timeout(500)
+        self._shot("after_start_date_pick")
 
-                function fill(el, val) {
-                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    setter.call(el, val);
-                    el.dispatchEvent(new Event('input',  {bubbles: true}));
-                    el.dispatchEvent(new Event('change', {bubbles: true}));
-                }
-
-                if (inputs.length >= 2) {
-                    fill(inputs[0], iso_start);
-                    fill(inputs[1], iso_end);
-                    return 'filled 2: ' + (inputs[0].id || inputs[0].name || inputs[0].placeholder);
-                } else if (inputs.length === 1) {
-                    fill(inputs[0], iso_start + ' - ' + iso_end);
-                    return 'filled combined: ' + (inputs[0].id || inputs[0].placeholder);
-                }
-                return null;
-            }
-        """, [start_str, end_str, start_ddmm, end_ddmm])
-
-        if filled:
-            self._log.info("[Swiggy] Filled date inputs: %s", filled)
-        else:
-            # Try DD/MM/YYYY format inputs (some Swiggy date pickers use this)
-            filled2 = self._page.evaluate("""
-                ([ddmm_start, ddmm_end]) => {
-                    const inputs = Array.from(document.querySelectorAll('input'))
-                        .filter(el => el.getBoundingClientRect().width > 10 && !el.disabled);
-                    if (inputs.length >= 2) {
-                        function fill(el, val) {
-                            const setter = Object.getOwnPropertyDescriptor(
-                                window.HTMLInputElement.prototype, 'value').set;
-                            setter.call(el, val);
-                            el.dispatchEvent(new Event('input',  {bubbles: true}));
-                            el.dispatchEvent(new Event('change', {bubbles: true}));
-                        }
-                        fill(inputs[0], ddmm_start);
-                        fill(inputs[1], ddmm_end);
-                        return 'filled visible inputs with DD/MM/YYYY';
-                    }
-                    return null;
-                }
-            """, [start_ddmm, end_ddmm])
-            if filled2:
-                self._log.info("[Swiggy] %s", filled2)
-            else:
-                self._log.warning(
-                    "[Swiggy] Could not fill date inputs. "
-                    "Run with headless=False to inspect the date picker UI."
-                )
-
-        self._page.wait_for_timeout(800)
-        self._shot("after_date_fill")
-
-        # --- Step 5: Click calendar day cells (Swiggy shows a calendar picker, not plain inputs) ---
-        # The "Custom Date Range" option opens a floating calendar where you click days.
-        # Try clicking: start day, then end day in the calendar cells visible on screen.
-        start_day = str(int(start_date.strftime("%d")))  # no leading zero: "22"
-        end_day   = str(int(end_date.strftime("%d")))
-        start_month_year = start_date.strftime("%B %Y")  # "February 2026"
-        end_month_year   = end_date.strftime("%B %Y")
-
-        cells_clicked = self._page.evaluate("""
-            ([startDay, endDay, startMY, endMY]) => {
-                // Swiggy uses a floating calendar portal. Find all calendar cell elements
-                // that contain just a day number (1–31).
-                const portals = Array.from(document.querySelectorAll('[id^=":r"]'));
-                // Search in the whole document if no portals found
-                const searchRoot = portals.length > 0 ? portals[portals.length - 1] : document;
-
-                // Find all visible elements whose innerText is exactly a day number
-                function findDayCells(root) {
-                    return Array.from(root.querySelectorAll('*')).filter(el => {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width < 5 || rect.width > 60) return false;
-                        const txt = (el.innerText || '').trim();
-                        return /^\\d{1,2}$/.test(txt) && parseInt(txt) >= 1 && parseInt(txt) <= 31;
-                    });
-                }
-
-                const cells = findDayCells(document);
-                // Filter to cells that look like calendar day buttons (not year/header)
-                const dayBtns = cells.filter(el => {
-                    const cls = (el.className || '').toString();
-                    const tag = el.tagName;
-                    // Must be interactive or in a date-related container
-                    return (tag === 'BUTTON' || tag === 'TD' || tag === 'DIV' || tag === 'SPAN') &&
-                           el.getBoundingClientRect().height < 50;
-                });
-
-                let startClicked = false;
-                let endClicked = false;
-
-                // Click start day
-                for (const el of dayBtns) {
-                    if ((el.innerText || '').trim() === startDay) {
-                        el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        startClicked = true;
-                        break;
-                    }
-                }
-
-                // Click end day (after start — search again in case calendar updated)
-                for (const el of dayBtns) {
-                    if ((el.innerText || '').trim() === endDay && el !== dayBtns[0]) {
-                        el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        endClicked = true;
-                        break;
-                    }
-                }
-
-                return {startClicked, endClicked, totalCells: dayBtns.length};
-            }
-        """, [start_day, end_day, start_month_year, end_month_year])
-        self._log.info("[Swiggy] Calendar cell click result: %s", cells_clicked)
-        self._page.wait_for_timeout(800)
+        # --- Step 5: Pick end date via the modal's dropdown date picker ---
+        self._pick_date_in_modal(end_date, dropdown_index=1)
+        self._page.wait_for_timeout(500)
+        self._shot("after_end_date_pick")
 
         # --- Step 6: Click "Select Range" / "Apply" to confirm and close the calendar ---
         for label in ["Select Range", "Apply", "Done", "Confirm", "OK"]:
