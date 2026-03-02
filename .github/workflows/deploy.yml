@@ -100,7 +100,12 @@ jobs:
             --cpu 1 \
             --min-instances 0 \
             --max-instances 2 \
-            --set-env-vars NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }} \
+            --set-env-vars "\
+          NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }},\
+          AUTH_SECRET=${{ secrets.AUTH_SECRET }},\
+          AUTH_TRUST_HOST=true,\
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }},\
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             --quiet
 
       - name: Print Frontend URL
