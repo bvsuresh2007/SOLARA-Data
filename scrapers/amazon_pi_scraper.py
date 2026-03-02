@@ -132,8 +132,12 @@ class AmazonPIScraper:
             return
 
         self._log.info("[AmazonPI] Waiting for login page")
+        # Amazon uses #ap_email on the classic form, or a generic input on the
+        # new "Sign in or create account" combined flow.
         try:
-            email_input = self._page.locator('#ap_email')
+            email_input = self._page.locator(
+                '#ap_email, input[name="loginID"], input[type="email"]'
+            ).first
             email_input.wait_for(state="visible", timeout=15_000)
         except Exception:
             if self._page.url.startswith("https://pi.amazon.in"):
@@ -143,13 +147,18 @@ class AmazonPIScraper:
 
         self._log.info("[AmazonPI] Entering email")
         email_input.fill(self.email)
-        self._page.locator('input[type="submit"]').click()
+        # Click Continue/Submit — Amazon may show "Continue" or "Sign-In" button
+        self._page.locator(
+            'input[type="submit"], input#continue, span#continue'
+        ).first.click()
 
         self._log.info("[AmazonPI] Entering password")
-        pwd = self._page.locator('#ap_password')
+        pwd = self._page.locator('#ap_password, input[name="password"]').first
         pwd.wait_for(state="visible", timeout=15_000)
         pwd.fill(self.password)
-        self._page.locator('#signInSubmit').click()
+        self._page.locator(
+            '#signInSubmit, input[type="submit"]'
+        ).first.click()
 
         # TOTP
         try:
