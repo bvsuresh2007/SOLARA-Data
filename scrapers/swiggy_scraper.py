@@ -589,6 +589,44 @@ class SwiggyScraper:
         self._log.info("[Swiggy] %s date day-click result: %s", label, day_clicked)
         self._page.wait_for_timeout(600)
 
+        # --- Click "Done" to confirm the date selection in the calendar ---
+        # The Swiggy calendar widget has "Clear" and "Done" buttons at the bottom.
+        # After clicking a day, "Done" must be clicked to lock in the selection.
+        done_clicked = False
+        for confirm_label in ["Done", "OK", "Apply", "Confirm"]:
+            try:
+                btn = self._page.get_by_text(confirm_label, exact=True).first
+                if btn.is_visible(timeout=1500):
+                    btn.click()
+                    self._page.wait_for_timeout(600)
+                    self._log.info(
+                        "[Swiggy] Clicked '%s' to confirm %s date", confirm_label, label
+                    )
+                    done_clicked = True
+                    break
+            except Exception:
+                pass
+
+        if not done_clicked:
+            # JS fallback — try to find and click a Done/OK button inside the calendar popover
+            self._page.evaluate("""
+                () => {
+                    const labels = ['Done', 'OK', 'Apply', 'Confirm'];
+                    const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                    for (const btn of btns) {
+                        const txt = (btn.innerText || '').trim();
+                        const rect = btn.getBoundingClientRect();
+                        if (labels.includes(txt) && rect.width > 20 && rect.height > 10) {
+                            btn.click();
+                            return txt;
+                        }
+                    }
+                    return null;
+                }
+            """)
+            self._page.wait_for_timeout(600)
+            self._log.info("[Swiggy] JS fallback for %s date Done button", label)
+
     def _set_date_range(self, start_date: date, end_date: date) -> None:
         """
         Set the custom date range on the Swiggy Instamart sales page.
