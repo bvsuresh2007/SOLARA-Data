@@ -46,9 +46,12 @@ token.json
 # ── Data files ───────────────────────────────────────────────────────────────
 data/raw/
 data/processed/
+data/source/
 *.csv
 *.xlsx
 *.xls
+# Exception: keep the master SKU mapping file tracked
+!data/Sku_mapping.xlsx
 
 # ── Scraper browser profiles (auth credentials — never commit) ───────────────
 scrapers/sessions/*_profile/

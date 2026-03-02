@@ -1,0 +1,47 @@
+name: Seed SKU Mapping
+
+on:
+  workflow_dispatch:
+  # Also run whenever the master mapping file changes
+  push:
+    paths:
+      - 'data/Sku_mapping.xlsx'
+    branches: [main]
+
+jobs:
+  seed:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            sqlalchemy psycopg2-binary python-dotenv \
+            pandas openpyxl
+
+      - name: Verify Sku_mapping.xlsx exists
+        run: |
+          if [ -f data/Sku_mapping.xlsx ]; then
+            echo "Found: data/Sku_mapping.xlsx"
+          elif [ -f Sku_mapping.xlsx ]; then
+            echo "Found: Sku_mapping.xlsx (repo root)"
+          else
+            echo "ERROR: Sku_mapping.xlsx not found!"
+            exit 1
+          fi
+
+      - name: Seed SKU mappings from master file
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DB_SSL: "true"
+        run: python scripts/seed_sku_mapping.py

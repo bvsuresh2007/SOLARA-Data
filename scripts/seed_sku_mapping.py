@@ -137,15 +137,26 @@ def seed_sku_mapping(file_path: str) -> None:
     logger.info(f"  Portal exclusions  : {total_exclusions}")
 
 
+def _resolve_default_path() -> str:
+    """Find Sku_mapping.xlsx — check data/ first, then repo root."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.path.join(root, "data", "Sku_mapping.xlsx"),
+        os.path.join(root, "Sku_mapping.xlsx"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    # Fallback to data/ even if missing — let the caller report the error
+    return candidates[0]
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed portal mappings from Sku_mapping.xlsx")
     parser.add_argument(
         "--file",
-        default=os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "Sku_mapping.xlsx",
-        ),
-        help="Path to Sku_mapping.xlsx (default: data/Sku_mapping.xlsx)",
+        default=_resolve_default_path(),
+        help="Path to Sku_mapping.xlsx (default: data/Sku_mapping.xlsx or repo root)",
     )
     args = parser.parse_args()
     seed_sku_mapping(args.file)
