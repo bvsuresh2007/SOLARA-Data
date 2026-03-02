@@ -13,13 +13,10 @@ function LoginContent() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
       <div className="w-full max-w-sm space-y-8 text-center">
         {/* Logo / Brand */}
-        <div className="space-y-2">
+        <div>
           <h1 className="text-3xl font-bold tracking-tight text-zinc-50">
-            Solara<span className="text-orange-400">Dashboard</span>
+            SOLARA <span className="text-orange-400">Dashboard</span>
           </h1>
-          <p className="text-sm text-zinc-400">
-            Multi-portal sales &amp; inventory intelligence
-          </p>
         </div>
 
         {/* Error message */}
