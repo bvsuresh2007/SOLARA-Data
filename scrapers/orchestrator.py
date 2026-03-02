@@ -267,12 +267,26 @@ def populate_portal_data(
                 skipped_files.append(str(file))
                 continue
 
+            logger.info("[%s] Parsed %d rows from %s", portal_name, len(sales_rows), file.name)
+
             # EasyEcom rows already carry the correct portal slug from MP Name
             # splitting; product is resolved via sku_code (no portal mapping needed).
             if portal_name == "easyecom":
                 transformed_sales = transformer.transform_sales_rows_by_sku(sales_rows)
             else:
                 transformed_sales = transformer.transform_sales_rows(sales_rows)
+
+            logger.info("[%s] Transformed %d / %d rows", portal_name, len(transformed_sales), len(sales_rows))
+            if sales_rows and not transformed_sales:
+                # Show a sample of what's being dropped for diagnosis
+                sample = sales_rows[0]
+                logger.warning(
+                    "[%s] All rows dropped during transform — sample row: portal=%s, "
+                    "portal_product_id=%s, city=%s, sale_date=%s",
+                    portal_name, sample.get("portal"), sample.get("portal_product_id"),
+                    sample.get("city"), sample.get("sale_date"),
+                )
+
             total_records += _upsert_sales(db, transformed_sales)
             total_records += _upsert_daily_sales(db, transformed_sales)
 

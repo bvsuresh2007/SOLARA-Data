@@ -40,9 +40,10 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_date_ymd(val: Any) -> date | None:
-    """YYYY-MM-DD → date"""
+    """YYYY-MM-DD (with optional time component) → date"""
     try:
-        return datetime.strptime(str(val).strip(), "%Y-%m-%d").date()
+        # Truncate to first 10 chars to handle timestamps like "2026-03-01 00:00:00"
+        return datetime.strptime(str(val).strip()[:10], "%Y-%m-%d").date()
     except Exception:
         return None
 
