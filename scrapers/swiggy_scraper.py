@@ -95,7 +95,15 @@ class SwiggyScraper:
         self.raw_data_path = Path(raw_data_path or os.getenv("RAW_DATA_PATH", "./data/raw"))
         self.out_dir       = self.raw_data_path / self.portal_name
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self._log = __import__("logging").getLogger("scrapers.swiggy")
+        import logging as _logging
+        # Ensure logging output reaches CI logs even when run via inline script
+        if not _logging.root.handlers:
+            _logging.basicConfig(
+                level=_logging.INFO,
+                format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+            )
+        self._log = _logging.getLogger("scrapers.swiggy")
+        self._log.setLevel(_logging.INFO)
         self._email = os.environ.get("SWIGGY_EMAIL", "").split("#")[0].strip()
 
     # ------------------------------------------------------------------
@@ -445,54 +453,42 @@ class SwiggyScraper:
             label, target_date, day_str, target_my,
         )
 
-        # --- Click the dropdown inside the modal ---
-        # The modal has "Start date" / "End date" labels followed by "Select Date ∨" dropdowns.
-        # We scope to the modal to avoid clicking random page elements.
-        clicked = self._page.evaluate("""
-            (idx) => {
-                // Find the modal overlay — try common patterns
-                const modal = document.querySelector(
-                    '[role="dialog"], [class*="modal" i], [class*="Modal"], [class*="overlay" i]'
-                );
-                const root = modal || document;
+        # --- Click the "Select Date" dropdown inside the modal ---
+        dropdown_opened = False
+        try:
+            locs = self._page.get_by_text("Select Date").all()
+            visible_locs = [loc for loc in locs if loc.is_visible()]
+            self._log.info("[Swiggy] Found %d visible 'Select Date' elements", len(visible_locs))
+            if len(visible_locs) > dropdown_index:
+                visible_locs[dropdown_index].click()
+                dropdown_opened = True
+                self._log.info("[Swiggy] Clicked %s date dropdown via Playwright", label)
+        except Exception as exc:
+            self._log.warning("[Swiggy] Playwright Select Date click failed: %s", exc)
 
-                // Find all "Select Date" elements inside the modal (leaf-level clickable ones)
-                const candidates = Array.from(root.querySelectorAll('*')).filter(el => {
-                    const txt = (el.innerText || '').trim();
-                    const rect = el.getBoundingClientRect();
-                    return (txt === 'Select Date' || txt.startsWith('Select Date'))
-                        && rect.width > 50 && rect.height > 10 && rect.height < 80;
-                });
-
-                // De-duplicate: if a parent and child both match, keep the deepest one
-                const unique = candidates.filter((el, _i, arr) =>
-                    !arr.some(other => other !== el && el.contains(other))
-                );
-
-                if (unique.length > idx) {
-                    unique[idx].click();
-                    return {clicked: true, total: unique.length};
+        if not dropdown_opened:
+            # JS fallback
+            clicked = self._page.evaluate("""
+                (idx) => {
+                    const modal = document.querySelector(
+                        '[role="dialog"], [class*="modal" i], [class*="Modal"], [class*="overlay" i]'
+                    );
+                    const root = modal || document;
+                    const candidates = Array.from(root.querySelectorAll('*')).filter(el => {
+                        const txt = (el.innerText || '').trim();
+                        const rect = el.getBoundingClientRect();
+                        return (txt === 'Select Date' || txt.startsWith('Select Date'))
+                            && rect.width > 50 && rect.height > 10 && rect.height < 80;
+                    });
+                    const unique = candidates.filter((el, _i, arr) =>
+                        !arr.some(other => other !== el && el.contains(other))
+                    );
+                    if (unique.length > idx) { unique[idx].click(); return true; }
+                    return false;
                 }
-
-                return {clicked: false, total: unique.length};
-            }
-        """, dropdown_index)
-        self._log.info("[Swiggy] %s date dropdown click result: %s", label, clicked)
-
-        if not clicked or not clicked.get("clicked"):
-            self._log.warning("[Swiggy] Could not click %s date dropdown — trying Playwright locator", label)
-            # Playwright fallback: find all visible "Select Date" text elements
-            try:
-                locs = self._page.get_by_text("Select Date").all()
-                visible_locs = [loc for loc in locs if loc.is_visible()]
-                if len(visible_locs) > dropdown_index:
-                    visible_locs[dropdown_index].click()
-                    self._log.info("[Swiggy] Clicked %s date via Playwright locator", label)
-                else:
-                    self._log.warning("[Swiggy] Only %d visible 'Select Date' elements", len(visible_locs))
-                    return
-            except Exception as exc:
-                self._log.warning("[Swiggy] Playwright locator fallback failed: %s", exc)
+            """, dropdown_index)
+            if not clicked:
+                self._log.warning("[Swiggy] Could not open %s date dropdown", label)
                 return
 
         self._page.wait_for_timeout(1000)
@@ -500,18 +496,31 @@ class SwiggyScraper:
 
         # --- Navigate calendar to the target month ---
         for nav_attempt in range(13):  # max 12 months back
-            current_my = self._page.evaluate("""
-                () => {
-                    // Calendar month/year headers (e.g. "March 2026", "February 2026")
-                    const els = Array.from(document.querySelectorAll('*')).filter(el => {
-                        const txt = (el.innerText || '').trim();
-                        const rect = el.getBoundingClientRect();
-                        return rect.width > 30 && rect.height > 5 && rect.height < 60
-                            && /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}$/i.test(txt);
-                    });
-                    return els.length > 0 ? els[els.length - 1].innerText.trim() : null;
-                }
-            """)
+            # Detect current month using Playwright locator (regex match)
+            current_my = None
+            try:
+                month_loc = self._page.locator(
+                    'text=/^(January|February|March|April|May|June|July|August|September|October|November|December) \\d{4}$/'
+                ).last
+                if month_loc.is_visible(timeout=2000):
+                    current_my = month_loc.inner_text().strip()
+            except Exception:
+                pass
+
+            # JS fallback for month detection
+            if not current_my:
+                current_my = self._page.evaluate("""
+                    () => {
+                        const els = Array.from(document.querySelectorAll('*')).filter(el => {
+                            const txt = (el.innerText || '').trim();
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 30 && rect.height > 5 && rect.height < 60
+                                && /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}$/i.test(txt);
+                        });
+                        return els.length > 0 ? els[els.length - 1].innerText.trim() : null;
+                    }
+                """)
+
             self._log.info("[Swiggy] Calendar shows: %s (target: %s)", current_my, target_my)
 
             if current_my and current_my.lower() == target_my.lower():
@@ -521,72 +530,182 @@ class SwiggyScraper:
                 self._log.warning("[Swiggy] Could not navigate to %s after 12 attempts", target_my)
                 break
 
-            # Click previous-month arrow
-            prev_ok = self._page.evaluate("""
-                () => {
-                    // Look for prev-month navigation: buttons with <, ‹, ←, or aria-label*=prev
-                    const btns = Array.from(document.querySelectorAll(
-                        'button, [role="button"]'
-                    )).filter(el => {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width < 5 || rect.width > 60 || rect.height < 5) return false;
-                        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                        const txt  = (el.innerText || '').trim();
-                        const cls  = (el.className || '').toString().toLowerCase();
-                        return aria.includes('prev') || aria.includes('back')
-                            || txt === '<' || txt === '‹' || txt === '←' || txt === '\\u2039'
-                            || cls.includes('prev') || cls.includes('left');
-                    });
-                    if (btns.length > 0) { btns[0].click(); return true; }
+            # --- Click previous-month arrow ---
+            # Strategy 1: Playwright locator — try common prev-arrow selectors
+            prev_clicked = False
 
-                    // Fallback: find SVG-based arrow buttons positioned on the left
-                    const svgBtns = Array.from(document.querySelectorAll('svg')).map(s => s.closest('button, [role="button"]')).filter(Boolean);
-                    const leftBtns = svgBtns.filter(el => {
-                        const rect = el.getBoundingClientRect();
-                        return rect.x < 500 && rect.width < 60;
-                    });
-                    if (leftBtns.length > 0) { leftBtns[0].click(); return true; }
-                    return false;
-                }
-            """)
-            if not prev_ok:
-                self._log.warning("[Swiggy] Could not find prev-month button")
+            # Try aria-label based
+            for sel in [
+                '[aria-label*="prev" i]', '[aria-label*="back" i]',
+                '[aria-label*="Previous" i]', '[aria-label*="previous month" i]',
+            ]:
+                try:
+                    loc = self._page.locator(sel).first
+                    if loc.is_visible(timeout=800):
+                        loc.click()
+                        prev_clicked = True
+                        self._log.info("[Swiggy] Clicked prev via selector: %s", sel)
+                        break
+                except Exception:
+                    pass
+
+            # Strategy 2: Find the month header, then click the nearest left-arrow element
+            if not prev_clicked:
+                prev_clicked = self._page.evaluate("""
+                    () => {
+                        // Find the month-year header element
+                        const monthEls = Array.from(document.querySelectorAll('*')).filter(el => {
+                            const txt = (el.innerText || '').trim();
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 30 && rect.height > 5 && rect.height < 60
+                                && /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(txt);
+                        });
+                        if (monthEls.length === 0) return false;
+                        const monthEl = monthEls[monthEls.length - 1];
+                        const monthRect = monthEl.getBoundingClientRect();
+
+                        // Search ALL clickable-looking elements near the month header
+                        // (not just button — could be span, div, a, i, svg, etc.)
+                        const arrowChars = ['<', '‹', '←', '\\u2039', '\\u276E', '❮', '\\u25C0', '◀', '\\u2190'];
+                        const allEls = Array.from(document.querySelectorAll('*'));
+                        const nearby = allEls.filter(el => {
+                            const rect = el.getBoundingClientRect();
+                            // Must be small, visible, and vertically aligned with the month header
+                            if (rect.width < 5 || rect.width > 60 || rect.height < 5 || rect.height > 60) return false;
+                            if (Math.abs(rect.top - monthRect.top) > 30) return false;
+                            // Must be to the left of or near the month text
+                            if (rect.right > monthRect.right + 10) return false;
+                            return true;
+                        });
+
+                        // Among nearby elements, find the one with arrow text or SVG
+                        for (const el of nearby) {
+                            const txt = (el.textContent || '').trim();
+                            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                            const cls = (el.className || '').toString().toLowerCase();
+                            const hasSvg = el.querySelector('svg') !== null || el.tagName === 'SVG';
+                            const isArrow = arrowChars.includes(txt)
+                                || aria.includes('prev') || aria.includes('back')
+                                || cls.includes('prev') || cls.includes('left')
+                                || cls.includes('arrow') || cls.includes('nav')
+                                || hasSvg;
+                            if (isArrow) {
+                                el.click();
+                                return true;
+                            }
+                        }
+
+                        // Last resort: click the leftmost small element on the same row
+                        if (nearby.length > 0) {
+                            nearby.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                            nearby[0].click();
+                            return true;
+                        }
+                        return false;
+                    }
+                """)
+
+            # Strategy 3: Find any element containing just < or ‹ anywhere on page
+            if not prev_clicked:
+                for arrow_text in ["<", "‹", "←"]:
+                    try:
+                        loc = self._page.locator(f"text='{arrow_text}'").first
+                        if loc.is_visible(timeout=500):
+                            loc.click()
+                            prev_clicked = True
+                            self._log.info("[Swiggy] Clicked prev via text='%s'", arrow_text)
+                            break
+                    except Exception:
+                        pass
+
+            if not prev_clicked:
+                # Dump diagnostics about what elements are near the month header
+                diag = self._page.evaluate("""
+                    () => {
+                        const monthEls = Array.from(document.querySelectorAll('*')).filter(el => {
+                            const txt = (el.innerText || '').trim();
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 30 && rect.height > 5 && rect.height < 60
+                                && /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$/i.test(txt);
+                        });
+                        if (monthEls.length === 0) return {error: 'no month header found'};
+                        const monthEl = monthEls[monthEls.length - 1];
+                        const mr = monthEl.getBoundingClientRect();
+                        // Get parent and siblings
+                        const parent = monthEl.parentElement;
+                        const siblings = parent ? Array.from(parent.children).map(el => ({
+                            tag: el.tagName,
+                            cls: (el.className || '').toString().substring(0, 50),
+                            txt: (el.textContent || '').trim().substring(0, 20),
+                            w: Math.round(el.getBoundingClientRect().width),
+                            h: Math.round(el.getBoundingClientRect().height),
+                            x: Math.round(el.getBoundingClientRect().x),
+                        })) : [];
+                        return {monthTag: monthEl.tagName, monthParent: parent?.tagName, siblings: siblings};
+                    }
+                """)
+                self._log.warning("[Swiggy] Prev arrow not found. Calendar DOM: %s", diag)
                 break
+
             self._page.wait_for_timeout(600)
 
         # --- Click the target day number ---
-        day_clicked = self._page.evaluate("""
-            (day) => {
-                // Find visible day-number cells inside a calendar-like container
-                const cells = Array.from(document.querySelectorAll(
-                    'button, td, [role="gridcell"], [role="option"]'
-                )).filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width < 10 || rect.width > 60 || rect.height < 10 || rect.height > 60) return false;
-                    const txt = (el.innerText || '').trim();
-                    if (txt !== day) return false;
-                    // Exclude disabled / greyed-out cells
-                    const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
-                    return !disabled;
-                });
-                if (cells.length > 0) {
-                    cells[0].click();
-                    return {clicked: true, total: cells.length};
+        # Use Playwright locators first (proper React event handling)
+        day_clicked = False
+
+        # Strategy 1: Playwright get_by_role for grid cells
+        try:
+            day_loc = self._page.get_by_role("gridcell", name=day_str).first
+            if day_loc.is_visible(timeout=1000):
+                day_loc.click()
+                day_clicked = True
+                self._log.info("[Swiggy] Clicked day %s via gridcell role", day_str)
+        except Exception:
+            pass
+
+        # Strategy 2: Playwright text locator with exact match
+        if not day_clicked:
+            try:
+                day_loc = self._page.locator(
+                    f'button:text-is("{day_str}"), '
+                    f'td:text-is("{day_str}"), '
+                    f'[role="gridcell"]:text-is("{day_str}"), '
+                    f'[role="option"]:text-is("{day_str}")'
+                ).first
+                if day_loc.is_visible(timeout=1000):
+                    day_loc.click()
+                    day_clicked = True
+                    self._log.info("[Swiggy] Clicked day %s via Playwright locator", day_str)
+            except Exception:
+                pass
+
+        # Strategy 3: JS evaluate (broader search including div/span)
+        if not day_clicked:
+            result = self._page.evaluate("""
+                (day) => {
+                    const cells = Array.from(document.querySelectorAll(
+                        'button, td, div, span, [role="gridcell"], [role="option"]'
+                    )).filter(el => {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 10 || rect.width > 60 || rect.height < 10 || rect.height > 60) return false;
+                        const txt = (el.innerText || '').trim();
+                        if (txt !== day) return false;
+                        const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                        return !disabled && el.children.length === 0;
+                    });
+                    if (cells.length > 0) {
+                        cells[0].click();
+                        return {clicked: true, total: cells.length, tag: cells[0].tagName};
+                    }
+                    return {clicked: false, total: 0};
                 }
-                // Broader fallback: any element with just the day number
-                const broad = Array.from(document.querySelectorAll('div, span')).filter(el => {
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width < 10 || rect.width > 55 || rect.height < 10 || rect.height > 55) return false;
-                    return (el.innerText || '').trim() === day && el.children.length === 0;
-                });
-                if (broad.length > 0) {
-                    broad[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                    return {clicked: true, total: broad.length, fallback: true};
-                }
-                return {clicked: false, total: 0};
-            }
-        """, day_str)
-        self._log.info("[Swiggy] %s date day-click result: %s", label, day_clicked)
+            """, day_str)
+            day_clicked = result and result.get("clicked")
+            self._log.info("[Swiggy] %s date day-click JS result: %s", label, result)
+
+        if not day_clicked:
+            self._log.warning("[Swiggy] Could not click day %s for %s date", day_str, label)
+
         self._page.wait_for_timeout(600)
 
         # --- Click "Done" to confirm the date selection in the calendar ---
@@ -608,24 +727,7 @@ class SwiggyScraper:
                 pass
 
         if not done_clicked:
-            # JS fallback — try to find and click a Done/OK button inside the calendar popover
-            self._page.evaluate("""
-                () => {
-                    const labels = ['Done', 'OK', 'Apply', 'Confirm'];
-                    const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                    for (const btn of btns) {
-                        const txt = (btn.innerText || '').trim();
-                        const rect = btn.getBoundingClientRect();
-                        if (labels.includes(txt) && rect.width > 20 && rect.height > 10) {
-                            btn.click();
-                            return txt;
-                        }
-                    }
-                    return null;
-                }
-            """)
-            self._page.wait_for_timeout(600)
-            self._log.info("[Swiggy] JS fallback for %s date Done button", label)
+            self._log.warning("[Swiggy] Could not click Done for %s date calendar", label)
 
     def _set_date_range(self, start_date: date, end_date: date) -> None:
         """
