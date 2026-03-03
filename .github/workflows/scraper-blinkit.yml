@@ -4,7 +4,7 @@ on:
   push:
     branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
-    - cron: "36 2 * * *"  # 08:06 AM IST daily
+    - cron: "41 2 * * *"  # 08:11 AM IST daily
   workflow_dispatch:
     inputs:
       report_date:
