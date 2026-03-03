@@ -16,7 +16,7 @@ jobs:
   run-scraper:
     name: Run Amazon PI scraper
     runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
@@ -112,6 +112,13 @@ jobs:
               report_date = datetime.strptime(report_date_str, "%Y-%m-%d").date()
           else:
               report_date = date.today() - timedelta(days=1)
+
+          import logging
+          logging.basicConfig(
+              level=logging.INFO,
+              format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+              handlers=[logging.StreamHandler(sys.stdout)],
+          )
 
           from scrapers.amazon_pi_scraper import AmazonPIScraper
           result = AmazonPIScraper(headless=True).run(report_date=report_date)
