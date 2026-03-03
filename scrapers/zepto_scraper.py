@@ -215,7 +215,7 @@ class ZeptoScraper(BaseScraper):
         self.page.wait_for_timeout(2000)
 
         # --- Refresh until the new row appears (Zepto can take 30–60s to generate) ---
-        date_display = f"{report_date.day} {report_date.strftime('%b %Y')}"  # e.g. "18 Feb 2026"
+        date_display = report_date.strftime("%d %b %Y")  # e.g. "02 Mar 2026" (Zepto uses zero-padded day)
         logger.info("[Zepto] Waiting for SALES report row for %s", date_display)
 
         # Poll until the report row appears — Zepto can take up to 10-15 minutes
