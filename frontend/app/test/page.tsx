@@ -6,18 +6,18 @@ import type { SalesByDimension, PortalDailyResponse } from "@/lib/api";
 
 // ── Mock data: portal revenue breakdown ──────────────────────────────────────
 const mockPortalData: SalesByDimension[] = [
-  { dimension_id: 1, dimension_name: "Amazon",       total_revenue: 58180000, total_quantity: 1064 },
-  { dimension_id: 2, dimension_name: "Shopify",      total_revenue: 36170000, total_quantity: 820 },
-  { dimension_id: 3, dimension_name: "Blinkit",      total_revenue: 18970000, total_quantity: 540 },
-  { dimension_id: 4, dimension_name: "Swiggy",       total_revenue:  9040000, total_quantity: 310 },
-  { dimension_id: 5, dimension_name: "Flipkart",     total_revenue:  7290000, total_quantity: 260 },
-  { dimension_id: 6, dimension_name: "Zepto",        total_revenue:  3410000, total_quantity: 140 },
-  { dimension_id: 7, dimension_name: "Myntra",       total_revenue:  1330000, total_quantity:  90 },
-  { dimension_id: 8, dimension_name: "Offline",      total_revenue:   729600, total_quantity:  60 },
-  { dimension_id: 9, dimension_name: "CRED",         total_revenue:   225000, total_quantity:  30 },
-  { dimension_id:10, dimension_name: "Vaaree",       total_revenue:    36000, total_quantity:  12 },
-  { dimension_id:11, dimension_name: "Nykaa Fashion",total_revenue:    10200, total_quantity:   5 },
-  { dimension_id:12, dimension_name: "Meesho",       total_revenue:    33000, total_quantity:  18 },
+  { dimension_id: 1, dimension_name: "Amazon",       total_revenue: 58180000, total_quantity: 1064, total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 2, dimension_name: "Shopify",      total_revenue: 36170000, total_quantity: 820,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 3, dimension_name: "Blinkit",      total_revenue: 18970000, total_quantity: 540,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 4, dimension_name: "Swiggy",       total_revenue:  9040000, total_quantity: 310,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 5, dimension_name: "Flipkart",     total_revenue:  7290000, total_quantity: 260,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 6, dimension_name: "Zepto",        total_revenue:  3410000, total_quantity: 140,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 7, dimension_name: "Myntra",       total_revenue:  1330000, total_quantity:  90,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 8, dimension_name: "Offline",      total_revenue:   729600, total_quantity:  60,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id: 9, dimension_name: "CRED",         total_revenue:   225000, total_quantity:  30,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id:10, dimension_name: "Vaaree",       total_revenue:    36000, total_quantity:  12,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id:11, dimension_name: "Nykaa Fashion",total_revenue:    10200, total_quantity:   5,  total_net_revenue: null, total_orders: null, record_count: null },
+  { dimension_id:12, dimension_name: "Meesho",       total_revenue:    33000, total_quantity:  18,  total_net_revenue: null, total_orders: null, record_count: null },
 ];
 
 // ── Mock data: portal daily table (7-day window) ─────────────────────────────
