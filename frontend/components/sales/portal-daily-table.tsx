@@ -124,7 +124,7 @@ export function PortalDailyTable({ data, loading }: Props) {
               </th>
               {/* MTD group */}
               <th
-                colSpan={2}
+                colSpan={3}
                 className="py-1.5 px-3 text-center text-[10px] text-zinc-600 uppercase tracking-wider bg-zinc-900"
                 style={{ position: "sticky", top: 0, zIndex: Z.header }}
               >
@@ -175,6 +175,9 @@ export function PortalDailyTable({ data, loading }: Props) {
               {/* ── MTD columns ── */}
               <th className="py-2 px-3 text-right text-zinc-400 font-medium border-l border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
                 Units
+              </th>
+              <th className="py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                DRR
               </th>
               <th className="py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
                 Value
@@ -230,6 +233,9 @@ export function PortalDailyTable({ data, loading }: Props) {
                 <td className="py-1.5 px-3 text-right font-semibold text-zinc-100 border-l border-zinc-700/60 tabular-nums">
                   {row.mtd_units.toLocaleString("en-IN")}
                 </td>
+                <td className="py-1.5 px-3 text-right text-sky-400 font-medium tabular-nums">
+                  {dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—"}
+                </td>
                 <td className="py-1.5 px-3 text-right text-orange-400 font-semibold font-mono tabular-nums">
                   {fmtRevenue(row.mtd_value)}
                 </td>
@@ -273,6 +279,14 @@ export function PortalDailyTable({ data, loading }: Props) {
                 style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
               >
                 {rows.reduce((s, r) => s + r.mtd_units, 0).toLocaleString("en-IN")}
+              </td>
+              <td
+                className="py-2.5 px-3 text-right font-bold text-sky-400 tabular-nums bg-zinc-800"
+                style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
+              >
+                {dates.length > 0
+                  ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1)
+                  : "—"}
               </td>
               <td
                 className="py-2.5 px-3 text-right font-bold text-orange-400 font-mono tabular-nums bg-zinc-800"
