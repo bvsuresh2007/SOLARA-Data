@@ -1,5 +1,6 @@
 "use client";
 
+import { Fragment } from "react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -78,21 +79,23 @@ export function PortalBreakdown({ data }: Props) {
           </div>
 
           {/* Legend — right side */}
-          <div className="w-full lg:w-1/2 space-y-2 lg:pt-4">
-            {sorted.map((d, i) => (
-              <div key={d.dimension_id} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
-                  />
-                  <span className="text-zinc-400">{d.dimension_name}</span>
-                </div>
-                <span className="text-zinc-300 font-medium tabular-nums">
-                  {fmtRevenue(d.total_revenue)} &middot; {total > 0 ? ((d.total_revenue / total) * 100).toFixed(1) : 0}%
-                </span>
-              </div>
-            ))}
+          <div className="w-full lg:w-1/2 lg:pt-4 flex justify-center lg:justify-start">
+            <div className="grid grid-cols-[auto_auto] items-center gap-x-5 gap-y-[7px]">
+              {sorted.map((d, i) => (
+                <Fragment key={d.dimension_id}>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                    />
+                    <span className="text-zinc-400 text-sm">{d.dimension_name}</span>
+                  </div>
+                  <span className="text-zinc-300 font-medium tabular-nums text-sm">
+                    {fmtRevenue(d.total_revenue)} &middot; {total > 0 ? ((d.total_revenue / total) * 100).toFixed(1) : 0}%
+                  </span>
+                </Fragment>
+              ))}
+            </div>
           </div>
         </div>
       </CardContent>
