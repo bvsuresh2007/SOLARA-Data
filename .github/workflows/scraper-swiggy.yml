@@ -4,7 +4,7 @@ on:
   push:
     branches: ["**"]  # suppresses phantom push-failure records; job is skipped on push
   schedule:
-    - cron: "43 2 * * *"  # 08:13 AM IST daily
+    - cron: "45 4 * * *"  # 10:15 AM IST daily (Swiggy publishes previous day's data ~9-10 AM IST)
   workflow_dispatch:
     inputs:
       report_date:
