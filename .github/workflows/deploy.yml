@@ -80,7 +80,7 @@ jobs:
       - name: Build & Push Frontend Image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }} \
+            --build-arg NEXT_PUBLIC_API_URL=https://solara-backend-goe6h2dneq-el.a.run.app \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:${{ github.sha }} \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/solara/frontend:latest \
             ./frontend
