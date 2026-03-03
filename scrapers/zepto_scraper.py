@@ -50,6 +50,16 @@ class ZeptoScraper(BaseScraper):
     SESSION_FILE = Path(__file__).resolve().parent / "sessions" / "zepto_session.json"
 
     def _init_browser(self):
+        # Reset asyncio event loop so retries don't hit "Sync API inside asyncio loop"
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if not loop.is_running():
+                loop.close()
+        except Exception:
+            pass
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().__enter__()
         self.browser = self._pw.chromium.launch(
@@ -199,25 +209,28 @@ class ZeptoScraper(BaseScraper):
         self.page.locator('button:has-text("Submit")').last.click()
         self.page.wait_for_timeout(2000)
 
-        # --- Refresh to see the new row ---
-        logger.info("[Zepto] Refreshing page")
-        self.page.reload(wait_until="networkidle")
-        self.page.wait_for_timeout(2000)
-
-        # --- Find and click Download on the first SALES row for our date ---
-        # Row format: "19 Feb 2026 | ... | SALES | 18 Feb 2026 - 18 Feb 2026 | Completed | Download"
-        logger.info("[Zepto] Looking for download link for %s", date_iso)
+        # --- Refresh until the new row appears (Zepto can take 30–60s to generate) ---
         date_display = f"{report_date.day} {report_date.strftime('%b %Y')}"  # e.g. "18 Feb 2026"
+        logger.info("[Zepto] Waiting for SALES report row for %s", date_display)
 
-        download_row = self.page.locator(
-            f'tr:has-text("SALES"):has-text("{date_display} - {date_display}")'
-        ).first
+        download_row = None
+        for refresh_attempt in range(1, 7):  # up to 6 refreshes (~60s total)
+            logger.info("[Zepto] Refresh attempt %d/6", refresh_attempt)
+            self.page.reload(wait_until="networkidle")
+            self.page.wait_for_timeout(3000)
 
-        try:
-            download_row.wait_for(state="visible", timeout=15_000)
-        except Exception:
+            row = self.page.locator(
+                f'tr:has-text("SALES"):has-text("{date_display} - {date_display}")'
+            ).first
+            if row.is_visible():
+                download_row = row
+                break
+            logger.info("[Zepto] Row not found yet, waiting 10s...")
+            self.page.wait_for_timeout(10_000)
+
+        if download_row is None:
             self._screenshot("download_row_not_found")
-            raise RuntimeError(f"No SALES report row found for {date_display} after refresh.")
+            raise RuntimeError(f"No SALES report row found for {date_display} after 6 refresh attempts.")
 
         output_path = self.portal_data_path / f"zepto_sales_{date_iso}.xlsx"
         with self.page.expect_download() as dl_info:
