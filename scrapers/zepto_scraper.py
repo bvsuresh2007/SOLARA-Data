@@ -39,6 +39,11 @@ REPORTS_URL       = "https://brands.zepto.co.in/vendor/reports"
 
 class ZeptoScraper(BaseScraper):
     portal_name = "zepto"
+    # Disable Python-level retries — Playwright's sync API leaves dirty asyncio
+    # state after __exit__, causing "Sync API inside asyncio loop" on retry.
+    # Long-polling inside download_report() handles the "report not ready" case.
+    # Workflow-level retry (scraper-retry.yml) handles login/network failures.
+    max_retries = 1
 
     def __init__(self, headless: bool = True, **kwargs):
         super().__init__(**kwargs)
@@ -213,9 +218,12 @@ class ZeptoScraper(BaseScraper):
         date_display = f"{report_date.day} {report_date.strftime('%b %Y')}"  # e.g. "18 Feb 2026"
         logger.info("[Zepto] Waiting for SALES report row for %s", date_display)
 
+        # Poll until the report row appears — Zepto can take up to 10-15 minutes
+        # to generate a report. Poll every 60s for up to 15 minutes (15 attempts).
         download_row = None
-        for refresh_attempt in range(1, 7):  # up to 6 refreshes (~60s total)
-            logger.info("[Zepto] Refresh attempt %d/6", refresh_attempt)
+        max_poll = 15
+        for refresh_attempt in range(1, max_poll + 1):
+            logger.info("[Zepto] Polling for report row (attempt %d/%d)", refresh_attempt, max_poll)
             self.page.reload(wait_until="networkidle")
             self.page.wait_for_timeout(3000)
 
@@ -224,13 +232,16 @@ class ZeptoScraper(BaseScraper):
             ).first
             if row.is_visible():
                 download_row = row
+                logger.info("[Zepto] Report row found on attempt %d", refresh_attempt)
                 break
-            logger.info("[Zepto] Row not found yet, waiting 10s...")
-            self.page.wait_for_timeout(10_000)
+
+            if refresh_attempt < max_poll:
+                logger.info("[Zepto] Row not ready yet, waiting 60s before next poll...")
+                self.page.wait_for_timeout(60_000)
 
         if download_row is None:
             self._screenshot("download_row_not_found")
-            raise RuntimeError(f"No SALES report row found for {date_display} after 6 refresh attempts.")
+            raise RuntimeError(f"No SALES report row found for {date_display} after {max_poll} poll attempts (~15 min).")
 
         output_path = self.portal_data_path / f"zepto_sales_{date_iso}.xlsx"
         with self.page.expect_download() as dl_info:
