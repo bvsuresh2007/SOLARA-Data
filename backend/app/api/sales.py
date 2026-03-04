@@ -661,37 +661,39 @@ def portal_daily_sales(
         .all()
     )
 
-    # 5. Latest inventory snapshot per product
+    # 5. Latest WH stock per product from EasyEcom inventory snapshots.
+    #    EasyEcom's 'old_quantity' is stored as solara_stock and represents
+    #    the Solara warehouse stock — shown as WH Stock for all portal views.
     inv_map: dict[int, float | None] = {}
-    if portal_obj_id is not None:
-        # Specific portal — show portal stock
+    easyecom_portal = db.query(Portal).filter(func.lower(Portal.name) == "easyecom").first()
+    if easyecom_portal and product_ids:
         latest_sq = (
             db.query(
                 InventorySnapshot.product_id,
                 func.max(InventorySnapshot.snapshot_date).label("max_date"),
             )
             .filter(
-                InventorySnapshot.portal_id == portal_obj_id,
+                InventorySnapshot.portal_id == easyecom_portal.id,
                 InventorySnapshot.product_id.in_(product_ids),
+                InventorySnapshot.solara_stock.isnot(None),
             )
             .group_by(InventorySnapshot.product_id)
             .subquery()
         )
         inv_rows = (
-            db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
+            db.query(InventorySnapshot.product_id, InventorySnapshot.solara_stock)
             .join(
                 latest_sq,
                 (InventorySnapshot.product_id == latest_sq.c.product_id)
                 & (InventorySnapshot.snapshot_date == latest_sq.c.max_date),
             )
-            .filter(InventorySnapshot.portal_id == portal_obj_id)
+            .filter(InventorySnapshot.portal_id == easyecom_portal.id)
             .all()
         )
         inv_map = {
-            r.product_id: float(r.portal_stock) if r.portal_stock is not None else None
+            r.product_id: float(r.solara_stock) if r.solara_stock is not None else None
             for r in inv_rows
         }
-    # "All portals" — skip inventory (no single portal stock to show)
 
     # 6. Pivot: aggregate sales per product (SUM across portals for same product+date)
     sales_agg = defaultdict(lambda: {"daily": {}, "asps": [], "total_units": 0, "total_value": 0.0})

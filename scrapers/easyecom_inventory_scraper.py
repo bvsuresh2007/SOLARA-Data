@@ -379,6 +379,140 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
         return self._poll_exports_for_inventory(output_path, queued_at)
 
     # ------------------------------------------------------------------
+    # Database storage
+    # ------------------------------------------------------------------
+
+    def _store_wh_stock_to_db(self, file_path: Path, snapshot_date: date) -> int:
+        """
+        Parse the downloaded inventory CSV/XLSX and upsert solara_stock values
+        into the inventory_snapshots table (keyed by EasyEcom portal + product).
+
+        The EasyEcom 'old_quantity' column represents Solara's current warehouse stock.
+        We store it as InventorySnapshot.solara_stock so the dashboard can display
+        it as the WH Stock column regardless of which sales portal is being viewed.
+
+        Returns the number of rows upserted.
+        """
+        import csv
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+
+        try:
+            from backend.app.database import SessionLocal
+            from backend.app.models.sales import Product
+            from backend.app.models.metadata import Portal
+            from backend.app.models.inventory import InventorySnapshot
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+        except ImportError:
+            self._log.warning("[EasyEcom-Inv] Could not import backend models — skipping DB upsert")
+            return 0
+
+        suffix = file_path.suffix.lower()
+
+        # --- Parse file into list of (sku, old_quantity) ---
+        sku_qty: dict[str, float] = {}
+        try:
+            if suffix == ".csv":
+                with open(str(file_path), newline="", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        sku = (row.get("sku") or "").strip().lstrip("`").strip('"')
+                        qty_raw = (row.get("old_quantity") or "").strip()
+                        if sku and qty_raw:
+                            try:
+                                sku_qty[sku] = float(qty_raw)
+                            except ValueError:
+                                pass
+            elif suffix in (".xlsx", ".xls"):
+                import openpyxl
+                wb = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
+                ws = wb.active
+                headers = [str(c.value or "").strip() for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                sku_col = headers.index("sku") if "sku" in headers else None
+                qty_col = headers.index("old_quantity") if "old_quantity" in headers else None
+                if sku_col is None or qty_col is None:
+                    self._log.warning("[EasyEcom-Inv] XLSX missing sku/old_quantity columns: %s", headers)
+                    return 0
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    sku = str(row[sku_col] or "").strip().lstrip("`").strip('"')
+                    qty_raw = row[qty_col]
+                    if sku and qty_raw is not None:
+                        try:
+                            sku_qty[sku] = float(qty_raw)
+                        except (TypeError, ValueError):
+                            pass
+                wb.close()
+        except Exception as exc:
+            self._log.error("[EasyEcom-Inv] Error parsing inventory file: %s", exc)
+            return 0
+
+        if not sku_qty:
+            self._log.warning("[EasyEcom-Inv] No SKU/quantity rows parsed from %s", file_path)
+            return 0
+
+        self._log.info("[EasyEcom-Inv] Parsed %d SKU rows from inventory file", len(sku_qty))
+
+        # --- DB upsert ---
+        db = SessionLocal()
+        try:
+            # Get EasyEcom portal_id
+            portal = db.query(Portal).filter_by(name="easyecom").first()
+            if not portal:
+                self._log.warning("[EasyEcom-Inv] 'easyecom' portal not found in DB — skipping upsert")
+                return 0
+            portal_id = portal.id
+
+            # Build {sku_code → product_id} map
+            products = db.query(Product.id, Product.sku_code).filter(
+                Product.sku_code.in_(list(sku_qty.keys()))
+            ).all()
+            sku_to_pid = {p.sku_code: p.id for p in products}
+
+            matched = sum(1 for s in sku_qty if s in sku_to_pid)
+            self._log.info("[EasyEcom-Inv] Matched %d / %d SKUs to product_ids", matched, len(sku_qty))
+
+            if not sku_to_pid:
+                self._log.warning("[EasyEcom-Inv] No SKUs matched products table — nothing to upsert")
+                return 0
+
+            # Build upsert rows
+            rows = []
+            for sku, qty in sku_qty.items():
+                pid = sku_to_pid.get(sku)
+                if pid is None:
+                    continue
+                rows.append({
+                    "portal_id":     portal_id,
+                    "product_id":    pid,
+                    "snapshot_date": snapshot_date,
+                    "solara_stock":  qty,
+                })
+
+            if not rows:
+                return 0
+
+            # Upsert in batches
+            BATCH = 500
+            for i in range(0, len(rows), BATCH):
+                batch = rows[i:i + BATCH]
+                stmt = pg_insert(InventorySnapshot).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["portal_id", "product_id", "snapshot_date"],
+                    set_={"solara_stock": stmt.excluded.solara_stock},
+                )
+                db.execute(stmt)
+            db.commit()
+            self._log.info("[EasyEcom-Inv] Upserted %d WH stock rows into inventory_snapshots", len(rows))
+            return len(rows)
+
+        except Exception as exc:
+            db.rollback()
+            self._log.error("[EasyEcom-Inv] DB upsert failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -412,6 +546,12 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
             self._go_to_inventory_page()
             file_path = self._download_inventory(report_date)
             result.update({"file": file_path, "status": "success"})
+
+            # Store WH stock (old_quantity) into inventory_snapshots.solara_stock
+            if file_path:
+                upserted = self._store_wh_stock_to_db(file_path, report_date)
+                result["wh_stock_rows"] = upserted
+                self._log.info("[EasyEcom-Inv] WH stock upserted: %d rows", upserted)
 
             # Upload to Google Drive: SolaraDashboard Reports / YYYY-MM / EasyEcom /
             if _upload_to_drive and file_path:
