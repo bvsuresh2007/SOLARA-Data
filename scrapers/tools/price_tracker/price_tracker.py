@@ -228,14 +228,16 @@ def run(report_date: date | None = None, headless: bool = True) -> dict:
     # --- Slack summary ---
     lines = [f":white_check_mark: *Price Tracker \u2014 {report_date}*"]
     platform_icons = {"Amazon": ":package:", "Zepto": ":green_circle:", "Blinkit": ":yellow_circle:", "Swiggy": ":orange_circle:"}
+    bullet = "\u2022"
     for platform, s in summary.items():
+        icon = platform_icons.get(platform, bullet)
         if "failed" in s:
-            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: failed \u2014 {s['failed'][:80]}")
+            lines.append(f"{icon} *{platform}*: failed \u2014 {s['failed'][:80]}")
         elif s["total"] == 0:
-            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: skipped (no products configured)")
+            lines.append(f"{icon} *{platform}*: skipped (no products configured)")
         else:
             err_str = f", {s['errors']} error{'s' if s['errors'] != 1 else ''}" if s["errors"] else ""
-            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: {s['scraped']} scraped{err_str}")
+            lines.append(f"{icon} *{platform}*: {s['scraped']} scraped{err_str}")
     lines.append(f":bar_chart: <{sheet_url}|Open Sheet>")
 
     slack_msg = "\n".join(lines)
