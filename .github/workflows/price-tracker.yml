@@ -14,7 +14,7 @@ jobs:
   price-tracker:
     name: Run Price Tracker
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:

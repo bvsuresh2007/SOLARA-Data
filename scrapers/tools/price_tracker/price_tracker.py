@@ -47,23 +47,26 @@ def _scrape_amazon(products: list[dict], headless: bool = True) -> list[dict[str
 
     scraper = AmazonScraper(marketplace="in", headless=headless)
     results = []
-    for sku, name, asin in asins:
-        try:
-            data = scraper.scrape(asin)
-            results.append({
-                "sku":         sku,
-                "name":        name,
-                "asin":        asin,
-                "price_value": data.price_value,
-                "bsr_value":   data.bsr_value,
-                "error":       data.error,
-            })
-            logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
-                        sku, asin, data.price_value or 0, data.bsr_value)
-        except Exception as exc:
-            logger.error("[Amazon] %s (%s) failed: %s", sku, asin, exc)
-            results.append({"sku": sku, "name": name, "asin": asin, "error": str(exc)})
-        time.sleep(2)
+    try:
+        for sku, name, asin in asins:
+            try:
+                data = scraper.scrape(asin)
+                results.append({
+                    "sku":         sku,
+                    "name":        name,
+                    "asin":        asin,
+                    "price_value": data.price_value,
+                    "bsr_value":   data.bsr_value,
+                    "error":       data.error,
+                })
+                logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
+                            sku, asin, data.price_value or 0, data.bsr_value)
+            except Exception as exc:
+                logger.error("[Amazon] %s (%s) failed: %s", sku, asin, exc)
+                results.append({"sku": sku, "name": name, "asin": asin, "error": str(exc)})
+            time.sleep(1)
+    finally:
+        scraper.close()  # Always close to free the Playwright event loop
 
     return results
 

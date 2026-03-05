@@ -121,7 +121,7 @@ class AmazonScraper:
         ctx: BrowserContext = self._browser.new_context(
             user_agent=_UA,
             viewport={"width": 1920, "height": 1080},
-            locale="en-US",
+            locale="en-IN",
         )
         try:
             page: Page = ctx.new_page()
@@ -130,27 +130,27 @@ class AmazonScraper:
 
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
-            # Initial settle — mirrors Selenium's time.sleep(2)
-            page.wait_for_timeout(2_000)
+            # Initial settle
+            page.wait_for_timeout(500)
 
-            # Scroll to trigger lazy loading — mirrors Selenium's scrollTo(0, 500)
+            # Scroll to trigger lazy loading
             page.evaluate("window.scrollTo(0, 500)")
-            page.wait_for_timeout(1_000)
+            page.wait_for_timeout(300)
 
-            # Wait for product title — mirrors Selenium's WebDriverWait(10) for #productTitle
+            # Wait for product title
             try:
-                page.wait_for_selector("#productTitle", timeout=10_000)
+                page.wait_for_selector("#productTitle", timeout=5_000)
             except Exception:
                 pass
 
-            # Wait for price element — mirrors Selenium's WebDriverWait(5) for .a-price
+            # Wait for price element
             try:
-                page.wait_for_selector(".a-price", timeout=5_000)
+                page.wait_for_selector(".a-price", timeout=3_000)
             except Exception:
                 pass
 
-            # Final settle for dynamic content — mirrors Selenium's time.sleep(2)
-            page.wait_for_timeout(2_000)
+            # Final settle for dynamic content
+            page.wait_for_timeout(500)
 
             html = page.content()
 
@@ -459,8 +459,15 @@ class AmazonScraper:
         soup = BeautifulSoup(html, "lxml")
 
         # Check for CAPTCHA or bot detection
-        if ("Enter the characters you see below" in html
-                or "api-services-support@amazon.com" in html):
+        bot_signals = [
+            "Enter the characters you see below",
+            "api-services-support@amazon.com",
+            "Robot Check",
+            "Type the characters you see in this image",
+            "Sorry, we just need to make sure you're not a robot",
+            "/errors/validateCaptcha",
+        ]
+        if any(s in html for s in bot_signals):
             result.error = "Bot detection triggered - CAPTCHA required"
             return result
 
