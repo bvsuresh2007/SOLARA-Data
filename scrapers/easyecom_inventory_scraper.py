@@ -351,9 +351,31 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
                 pass
 
     def _extract_from_zip(self, zip_path: Path) -> Path:
-        """Extract a single CSV/XLSX from a ZIP, or return the file as-is."""
+        """Extract a single CSV/XLSX from a ZIP, or return the file as-is.
+
+        EasyEcom sometimes returns a CSV/XLSX with a .zip extension.
+        When that happens we detect the real format by reading the magic bytes
+        and rename the file so downstream steps can find it by suffix.
+        """
         import zipfile as _zf
         if not _zf.is_zipfile(str(zip_path)):
+            # Detect real format from magic bytes
+            header = zip_path.read_bytes()[:4]
+            if header[:2] == b'PK':
+                # Office Open XML (XLSX) is technically a zip but read_bytes check
+                # wouldn't normally end up here — rename just in case.
+                real_suffix = ".xlsx"
+            else:
+                # Plain text → treat as CSV
+                real_suffix = ".csv"
+            if zip_path.suffix.lower() != real_suffix:
+                new_path = zip_path.with_suffix(real_suffix)
+                zip_path.rename(new_path)
+                self._log.info(
+                    "[EasyEcom-Inv] Downloaded file is not a ZIP — renamed %s → %s",
+                    zip_path.name, new_path.name,
+                )
+                return new_path
             self._log.info("[EasyEcom-Inv] Downloaded file is not a ZIP — using as-is")
             return zip_path
         with _zf.ZipFile(str(zip_path)) as zf:
