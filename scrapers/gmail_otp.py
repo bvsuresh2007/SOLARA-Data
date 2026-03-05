@@ -29,6 +29,7 @@ logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 # Anchor token.json to the project root (two levels up from scrapers/)
@@ -152,7 +153,9 @@ def fetch_latest_otp(sender: str, after_epoch: int = None) -> str | None:
     """
     service = _get_gmail_service()
 
-    query = f"from:{sender}"
+    # `in:anywhere` ensures spam/junk folder is included — OTP emails from
+    # automated senders (Swiggy, Blinkit, Zepto) often land in spam in CI.
+    query = f"from:{sender} in:anywhere"
     if after_epoch:
         query += f" after:{after_epoch}"
 
