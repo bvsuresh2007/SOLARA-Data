@@ -437,8 +437,8 @@ class ZeptoScraper:
                 if self._extract_meta(page, result):
                     print("  [Source: meta tags]")
 
-            # Strategy 3: DOM
-            if not result.name:
+            # Strategy 3: DOM — also try when name found but price still missing
+            if not result.name or not result.price_value:
                 if self._extract_dom(page, result):
                     print("  [Source: DOM]")
 

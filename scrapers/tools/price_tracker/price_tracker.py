@@ -68,8 +68,13 @@ def _scrape_amazon(products: list[dict], headless: bool = True) -> list[dict[str
     return results
 
 
+def _is_valid_url(val: str) -> bool:
+    """Return True if val looks like a real URL (not '0', empty, or placeholder)."""
+    return bool(val) and val not in ("0", "N/A", "-", "n/a") and val.startswith("http")
+
+
 def _scrape_zepto(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["zepto_url"]) for p in products if p.get("zepto_url")]
+    items = [(p["sku"], p["name"], p["zepto_url"]) for p in products if _is_valid_url(p.get("zepto_url", ""))]
     if not items:
         logger.info("[PriceTracker] Zepto: no URLs configured — skipping")
         return []
@@ -79,29 +84,32 @@ def _scrape_zepto(products: list[dict], headless: bool = True) -> list[dict[str,
 
     scraper = ZeptoScraper(headless=headless)
     results = []
-    for sku, name, url in items:
-        try:
-            data = scraper.scrape(url)
-            results.append({
-                "sku":         sku,
-                "name":        name,
-                "zepto_url":   url,
-                "price_value": data.price_value,
-                "mrp_value":   data.mrp_value,
-                "discount":    data.discount,
-                "error":       data.error,
-            })
-            logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-        except Exception as exc:
-            logger.error("[Zepto] %s failed: %s", sku, exc)
-            results.append({"sku": sku, "name": name, "zepto_url": url, "error": str(exc)})
-        time.sleep(1)
+    try:
+        for sku, name, url in items:
+            try:
+                data = scraper.scrape(url)
+                results.append({
+                    "sku":         sku,
+                    "name":        name,
+                    "zepto_url":   url,
+                    "price_value": data.price_value,
+                    "mrp_value":   data.mrp_value,
+                    "discount":    data.discount,
+                    "error":       data.error,
+                })
+                logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+            except Exception as exc:
+                logger.error("[Zepto] %s failed: %s", sku, exc)
+                results.append({"sku": sku, "name": name, "zepto_url": url, "error": str(exc)})
+            time.sleep(1)
+    finally:
+        scraper.close()  # Always close to free the Playwright event loop
 
     return results
 
 
 def _scrape_blinkit(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["blinkit_id"]) for p in products if p.get("blinkit_id")]
+    items = [(p["sku"], p["name"], p["blinkit_id"]) for p in products if _is_valid_url(p.get("blinkit_id", ""))]
     if not items:
         logger.info("[PriceTracker] Blinkit: no IDs configured — skipping")
         return []
@@ -111,29 +119,32 @@ def _scrape_blinkit(products: list[dict], headless: bool = True) -> list[dict[st
 
     scraper = BlinkitScraper(headless=headless)
     results = []
-    for sku, name, product_id in items:
-        try:
-            data = scraper.scrape(product_id)
-            results.append({
-                "sku":         sku,
-                "name":        name,
-                "blinkit_id":  product_id,
-                "price_value": data.price_value,
-                "mrp_value":   data.mrp_value,
-                "discount":    data.discount,
-                "error":       data.error,
-            })
-            logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-        except Exception as exc:
-            logger.error("[Blinkit] %s failed: %s", sku, exc)
-            results.append({"sku": sku, "name": name, "blinkit_id": product_id, "error": str(exc)})
-        time.sleep(1)
+    try:
+        for sku, name, product_id in items:
+            try:
+                data = scraper.scrape(product_id)
+                results.append({
+                    "sku":         sku,
+                    "name":        name,
+                    "blinkit_id":  product_id,
+                    "price_value": data.price_value,
+                    "mrp_value":   data.mrp_value,
+                    "discount":    data.discount,
+                    "error":       data.error,
+                })
+                logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+            except Exception as exc:
+                logger.error("[Blinkit] %s failed: %s", sku, exc)
+                results.append({"sku": sku, "name": name, "blinkit_id": product_id, "error": str(exc)})
+            time.sleep(1)
+    finally:
+        scraper.close()  # Always close to free the Playwright event loop
 
     return results
 
 
 def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["swiggy_url"]) for p in products if p.get("swiggy_url")]
+    items = [(p["sku"], p["name"], p["swiggy_url"]) for p in products if _is_valid_url(p.get("swiggy_url", ""))]
     if not items:
         logger.info("[PriceTracker] Swiggy: no URLs configured — skipping")
         return []
@@ -143,23 +154,26 @@ def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str
 
     scraper = SwiggyInstamartScraper(headless=headless)
     results = []
-    for sku, name, url in items:
-        try:
-            data = scraper.scrape(url)
-            results.append({
-                "sku":         sku,
-                "name":        name,
-                "swiggy_url":  url,
-                "price_value": data.price_value,
-                "mrp_value":   data.mrp_value,
-                "discount":    data.discount,
-                "error":       data.error,
-            })
-            logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-        except Exception as exc:
-            logger.error("[Swiggy] %s failed: %s", sku, exc)
-            results.append({"sku": sku, "name": name, "swiggy_url": url, "error": str(exc)})
-        time.sleep(1)
+    try:
+        for sku, name, url in items:
+            try:
+                data = scraper.scrape(url)
+                results.append({
+                    "sku":         sku,
+                    "name":        name,
+                    "swiggy_url":  url,
+                    "price_value": data.price_value,
+                    "mrp_value":   data.mrp_value,
+                    "discount":    data.discount,
+                    "error":       data.error,
+                })
+                logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+            except Exception as exc:
+                logger.error("[Swiggy] %s failed: %s", sku, exc)
+                results.append({"sku": sku, "name": name, "swiggy_url": url, "error": str(exc)})
+            time.sleep(1)
+    finally:
+        scraper.close()  # Always close to free the Playwright event loop
 
     return results
 

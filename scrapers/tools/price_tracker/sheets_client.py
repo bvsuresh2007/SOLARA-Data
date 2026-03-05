@@ -199,13 +199,15 @@ def append_price_columns(
     # Rewrite entire header row to capture appended columns
     ws.update("1:1", [header_row], value_input_option="RAW")
 
-    # --- Write data cells ---
+    # --- Pass 1: collect new rows + build updates ---
+    new_static_rows: list[list] = []  # batch-append in one API call
     updates: list[dict] = []
+
     for item in results:
         sku = item.get("sku", "")
         row_idx = sku_to_row.get(sku)
         if row_idx is None:
-            # SKU not in sheet yet — append it
+            # SKU not in sheet yet — collect for batch append
             if platform == "Amazon":
                 new_row = [sku, item.get("name", ""), item.get("asin", "")]
             elif platform == "Zepto":
@@ -214,12 +216,8 @@ def append_price_columns(
                 new_row = [sku, item.get("name", ""), item.get("blinkit_id", "")]
             else:
                 new_row = [sku, item.get("name", ""), item.get("swiggy_url", "")]
-            # Pad to reach date columns
-            while len(new_row) < len(header_row):
-                new_row.append("")
-            row_idx = len(all_values) + 1
-            all_values.append(new_row)
-            ws.append_row(new_row[:n_static], value_input_option="RAW")
+            row_idx = len(all_values) + len(new_static_rows) + 1
+            new_static_rows.append(new_row[:n_static])
             sku_to_row[sku] = row_idx
 
         # Build cell values for this date's columns
@@ -232,7 +230,6 @@ def append_price_columns(
             price = item.get("price_value") or ""
             mrp   = item.get("mrp_value") or ""
             disc  = item.get("discount") or ""
-            # Compute disc% if not provided
             if price and mrp and not disc:
                 try:
                     disc = round((1 - float(price) / float(mrp)) * 100, 1)
@@ -246,6 +243,10 @@ def append_price_columns(
                 "range": f"{col_letter}{row_idx}",
                 "values": [[val]],
             })
+
+    # Single API call for all new rows (was 1 call per row — hit quota fast)
+    if new_static_rows:
+        ws.append_rows(new_static_rows, value_input_option="RAW")
 
     if updates:
         ws.batch_update(updates, value_input_option="USER_ENTERED")
