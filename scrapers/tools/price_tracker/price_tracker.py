@@ -104,7 +104,10 @@ def _scrape_zepto(products: list[dict], headless: bool = True) -> list[dict[str,
                     "discount":    data.discount,
                     "error":       data.error,
                 })
-                logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+                if data.error:
+                    logger.warning("[Zepto] %s: %s", sku, data.error)
+                else:
+                    logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
             except Exception as exc:
                 logger.error("[Zepto] %s failed: %s", sku, exc)
                 results.append({"sku": sku, "name": name, "zepto_url": url, "error": str(exc)})
@@ -139,7 +142,10 @@ def _scrape_blinkit(products: list[dict], headless: bool = True) -> list[dict[st
                     "discount":    data.discount,
                     "error":       data.error,
                 })
-                logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+                if data.error:
+                    logger.warning("[Blinkit] %s: %s", sku, data.error)
+                else:
+                    logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
             except Exception as exc:
                 logger.error("[Blinkit] %s failed: %s", sku, exc)
                 results.append({"sku": sku, "name": name, "blinkit_id": product_id, "error": str(exc)})
@@ -174,7 +180,10 @@ def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str
                     "discount":    data.discount,
                     "error":       data.error,
                 })
-                logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+                if data.error:
+                    logger.warning("[Swiggy] %s: %s", sku, data.error)
+                else:
+                    logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
             except Exception as exc:
                 logger.error("[Swiggy] %s failed: %s", sku, exc)
                 results.append({"sku": sku, "name": name, "swiggy_url": url, "error": str(exc)})
