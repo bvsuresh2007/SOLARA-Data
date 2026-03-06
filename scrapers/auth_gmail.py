@@ -32,7 +32,6 @@ _TOKEN_PATH = _ROOT / "token.json"
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/spreadsheets",   # Price Tracker: read/write Google Sheets
 ]
 
 
