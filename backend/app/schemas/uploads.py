@@ -17,6 +17,8 @@ class UploadFileType(str, Enum):
     ZEPTO_INVENTORY = "zepto_inventory"
     EASYECOM_SALES = "easyecom_sales"
     AMAZON_PI = "amazon_pi"
+    FLIPKART_APPLIANCES = "flipkart_appliances"
+    FLIPKART_KITCHEN = "flipkart_kitchen"
 
 
 FILE_TYPE_META: dict[str, dict] = {
@@ -63,6 +65,16 @@ FILE_TYPE_META: dict[str, dict] = {
     UploadFileType.AMAZON_PI: {
         "label": "Amazon PI ASIN Revenue Report",
         "description": "Amazon PI ASIN-wise revenue and unit sales report (xlsx/csv)",
+        "target_tables": ["daily_sales"],
+    },
+    UploadFileType.FLIPKART_APPLIANCES: {
+        "label": "Flipkart Appliances Sales",
+        "description": "Flipkart Appliances daily sales report. Columns: full_date, Units, product_id (FSN). Accepts .csv or .xlsx.",
+        "target_tables": ["daily_sales"],
+    },
+    UploadFileType.FLIPKART_KITCHEN: {
+        "label": "Flipkart Kitchen Sales",
+        "description": "Flipkart Kitchen daily sales report. Columns: order_date_key, fsn, units, gmv. Accepts .csv or .xlsx.",
         "target_tables": ["daily_sales"],
     },
 }
