@@ -9,6 +9,7 @@ price columns to each platform tab, and posts a Slack summary.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
 import sys
 import time
@@ -59,8 +60,11 @@ def _scrape_amazon(products: list[dict], headless: bool = True) -> list[dict[str
                     "bsr_value":   data.bsr_value,
                     "error":       data.error,
                 })
-                logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
-                            sku, asin, data.price_value or 0, data.bsr_value)
+                if data.error:
+                    logger.warning("[Amazon] %s (%s): %s", sku, asin, data.error)
+                else:
+                    logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
+                                sku, asin, data.price_value or 0, data.bsr_value)
             except Exception as exc:
                 logger.error("[Amazon] %s (%s) failed: %s", sku, asin, exc)
                 results.append({"sku": sku, "name": name, "asin": asin, "error": str(exc)})
@@ -182,6 +186,22 @@ def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str
 
 
 # ---------------------------------------------------------------------------
+# Subprocess isolation (prevents asyncio event loop conflicts between scrapers)
+# ---------------------------------------------------------------------------
+
+def _run_scraper_isolated(fn, products: list[dict], headless: bool) -> list[dict]:
+    """
+    Run a scraper function in an isolated subprocess.
+
+    Each Playwright scraper leaves asyncio event loop state in the process.
+    Running each platform in its own subprocess guarantees a clean event loop
+    for every scraper, regardless of what previous scrapers did.
+    """
+    with multiprocessing.Pool(processes=1) as pool:
+        return pool.apply(fn, (products, headless))
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -230,7 +250,7 @@ def run(report_date: date | None = None, headless: bool = True) -> dict:
     ]:
         logger.info("[PriceTracker] Starting %s...", platform)
         try:
-            results = scrape_fn(products, headless=headless)
+            results = _run_scraper_isolated(scrape_fn, products, headless)
             errors = sum(1 for r in results if r.get("error"))
             ok = len(results) - errors
             summary[platform] = {"scraped": ok, "errors": errors, "total": len(results)}
