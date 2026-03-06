@@ -1,8 +1,6 @@
-name: Price Tracker — Daily
+name: Price Tracker — Manual
 
 on:
-  schedule:
-    - cron: "30 2 * * *"   # 08:00 AM IST daily (UTC+5:30)
   workflow_dispatch:
     inputs:
       report_date:
@@ -15,7 +13,7 @@ jobs:
     name: Run Price Tracker
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
