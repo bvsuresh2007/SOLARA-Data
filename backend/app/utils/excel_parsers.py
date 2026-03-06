@@ -713,6 +713,89 @@ def parse_master_excel(content: bytes, filename: str) -> list[dict]:
 
 
 # =============================================================================
+# Flipkart parsers
+# =============================================================================
+
+def parse_flipkart_appliances(content: bytes, filename: str) -> list[dict]:
+    """
+    Flipkart Appliances daily sales report.
+
+    Expected columns: full_date, Units, product_id (FSN),
+    analytic_super_category, product_title, analytic_vertical, brand.
+    No revenue column — units only.
+    """
+    suffix = os.path.splitext(filename)[1] or ".csv"
+    path = _write_temp(content, suffix)
+    try:
+        df = _clean(_read_file(path))
+        _require_columns(df, ["full_date", "Units", "product_id"], "flipkart_appliances")
+        rows = []
+        for row in df.to_dict("records"):
+            fsn = str(row.get("product_id", "")).strip()
+            if not fsn or fsn in ("nan", ""):
+                continue
+            sale_date = _parse_date_ymd(row.get("full_date")) or _parse_date_dmy(row.get("full_date"))
+            if sale_date is None:
+                continue
+            rows.append({
+                "portal": "flipkart",
+                "sale_date": sale_date,
+                "portal_product_id": fsn,
+                "city": "",
+                "revenue": 0.0,
+                "quantity_sold": _f(row.get("Units", 0)),
+                "order_count": 0,
+                "discount_amount": 0.0,
+            })
+        return rows
+    finally:
+        os.unlink(path)
+
+
+def parse_flipkart_kitchen(content: bytes, filename: str) -> list[dict]:
+    """
+    Flipkart Kitchen daily sales report.
+
+    Expected columns: order_date_key, fsn, units, gmv,
+    title, analytic_vertical, brand, seller_id, seller_name,
+    business_type, tagging, alpha_flag, service_profile, lid.
+    """
+    suffix = os.path.splitext(filename)[1] or ".csv"
+    path = _write_temp(content, suffix)
+    try:
+        df = _clean(_read_file(path))
+        # Normalise column names to lowercase for robust matching
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        _require_columns(df, ["order_date_key", "fsn", "units"], "flipkart_kitchen")
+        rows = []
+        for row in df.to_dict("records"):
+            fsn = str(row.get("fsn", "")).strip()
+            if not fsn or fsn in ("nan", ""):
+                continue
+            raw_date = row.get("order_date_key")
+            # Try YYYY-MM-DD then YYYYMMDD
+            sale_date = _parse_date_ymd(raw_date)
+            if sale_date is None:
+                try:
+                    sale_date = datetime.strptime(str(raw_date).strip(), "%Y%m%d").date()
+                except Exception:
+                    continue
+            rows.append({
+                "portal": "flipkart",
+                "sale_date": sale_date,
+                "portal_product_id": fsn,
+                "city": "",
+                "revenue": _f(row.get("gmv", 0)),
+                "quantity_sold": _f(row.get("units", 0)),
+                "order_count": 0,
+                "discount_amount": 0.0,
+            })
+        return rows
+    finally:
+        os.unlink(path)
+
+
+# =============================================================================
 # Registry
 # =============================================================================
 
@@ -727,6 +810,8 @@ PARSER_REGISTRY: dict[str, Any] = {
     "amazon_pi": parse_amazon_pi,
     "shopify_sales": parse_shopify_sales,
     "master_excel": parse_master_excel,
+    "flipkart_appliances": parse_flipkart_appliances,
+    "flipkart_kitchen": parse_flipkart_kitchen,
 }
 
 
