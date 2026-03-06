@@ -9,7 +9,6 @@ price columns to each platform tab, and posts a Slack summary.
 from __future__ import annotations
 
 import logging
-import multiprocessing
 import os
 import sys
 import time
@@ -48,40 +47,29 @@ def _scrape_amazon(products: list[dict], headless: bool = True) -> list[dict[str
 
     scraper = AmazonScraper(marketplace="in", headless=headless)
     results = []
-    try:
-        for sku, name, asin in asins:
-            try:
-                data = scraper.scrape(asin)
-                results.append({
-                    "sku":         sku,
-                    "name":        name,
-                    "asin":        asin,
-                    "price_value": data.price_value,
-                    "bsr_value":   data.bsr_value,
-                    "error":       data.error,
-                })
-                if data.error:
-                    logger.warning("[Amazon] %s (%s): %s", sku, asin, data.error)
-                else:
-                    logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
-                                sku, asin, data.price_value or 0, data.bsr_value)
-            except Exception as exc:
-                logger.error("[Amazon] %s (%s) failed: %s", sku, asin, exc)
-                results.append({"sku": sku, "name": name, "asin": asin, "error": str(exc)})
-            time.sleep(1)
-    finally:
-        scraper.close()  # Always close to free the Playwright event loop
+    for sku, name, asin in asins:
+        try:
+            data = scraper.scrape(asin)
+            results.append({
+                "sku":         sku,
+                "name":        name,
+                "asin":        asin,
+                "price_value": data.price_value,
+                "bsr_value":   data.bsr_value,
+                "error":       data.error,
+            })
+            logger.info("[Amazon] %s (%s): price=%.2f, BSR=%s",
+                        sku, asin, data.price_value or 0, data.bsr_value)
+        except Exception as exc:
+            logger.error("[Amazon] %s (%s) failed: %s", sku, asin, exc)
+            results.append({"sku": sku, "name": name, "asin": asin, "error": str(exc)})
+        time.sleep(2)
 
     return results
 
 
-def _is_valid_url(val: str) -> bool:
-    """Return True if val looks like a real URL (not '0', empty, or placeholder)."""
-    return bool(val) and val not in ("0", "N/A", "-", "n/a") and val.startswith("http")
-
-
 def _scrape_zepto(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["zepto_url"]) for p in products if _is_valid_url(p.get("zepto_url", ""))]
+    items = [(p["sku"], p["name"], p["zepto_url"]) for p in products if p.get("zepto_url")]
     if not items:
         logger.info("[PriceTracker] Zepto: no URLs configured — skipping")
         return []
@@ -91,35 +79,29 @@ def _scrape_zepto(products: list[dict], headless: bool = True) -> list[dict[str,
 
     scraper = ZeptoScraper(headless=headless)
     results = []
-    try:
-        for sku, name, url in items:
-            try:
-                data = scraper.scrape(url)
-                results.append({
-                    "sku":         sku,
-                    "name":        name,
-                    "zepto_url":   url,
-                    "price_value": data.price_value,
-                    "mrp_value":   data.mrp_value,
-                    "discount":    data.discount,
-                    "error":       data.error,
-                })
-                if data.error:
-                    logger.warning("[Zepto] %s: %s", sku, data.error)
-                else:
-                    logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-            except Exception as exc:
-                logger.error("[Zepto] %s failed: %s", sku, exc)
-                results.append({"sku": sku, "name": name, "zepto_url": url, "error": str(exc)})
-            time.sleep(1)
-    finally:
-        scraper.close()  # Always close to free the Playwright event loop
+    for sku, name, url in items:
+        try:
+            data = scraper.scrape(url)
+            results.append({
+                "sku":         sku,
+                "name":        name,
+                "zepto_url":   url,
+                "price_value": data.price_value,
+                "mrp_value":   data.mrp_value,
+                "discount":    data.discount,
+                "error":       data.error,
+            })
+            logger.info("[Zepto] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+        except Exception as exc:
+            logger.error("[Zepto] %s failed: %s", sku, exc)
+            results.append({"sku": sku, "name": name, "zepto_url": url, "error": str(exc)})
+        time.sleep(1)
 
     return results
 
 
 def _scrape_blinkit(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["blinkit_id"]) for p in products if _is_valid_url(p.get("blinkit_id", ""))]
+    items = [(p["sku"], p["name"], p["blinkit_id"]) for p in products if p.get("blinkit_id")]
     if not items:
         logger.info("[PriceTracker] Blinkit: no IDs configured — skipping")
         return []
@@ -129,35 +111,29 @@ def _scrape_blinkit(products: list[dict], headless: bool = True) -> list[dict[st
 
     scraper = BlinkitScraper(headless=headless)
     results = []
-    try:
-        for sku, name, product_id in items:
-            try:
-                data = scraper.scrape(product_id)
-                results.append({
-                    "sku":         sku,
-                    "name":        name,
-                    "blinkit_id":  product_id,
-                    "price_value": data.price_value,
-                    "mrp_value":   data.mrp_value,
-                    "discount":    data.discount,
-                    "error":       data.error,
-                })
-                if data.error:
-                    logger.warning("[Blinkit] %s: %s", sku, data.error)
-                else:
-                    logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-            except Exception as exc:
-                logger.error("[Blinkit] %s failed: %s", sku, exc)
-                results.append({"sku": sku, "name": name, "blinkit_id": product_id, "error": str(exc)})
-            time.sleep(1)
-    finally:
-        scraper.close()  # Always close to free the Playwright event loop
+    for sku, name, product_id in items:
+        try:
+            data = scraper.scrape(product_id)
+            results.append({
+                "sku":         sku,
+                "name":        name,
+                "blinkit_id":  product_id,
+                "price_value": data.price_value,
+                "mrp_value":   data.mrp_value,
+                "discount":    data.discount,
+                "error":       data.error,
+            })
+            logger.info("[Blinkit] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+        except Exception as exc:
+            logger.error("[Blinkit] %s failed: %s", sku, exc)
+            results.append({"sku": sku, "name": name, "blinkit_id": product_id, "error": str(exc)})
+        time.sleep(1)
 
     return results
 
 
 def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str, Any]]:
-    items = [(p["sku"], p["name"], p["swiggy_url"]) for p in products if _is_valid_url(p.get("swiggy_url", ""))]
+    items = [(p["sku"], p["name"], p["swiggy_url"]) for p in products if p.get("swiggy_url")]
     if not items:
         logger.info("[PriceTracker] Swiggy: no URLs configured — skipping")
         return []
@@ -167,47 +143,25 @@ def _scrape_swiggy(products: list[dict], headless: bool = True) -> list[dict[str
 
     scraper = SwiggyInstamartScraper(headless=headless)
     results = []
-    try:
-        for sku, name, url in items:
-            try:
-                data = scraper.scrape(url)
-                results.append({
-                    "sku":         sku,
-                    "name":        name,
-                    "swiggy_url":  url,
-                    "price_value": data.price_value,
-                    "mrp_value":   data.mrp_value,
-                    "discount":    data.discount,
-                    "error":       data.error,
-                })
-                if data.error:
-                    logger.warning("[Swiggy] %s: %s", sku, data.error)
-                else:
-                    logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
-            except Exception as exc:
-                logger.error("[Swiggy] %s failed: %s", sku, exc)
-                results.append({"sku": sku, "name": name, "swiggy_url": url, "error": str(exc)})
-            time.sleep(1)
-    finally:
-        scraper.close()  # Always close to free the Playwright event loop
+    for sku, name, url in items:
+        try:
+            data = scraper.scrape(url)
+            results.append({
+                "sku":         sku,
+                "name":        name,
+                "swiggy_url":  url,
+                "price_value": data.price_value,
+                "mrp_value":   data.mrp_value,
+                "discount":    data.discount,
+                "error":       data.error,
+            })
+            logger.info("[Swiggy] %s: price=%s, mrp=%s", sku, data.price_value, data.mrp_value)
+        except Exception as exc:
+            logger.error("[Swiggy] %s failed: %s", sku, exc)
+            results.append({"sku": sku, "name": name, "swiggy_url": url, "error": str(exc)})
+        time.sleep(1)
 
     return results
-
-
-# ---------------------------------------------------------------------------
-# Subprocess isolation (prevents asyncio event loop conflicts between scrapers)
-# ---------------------------------------------------------------------------
-
-def _run_scraper_isolated(fn, products: list[dict], headless: bool) -> list[dict]:
-    """
-    Run a scraper function in an isolated subprocess.
-
-    Each Playwright scraper leaves asyncio event loop state in the process.
-    Running each platform in its own subprocess guarantees a clean event loop
-    for every scraper, regardless of what previous scrapers did.
-    """
-    with multiprocessing.Pool(processes=1) as pool:
-        return pool.apply(fn, (products, headless))
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +213,7 @@ def run(report_date: date | None = None, headless: bool = True) -> dict:
     ]:
         logger.info("[PriceTracker] Starting %s...", platform)
         try:
-            results = _run_scraper_isolated(scrape_fn, products, headless)
+            results = scrape_fn(products, headless=headless)
             errors = sum(1 for r in results if r.get("error"))
             ok = len(results) - errors
             summary[platform] = {"scraped": ok, "errors": errors, "total": len(results)}
@@ -274,16 +228,14 @@ def run(report_date: date | None = None, headless: bool = True) -> dict:
     # --- Slack summary ---
     lines = [f":white_check_mark: *Price Tracker \u2014 {report_date}*"]
     platform_icons = {"Amazon": ":package:", "Zepto": ":green_circle:", "Blinkit": ":yellow_circle:", "Swiggy": ":orange_circle:"}
-    bullet = "\u2022"
     for platform, s in summary.items():
-        icon = platform_icons.get(platform, bullet)
         if "failed" in s:
-            lines.append(f"{icon} *{platform}*: failed \u2014 {s['failed'][:80]}")
+            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: failed \u2014 {s['failed'][:80]}")
         elif s["total"] == 0:
-            lines.append(f"{icon} *{platform}*: skipped (no products configured)")
+            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: skipped (no products configured)")
         else:
             err_str = f", {s['errors']} error{'s' if s['errors'] != 1 else ''}" if s["errors"] else ""
-            lines.append(f"{icon} *{platform}*: {s['scraped']} scraped{err_str}")
+            lines.append(f"{platform_icons.get(platform, '\u2022')} *{platform}*: {s['scraped']} scraped{err_str}")
     lines.append(f":bar_chart: <{sheet_url}|Open Sheet>")
 
     slack_msg = "\n".join(lines)

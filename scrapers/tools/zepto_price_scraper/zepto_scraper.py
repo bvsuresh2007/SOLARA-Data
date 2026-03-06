@@ -343,18 +343,13 @@ class ZeptoScraper:
             if data.get("name") and len(data["name"]) > 2 and not result.name:
                 result.name = data["name"]
             prices = data.get("prices") or []
-            if prices:
-                if not result.price:
-                    result.price_value = prices[0]
-                    result.price = self._fmt(prices[0])
-                # Supplement MRP from DOM even when price already found
-                if not result.mrp_value and result.price_value:
-                    for p in prices:
-                        if p > result.price_value * 1.01:  # MRP is higher than selling price
-                            result.mrp_value = p
-                            result.mrp = self._fmt(p)
-                            self._calc_discount(result)
-                            break
+            if prices and not result.price:
+                result.price_value = prices[0]
+                result.price = self._fmt(prices[0])
+                if len(prices) > 1 and prices[1] > prices[0]:
+                    result.mrp_value = prices[1]
+                    result.mrp = self._fmt(prices[1])
+                    self._calc_discount(result)
             if not result.availability:
                 result.availability = data.get("availability")
             return bool(result.name)
@@ -442,8 +437,8 @@ class ZeptoScraper:
                 if self._extract_meta(page, result):
                     print("  [Source: meta tags]")
 
-            # Strategy 3: DOM — also try when name/price missing OR when MRP still missing
-            if not result.name or not result.price_value or not result.mrp_value:
+            # Strategy 3: DOM
+            if not result.name:
                 if self._extract_dom(page, result):
                     print("  [Source: DOM]")
 
