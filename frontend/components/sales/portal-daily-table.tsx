@@ -71,6 +71,57 @@ export function PortalDailyTable({ data, loading }: Props) {
 
   const { dates, rows, portal_name } = data;
 
+  // ─── CSV Download ──────────────────────────────────────────────────────────
+  function downloadCsv() {
+    const headers = [
+      "#", "SKU", "Product", "Category", "Portal SKU", "BAU ASP", "WH Stock",
+      ...dates.map(fmtDate),
+      "MTD Units", "DRR", "MTD Value",
+    ];
+
+    const csvRows = rows.map((row, i) => [
+      i + 1,
+      row.sku_code,
+      row.product_name,
+      row.category,
+      row.portal_sku,
+      row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
+      row.wh_stock != null ? row.wh_stock : "—",
+      ...dates.map(d => row.daily_units[d] ?? "—"),
+      row.mtd_units,
+      dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—",
+      fmtRevenue(row.mtd_value),
+    ]);
+
+    const totals = [
+      "Total", "", "", "", "", "", "",
+      ...dates.map(d => rows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0)),
+      rows.reduce((s, r) => s + r.mtd_units, 0),
+      dates.length > 0 ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—",
+      fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0)),
+    ];
+
+    const escape = (v: unknown) => {
+      const s = String(v);
+      return s.includes(",") || s.includes('"') || s.includes("\n")
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const csv = [headers, ...csvRows, totals]
+      .map(row => row.map(escape).join(","))
+      .join("\n");
+
+    const dateFrom = dates[0] ?? "start";
+    const dateTo   = dates[dates.length - 1] ?? "end";
+    const filename = `${portal_name}_${dateFrom}_${dateTo}.csv`;
+
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Shadow applied via box-shadow on the last frozen column
   const edgeShadow = "4px 0 6px -2px rgba(0,0,0,0.45)";
 
@@ -84,10 +135,18 @@ export function PortalDailyTable({ data, loading }: Props) {
             {portal_name} · {dates[0] ? fmtDate(dates[0]) : "—"} – {dates[dates.length - 1] ? fmtDate(dates[dates.length - 1]) : "—"}
           </p>
         </div>
-        <span className="text-xs text-zinc-500">
-          <span className="text-zinc-300 font-semibold">{rows.length}</span> products ·{" "}
-          <span className="text-zinc-300 font-semibold">{dates.length}</span> days
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-zinc-500">
+            <span className="text-zinc-300 font-semibold">{rows.length}</span> products ·{" "}
+            <span className="text-zinc-300 font-semibold">{dates.length}</span> days
+          </span>
+          <button
+            onClick={downloadCsv}
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+          >
+            ↓ Download CSV
+          </button>
+        </div>
       </div>
 
       {/* Scrollable container */}
