@@ -288,61 +288,98 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
 
     def _try_download_inventory(self, dl_info: dict, output_path: Path) -> "Path | None":
         """
-        Download the inventory export using JS dispatchEvent (Strategy 1)
-        or mouse.click (Strategy 2). Mirrors the sales scraper's _try_download.
+        Download the inventory export.
+
+        The download link opens a popup page that immediately starts the download.
+        Three strategies:
+          1. JS dispatchEvent + expect_download on main page
+          2. mouse.click + expect_download on main page
+          3. Catch download from the popup page itself (handles the ':' URL popup case)
         """
-        new_pages = []
+        popup_downloads: list = []
+        new_pages: list = []
 
         def on_new_page(page):
             new_pages.append(page)
             self._log.debug("[EasyEcom-Inv] New popup: %s", page.url)
+            # Attach a download listener to the popup so we catch downloads from it
+            page.on("download", lambda dl: popup_downloads.append(dl))
 
         self._ctx.on('page', on_new_page)
 
+        JS_CLICK = """
+            () => {
+                for (const row of document.querySelectorAll('table tr')) {
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    if (cells.some(td =>
+                            (td.innerText||'').toLowerCase().includes('inventor'))) {
+                        const actionCell = cells[cells.length - 1];
+                        const link = actionCell.querySelector(
+                            'a.download_result, a, button'
+                        );
+                        if (link) {
+                            link.dispatchEvent(new MouseEvent('click',
+                                {bubbles: true, cancelable: true, view: window}));
+                        }
+                        return;
+                    }
+                }
+            }
+        """
+
         try:
-            # Strategy 1: JS dispatchEvent on the inventory row's action link
+            # Strategy 1: JS dispatchEvent + expect_download on main page
             try:
                 with self._page.expect_download(timeout=15_000) as dl_handle:
-                    self._page.evaluate("""
-                        () => {
-                            for (const row of document.querySelectorAll('table tr')) {
-                                const cells = Array.from(row.querySelectorAll('td'));
-                                if (cells.some(td =>
-                                        (td.innerText||'').toLowerCase().includes('inventor'))) {
-                                    const actionCell = cells[cells.length - 1];
-                                    const link = actionCell.querySelector(
-                                        'a.download_result, a, button'
-                                    );
-                                    if (link) {
-                                        link.dispatchEvent(new MouseEvent('click',
-                                            {bubbles: true, cancelable: true, view: window}));
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-                    """)
+                    self._page.evaluate(JS_CLICK)
                 dl = dl_handle.value
                 dl.save_as(str(output_path))
-                self._log.info("[EasyEcom-Inv] Download complete: %s", output_path)
+                self._log.info("[EasyEcom-Inv] Download complete (S1): %s", output_path)
                 return self._extract_from_zip(output_path)
             except Exception as e1:
                 self._log.info("[EasyEcom-Inv] Strategy 1 failed: %s", e1)
 
             self._page.wait_for_timeout(2000)
 
-            # Strategy 2: standard mouse.click
+            # Strategy 2: mouse.click + expect_download on main page
             try:
                 with self._page.expect_download(timeout=15_000) as dl_handle:
                     self._page.mouse.click(dl_info['x'], dl_info['y'])
                 dl = dl_handle.value
                 dl.save_as(str(output_path))
-                self._log.info("[EasyEcom-Inv] Download complete (strategy 2): %s", output_path)
+                self._log.info("[EasyEcom-Inv] Download complete (S2): %s", output_path)
                 return self._extract_from_zip(output_path)
             except Exception as e2:
-                self._log.warning("[EasyEcom-Inv] Both strategies failed. New pages: %s",
-                                  [p.url for p in new_pages])
-                return None
+                self._log.info("[EasyEcom-Inv] Strategy 2 failed: %s", e2)
+
+            # Strategy 3: catch download from popup page (handles ':' URL popup)
+            # The popup may have already been opened by S1/S2 — check immediately,
+            # then poll for up to 20s in case it's still loading.
+            self._log.info("[EasyEcom-Inv] Strategy 3: waiting for popup page download...")
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                if popup_downloads:
+                    dl = popup_downloads[0]
+                    dl.save_as(str(output_path))
+                    self._log.info("[EasyEcom-Inv] Download complete (S3 popup): %s", output_path)
+                    return self._extract_from_zip(output_path)
+                time.sleep(0.5)
+
+            # If still no download, try one more JS click and wait for popup download
+            self._log.info("[EasyEcom-Inv] Strategy 3b: re-clicking and waiting for popup...")
+            self._page.evaluate(JS_CLICK)
+            deadline2 = time.time() + 20
+            while time.time() < deadline2:
+                if popup_downloads:
+                    dl = popup_downloads[0]
+                    dl.save_as(str(output_path))
+                    self._log.info("[EasyEcom-Inv] Download complete (S3b): %s", output_path)
+                    return self._extract_from_zip(output_path)
+                time.sleep(0.5)
+
+            self._log.warning("[EasyEcom-Inv] All strategies failed. New pages: %s",
+                              [p.url for p in new_pages])
+            return None
 
         finally:
             try:
@@ -370,6 +407,8 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
                 real_suffix = ".csv"
             if zip_path.suffix.lower() != real_suffix:
                 new_path = zip_path.with_suffix(real_suffix)
+                if new_path.exists():
+                    new_path.unlink()
                 zip_path.rename(new_path)
                 self._log.info(
                     "[EasyEcom-Inv] Downloaded file is not a ZIP — renamed %s → %s",
@@ -387,6 +426,8 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
             name = members[0]
             suffix = Path(name).suffix
             out = zip_path.with_suffix(suffix)
+            if out.exists():
+                out.unlink()
             with zf.open(name) as src, open(str(out), 'wb') as dst:
                 dst.write(src.read())
             self._log.info("[EasyEcom-Inv] Extracted %s -> %s", name, out)

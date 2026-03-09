@@ -127,7 +127,7 @@ class BlinkitScraper:
         except Exception:
             pass
         try:
-            self._pw.__exit__(None, None, None)
+            self._pw.stop()
         except Exception:
             pass
 
@@ -593,8 +593,26 @@ class BlinkitScraper:
         # Click "Request Data"
         try:
             req_btn = self._page.get_by_text("Request Data", exact=True)
-            req_btn.wait_for(state="visible", timeout=8_000)
-            req_btn.click()
+            try:
+                req_btn.wait_for(state="visible", timeout=8_000)
+                req_btn.click()
+            except Exception:
+                # Button exists but hidden (datepicker dropdown overlapping it) — use JS click
+                self._log.warning("[Blinkit] 'Request Data' hidden — using JS click to bypass overlay")
+                clicked = self._page.evaluate("""
+                    () => {
+                        for (const el of document.querySelectorAll('button, span')) {
+                            if (el.textContent.trim() === 'Request Data') {
+                                const btn = el.closest('button') || el;
+                                btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                """)
+                if not clicked:
+                    raise RuntimeError("[Blinkit] 'Request Data' button not found in DOM via JS")
             self._page.wait_for_timeout(2000)
             self._shot("after_request_data")
             self._log.info("[Blinkit] Report requested successfully")
