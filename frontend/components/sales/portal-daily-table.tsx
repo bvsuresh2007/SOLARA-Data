@@ -30,6 +30,12 @@ function StockBadge({ v }: { v: number | null }) {
   return <span className={cls}>{v}</span>;
 }
 
+function DocBadge({ v }: { v: number | null }) {
+  if (v == null || !isFinite(v)) return <span className="text-zinc-700">—</span>;
+  const cls = v < 7 ? "text-red-400 font-bold" : v < 14 ? "text-yellow-400 font-medium" : "text-green-400 font-medium";
+  return <span className={cls}>{v.toFixed(1)}d</span>;
+}
+
 // ─── Frozen column config ───────────────────────────────────────────────────
 // Only freeze 3 columns: #, SKU, Product — keeps it lightweight
 // Widths: # = 36px, SKU = 110px, Product = 200px  → total = 346px
@@ -75,8 +81,22 @@ export function PortalDailyTable({ data, loading }: Props) {
   const showSwiggyStock  = portal_name.toLowerCase() === "swiggy";
   const showZeptoStock   = portal_name.toLowerCase() === "zepto";
   const showBlinkitStock = portal_name.toLowerCase() === "blinkit";
+  // DOC = Days of Cover — only for Swiggy / Zepto / Blinkit
+  const showDoc = showSwiggyStock || showZeptoStock || showBlinkitStock;
   // Details colSpan: base 5 (Category, Portal SKU, BAU ASP, WH Stock) + conditionals
   const detailsColSpan = 5 + (showSwiggyStock ? 1 : 0) + (showZeptoStock ? 1 : 0) + (showBlinkitStock ? 2 : 0);
+
+  /** Compute Days of Cover for a single row given its DRR. */
+  function calcDoc(row: PortalDailyRow, drr: number): number | null {
+    if (drr <= 0) return null;
+    if (showBlinkitStock) {
+      const total = (row.backend_qty ?? 0) + (row.frontend_qty ?? 0);
+      return total / drr;
+    }
+    if (showSwiggyStock) return row.swiggy_stock != null ? row.swiggy_stock / drr : null;
+    if (showZeptoStock)  return row.zepto_stock  != null ? row.zepto_stock  / drr : null;
+    return null;
+  }
 
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
@@ -86,7 +106,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
       ...dates.map(fmtDate),
-      "MTD Units", "DRR", "MTD Value",
+      "MTD Units", "DRR", ...(showDoc ? ["DOC"] : []), "MTD Value",
     ];
 
     const csvRows = rows.map((row, i) => [
@@ -104,6 +124,11 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...dates.map(d => row.daily_units[d] ?? "—"),
       row.mtd_units,
       dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—",
+      ...(showDoc ? (() => {
+        const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
+        const doc = calcDoc(row, drr);
+        return [doc != null && isFinite(doc) ? `${doc.toFixed(1)}d` : "—"];
+      })() : []),
       fmtRevenue(row.mtd_value),
     ]);
 
@@ -115,6 +140,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...dates.map(d => rows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0)),
       rows.reduce((s, r) => s + r.mtd_units, 0),
       dates.length > 0 ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—",
+      ...(showDoc ? [""] : []),
       fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0)),
     ];
 
@@ -200,7 +226,7 @@ export function PortalDailyTable({ data, loading }: Props) {
               </th>
               {/* MTD group */}
               <th
-                colSpan={3}
+                colSpan={showDoc ? 4 : 3}
                 className="py-1.5 px-3 text-center text-[10px] text-zinc-600 uppercase tracking-wider bg-zinc-900"
                 style={{ position: "sticky", top: 0, zIndex: Z.header }}
               >
@@ -275,6 +301,11 @@ export function PortalDailyTable({ data, loading }: Props) {
               <th className="py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
                 DRR
               </th>
+              {showDoc && (
+                <th className="py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                  DOC
+                </th>
+              )}
               <th className="py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
                 Value
               </th>
@@ -356,6 +387,14 @@ export function PortalDailyTable({ data, loading }: Props) {
                 <td className="py-1.5 px-3 text-right text-sky-400 font-medium tabular-nums">
                   {dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—"}
                 </td>
+                {showDoc && (() => {
+                  const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
+                  return (
+                    <td className="py-1.5 px-3 text-right tabular-nums">
+                      <DocBadge v={calcDoc(row, drr)} />
+                    </td>
+                  );
+                })()}
                 <td className="py-1.5 px-3 text-right text-orange-400 font-semibold font-mono tabular-nums">
                   {fmtRevenue(row.mtd_value)}
                 </td>
@@ -412,6 +451,9 @@ export function PortalDailyTable({ data, loading }: Props) {
                   ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1)
                   : "—"}
               </td>
+              {showDoc && (
+                <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
+              )}
               <td
                 className="py-2.5 px-3 text-right font-bold text-orange-400 font-mono tabular-nums bg-zinc-800"
                 style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
