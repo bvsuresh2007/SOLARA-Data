@@ -79,7 +79,7 @@ def save_to_csv(results: list[ZeptoProductData], filepath: str, pincode: str = N
         for r in results:
             writer.writerow([
                 r.product_id or "", r.name or "",
-                r.mrp or r.price or "", r.price or "",
+                r.mrp or "", r.price or "",
                 r.discount or "", r.brand or "", r.quantity or "",
                 r.availability or "", pincode or "", r.url, timestamp,
             ])

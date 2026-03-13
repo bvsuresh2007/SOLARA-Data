@@ -83,6 +83,9 @@ class PortalDailyRow(BaseModel):
     portal_sku: str
     bau_asp: Optional[float]
     wh_stock: Optional[float]
+    swiggy_stock: Optional[float] = None   # Swiggy portal_stock (from SOH report)
+    backend_qty: Optional[float] = None    # Blinkit backend inventory (from SOH report)
+    frontend_qty: Optional[float] = None   # Blinkit frontend inventory (from SOH report)
     daily_units: Dict[str, Optional[int]]   # "2026-02-01" → units (None = no sale)
     mtd_units: int
     mtd_value: float

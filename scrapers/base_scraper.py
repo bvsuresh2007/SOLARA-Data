@@ -62,7 +62,7 @@ class BaseScraper(abc.ABC):
             if self.browser:
                 self.browser.close()
             if hasattr(self, "_pw"):
-                self._pw.__exit__(None, None, None)
+                self._pw.stop()
         except Exception:
             pass
 

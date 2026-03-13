@@ -135,7 +135,7 @@ class EasyecomBaseScraper:
         except Exception:
             pass
         try:
-            self._pw.__exit__(None, None, None)
+            self._pw.stop()
         except Exception:
             pass
 
@@ -235,11 +235,37 @@ class EasyecomBaseScraper:
                 timeout=wait_timeout,
             )
         except Exception:
-            if "multiple-signin" in self._page.url:
-                self._log.warning("[EasyEcom] Account selection page — waiting 60s for user action")
+            current = self._page.url
+            if "multiple-signin" in current or "accountchooser" in current:
+                self._log.info("[EasyEcom] Google account chooser detected — selecting automation@solara.in")
+                # Try clicking the automation@solara.in account by data-email or data-identifier
+                clicked = False
+                for selector in [
+                    '[data-email="automation@solara.in"]',
+                    '[data-identifier="automation@solara.in"]',
+                    'li:has-text("automation@solara.in")',
+                    'div[data-authuser]:has-text("automation@solara.in")',
+                ]:
+                    try:
+                        el = self._page.locator(selector).first
+                        if el.count() > 0:
+                            el.click(timeout=10_000)
+                            self._log.info("[EasyEcom] Clicked account via selector: %s", selector)
+                            clicked = True
+                            break
+                    except Exception:
+                        pass
+                if not clicked:
+                    # Fallback: find any element with the email text and click it
+                    try:
+                        self._page.get_by_text("automation@solara.in").first.click(timeout=10_000)
+                        self._log.info("[EasyEcom] Clicked account via get_by_text")
+                        clicked = True
+                    except Exception as e:
+                        self._log.warning("[EasyEcom] Could not auto-click account: %s — waiting for manual action", e)
                 self._page.wait_for_url(
                     lambda u: u.startswith("https://app.easyecom.io") and "/account/auth/" not in u,
-                    timeout=60_000,
+                    timeout=120_000,
                 )
             else:
                 self._shot("login_timeout")

@@ -111,6 +111,7 @@ class BlinkitScraper:
             slow_mo=200 if not self.headless else 0,
             args=["--start-maximized"] if not self.headless else [],
             viewport={"width": 1400, "height": 900},
+            accept_downloads=True,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -478,6 +479,50 @@ class BlinkitScraper:
                 f"[Blinkit] Redirected to login when navigating to SOH. URL: {self._page.url}"
             )
         self._log.info("[Blinkit] SOH page loaded. URL: %s", self._page.url)
+
+    # ------------------------------------------------------------------
+    # SOH (Stock on Hand) download
+    #   Click the "Download SOH Data" button at the top-right of /app/soh
+    #   and wait for the file download.
+    # ------------------------------------------------------------------
+
+    def _download_soh_report(self, report_date: date) -> "Path | None":
+        """
+        Click 'Download SOH Data' on /app/soh and capture the browser download.
+        The button generates a CSV client-side (all 2000+ warehouse rows).
+        Requires accept_downloads=True on the context (set in _init_browser).
+        Saves as blinkit_soh_YYYY-MM-DD.csv.
+        """
+        date_str = report_date.strftime("%Y-%m-%d")
+        output_path = self.out_dir / f"blinkit_soh_{date_str}.csv"
+
+        self._log.info("[Blinkit] Navigating to SOH page")
+        self._page.goto(SOH_URL, wait_until="domcontentloaded")
+        self._page.wait_for_timeout(5000)
+        self._dismiss_modals()
+
+        # Wait for table to load
+        try:
+            self._page.wait_for_selector(".ant-table-row", timeout=15_000)
+        except Exception:
+            self._log.error("[Blinkit] SOH table not found")
+            self._shot("soh_no_table")
+            return None
+
+        self._log.info("[Blinkit] Clicking 'Download SOH Data' button")
+        try:
+            with self._page.expect_download(timeout=90_000) as dl_info:
+                btn = self._page.get_by_text("Download SOH Data", exact=True)
+                btn.wait_for(state="visible", timeout=10_000)
+                btn.click()
+            dl = dl_info.value
+            dl.save_as(str(output_path))
+            self._log.info("[Blinkit] SOH download complete: %s (%d bytes)", output_path, output_path.stat().st_size)
+            return output_path
+        except Exception as e:
+            self._shot("soh_download_failed")
+            self._log.error("[Blinkit] SOH download failed: %s", e)
+            return None
 
     # ------------------------------------------------------------------
     # Report download flow (confirmed steps):
@@ -1087,9 +1132,21 @@ class BlinkitScraper:
             self._ctx.storage_state(path=str(session_path))
             self._log.info("[Blinkit] Session snapshot saved to %s", session_path)
 
+            # Download SOH (Stock on Hand) report — Backend Qty + Frontend Qty
+            soh_path = self._download_soh_report(report_date)
+            if soh_path and _upload_to_drive:
+                soh_link = _upload_to_drive(
+                    portal="Blinkit",
+                    report_date=report_date,
+                    file_path=soh_path,
+                )
+                if soh_link:
+                    result["soh_drive_link"] = soh_link
+                    self._log.info("[Blinkit] SOH uploaded to Drive: %s", soh_link)
+
             self._request_sales_report(report_date)
             file_path = self._download_from_report_requests(report_date)
-            result.update({"file": file_path, "status": "success"})
+            result.update({"file": file_path, "soh_file": soh_path, "status": "success"})
 
             # Upload to Google Drive: SolaraDashboard Reports / YYYY-MM / Blinkit /
             if _upload_to_drive and file_path:

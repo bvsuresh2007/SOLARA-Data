@@ -20,13 +20,14 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv()
 
-from scrapers.swiggy_scraper   import SwiggyScraper
-from scrapers.blinkit_scraper  import BlinkitScraper
-from scrapers.amazon_scraper   import AmazonScraper
-from scrapers.zepto_scraper    import ZeptoScraper
-from scrapers.shopify_scraper  import ShopifyScraper
-from scrapers.excel_parser     import get_parser
-from scrapers.data_transformer import DataTransformer
+from scrapers.swiggy_scraper             import SwiggyScraper
+from scrapers.blinkit_scraper            import BlinkitScraper
+from scrapers.zepto_scraper              import ZeptoScraper
+from scrapers.easyecom_scraper           import EasyecomScraper
+from scrapers.easyecom_inventory_scraper import EasyecomInventoryScraper
+from scrapers.amazon_pi_scraper          import AmazonPIScraper
+from scrapers.excel_parser               import get_parser
+from scrapers.data_transformer           import DataTransformer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,9 +39,10 @@ logger = logging.getLogger("orchestrator")
 SCRAPERS = [
     SwiggyScraper,
     BlinkitScraper,
-    AmazonScraper,
     ZeptoScraper,
-    ShopifyScraper,
+    EasyecomScraper,           # sales: Shopify, Vaaree, Offline, Meesho, Nykaa Fashion, CRED
+    EasyecomInventoryScraper,  # inventory for same portals
+    AmazonPIScraper,           # Amazon PI sales data
 ]
 
 

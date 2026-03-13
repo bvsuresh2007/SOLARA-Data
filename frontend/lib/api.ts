@@ -124,6 +124,9 @@ export interface PortalDailyRow {
   portal_sku: string;
   bau_asp: number | null;
   wh_stock: number | null;
+  swiggy_stock: number | null;
+  backend_qty: number | null;
+  frontend_qty: number | null;
   daily_units: Record<string, number | null>;
   mtd_units: number;
   mtd_value: number;
