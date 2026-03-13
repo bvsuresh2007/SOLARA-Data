@@ -142,6 +142,9 @@ export const MOCK_PORTAL_DAILY: PortalDailyResponse = {
     portal_sku: `B0${String(Math.random()).slice(2, 10).toUpperCase()}`,
     bau_asp: 800 + i * 120,
     wh_stock: 500 + Math.round(Math.random() * 300),
+    swiggy_stock: null,
+    backend_qty: null,
+    frontend_qty: null,
     daily_units: Object.fromEntries(
       MOCK_SALES_TREND.slice(-7).map(t => [t.date, Math.round(20 + Math.random() * 40)])
     ),

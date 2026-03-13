@@ -131,10 +131,7 @@ class SwiggyInstamartScraper:
 
     @staticmethod
     def _extract_product_id(url: str) -> Optional[str]:
-        m = re.search(r'/item/[^/]+/(\d+)', url)
-        if m:
-            return m.group(1)
-        m = re.search(r'/(\d+)(?:\?|$)', url)
+        m = re.search(r'/item/([^/?]+)', url)
         return m.group(1) if m else None
 
     @staticmethod
@@ -317,6 +314,24 @@ class SwiggyInstamartScraper:
                     }
                 }
 
+                // 6b. Plain numbers near h1 (Swiggy renders prices without ₹ symbol)
+                out.nearby_plain_prices = [];
+                if (h1 && bodyText) {
+                    const h1Text2 = h1.textContent.trim();
+                    const h1Pos2 = bodyText.indexOf(h1Text2.substring(0, 30));
+                    if (h1Pos2 >= 0) {
+                        const after2 = bodyText.substring(
+                            h1Pos2 + h1Text2.length,
+                            h1Pos2 + h1Text2.length + 500
+                        );
+                        const plainMatches = [...after2.matchAll(/\b(\d{3,5})\b/g)]
+                            .map(m => parseFloat(m[1]))
+                            .filter(v => v >= 100 && v < 100000);
+                        out.nearby_plain_prices = plainMatches
+                            .filter((v, i, a) => a.indexOf(v) === i).slice(0, 4);
+                    }
+                }
+
                 // 7. Strikethrough/line-through prices → these are MRP
                 out.strikethrough_prices = [];
                 const stSelectors = [
@@ -438,6 +453,14 @@ class SwiggyInstamartScraper:
                 result.mrp_value = candidate
                 result.mrp = self._fmt(candidate)
 
+        # If still no MRP, try plain-number prices near h1 (Swiggy renders without ₹)
+        if result.price_value and not result.mrp_value:
+            plain_prices = data.get("nearby_plain_prices") or []
+            candidates = [v for v in plain_prices if v > result.price_value]
+            if candidates:
+                result.mrp_value = candidates[0]
+                result.mrp = self._fmt(candidates[0])
+
         # Compute discount if we have both prices
         if result.price_value and result.mrp_value and result.mrp_value > result.price_value:
             if not result.discount:
@@ -541,7 +564,8 @@ class SwiggyInstamartScraper:
                     print("  [Source: API response]")
 
             # Strategy 2: JS-based extraction (__NEXT_DATA__, JSON-LD, proximity pricing)
-            if not result.name:
+            # Also run if name found but MRP missing (to pick up plain-number prices from DOM)
+            if not result.name or not result.mrp_value:
                 self._extract_via_js(page, result)
 
             # Check for error page if still nothing

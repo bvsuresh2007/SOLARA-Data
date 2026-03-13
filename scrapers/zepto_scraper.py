@@ -231,9 +231,15 @@ class ZeptoScraper(BaseScraper):
                 f'tr:has-text("SALES"):has-text("{date_display} - {date_display}")'
             ).first
             if row.is_visible():
-                download_row = row
-                logger.info("[Zepto] Report row found on attempt %d", refresh_attempt)
-                break
+                # Also confirm the Download button is present and enabled before breaking —
+                # the row appears while the report is still "Processing" (no button yet).
+                dl_btn = row.locator('button:has-text("Download")')
+                if dl_btn.count() > 0 and dl_btn.first.is_enabled():
+                    download_row = row
+                    logger.info("[Zepto] Report row + Download button ready on attempt %d", refresh_attempt)
+                    break
+                logger.info("[Zepto] Row visible but Download button not ready yet, continuing poll...")
+                continue
 
             if refresh_attempt < max_poll:
                 logger.info("[Zepto] Row not ready yet, waiting 60s before next poll...")

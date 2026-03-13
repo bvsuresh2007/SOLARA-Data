@@ -350,6 +350,13 @@ class ZeptoScraper:
                     result.mrp_value = prices[1]
                     result.mrp = self._fmt(prices[1])
                     self._calc_discount(result)
+            elif prices and result.price_value and not result.mrp_value:
+                # API got price but not MRP — supplement MRP from DOM prices
+                candidates = [p for p in prices if p > result.price_value]
+                if candidates:
+                    result.mrp_value = candidates[0]
+                    result.mrp = self._fmt(candidates[0])
+                    self._calc_discount(result)
             if not result.availability:
                 result.availability = data.get("availability")
             return bool(result.name)
@@ -437,10 +444,11 @@ class ZeptoScraper:
                 if self._extract_meta(page, result):
                     print("  [Source: meta tags]")
 
-            # Strategy 3: DOM
-            if not result.name:
+            # Strategy 3: DOM (also run when name found but MRP missing)
+            if not result.name or not result.mrp_value:
                 if self._extract_dom(page, result):
-                    print("  [Source: DOM]")
+                    if not result.name:
+                        print("  [Source: DOM]")
 
             # Supplement missing image
             if not result.image_url:

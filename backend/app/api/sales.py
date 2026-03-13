@@ -695,6 +695,76 @@ def portal_daily_sales(
             for r in inv_rows
         }
 
+    # 5b. Latest Swiggy portal_stock from inventory snapshots.
+    swiggy_stock_map: dict[int, float | None] = {}
+    swiggy_portal = db.query(Portal).filter(func.lower(Portal.name) == "swiggy").first()
+    if swiggy_portal and product_ids:
+        sw_latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == swiggy_portal.id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
+        )
+        sw_inv_rows = (
+            db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
+            .join(
+                sw_latest_sq,
+                (InventorySnapshot.product_id == sw_latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == sw_latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == swiggy_portal.id)
+            .all()
+        )
+        for r in sw_inv_rows:
+            swiggy_stock_map[r.product_id] = (
+                float(r.portal_stock) if r.portal_stock is not None else None
+            )
+
+    # 5c. Latest Blinkit backend_stock + frontend_stock from inventory snapshots.
+    blinkit_backend_map: dict[int, float | None] = {}
+    blinkit_frontend_map: dict[int, float | None] = {}
+    blinkit_portal = db.query(Portal).filter(func.lower(Portal.name) == "blinkit").first()
+    if blinkit_portal and product_ids:
+        bl_latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == blinkit_portal.id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
+        )
+        bl_inv_rows = (
+            db.query(
+                InventorySnapshot.product_id,
+                InventorySnapshot.backend_stock,
+                InventorySnapshot.frontend_stock,
+            )
+            .join(
+                bl_latest_sq,
+                (InventorySnapshot.product_id == bl_latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == bl_latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == blinkit_portal.id)
+            .all()
+        )
+        for r in bl_inv_rows:
+            blinkit_backend_map[r.product_id] = (
+                float(r.backend_stock) if r.backend_stock is not None else None
+            )
+            blinkit_frontend_map[r.product_id] = (
+                float(r.frontend_stock) if r.frontend_stock is not None else None
+            )
+
     # 6. Pivot: aggregate sales per product (SUM across portals for same product+date)
     sales_agg = defaultdict(lambda: {"daily": {}, "asps": [], "total_units": 0, "total_value": 0.0})
     for row in sales_rows:
@@ -738,6 +808,9 @@ def portal_daily_sales(
                 portal_sku=p.portal_sku or "—",
                 bau_asp=bau_asp,
                 wh_stock=inv_map.get(pid),
+                swiggy_stock=swiggy_stock_map.get(pid),
+                backend_qty=blinkit_backend_map.get(pid),
+                frontend_qty=blinkit_frontend_map.get(pid),
                 daily_units={d: agg["daily"].get(d) for d in dates},
                 mtd_units=agg["total_units"],
                 mtd_value=mtd_value,

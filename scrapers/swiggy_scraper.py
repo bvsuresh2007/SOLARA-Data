@@ -72,6 +72,8 @@ def _profile_dir() -> Path:
 # Swiggy migrated from partner.swiggy.com → partner.instamart.in
 LOGIN_URL = "https://partner.instamart.in/"
 SALES_URL = os.environ.get("SWIGGY_LINK", "https://partner.instamart.in/instamart/sales")
+SOH_URL   = "https://partner.instamart.in/instamart/for-supply/inventory/stock-on-hand"
+DOWNLOADS_URL = "https://partner.instamart.in/instamart/downloads"
 
 # Both old and new domains are accepted (migration may be in-progress)
 _SWIGGY_DOMAINS = ("partner.instamart.in", "partner.swiggy.com")
@@ -137,7 +139,7 @@ class SwiggyScraper:
         except Exception:
             pass
         try:
-            self._pw.__exit__(None, None, None)
+            self._pw.stop()
         except Exception:
             pass
 
@@ -424,13 +426,29 @@ class SwiggyScraper:
         """Navigate to the Swiggy Instamart sales page."""
         self._log.info("[Swiggy] Navigating to sales page: %s", SALES_URL)
         self._page.goto(SALES_URL, wait_until="domcontentloaded")
-        self._page.wait_for_timeout(4000)
-        self._shot("sales_page")
 
         if not self._is_logged_in():
             raise RuntimeError(
                 f"[Swiggy] Redirected to login when navigating to sales. URL: {self._page.url}"
             )
+
+        # The sales page is a React SPA — after fresh OTP login the page can be slow to hydrate.
+        # Wait up to 30s for the "Date Range" filter or "Generate Report" button to appear.
+        loaded = False
+        for wait_label in ["Date Range", "Generate Report"]:
+            try:
+                loc = self._page.get_by_text(wait_label, exact=True).first
+                loc.wait_for(state="visible", timeout=30_000)
+                self._log.info("[Swiggy] Page loaded — '%s' is visible", wait_label)
+                loaded = True
+                break
+            except Exception:
+                pass
+
+        if not loaded:
+            self._log.warning("[Swiggy] Page may not be fully loaded (Date Range / Generate Report not found after 30s)")
+
+        self._shot("sales_page")
         self._log.info("[Swiggy] Sales page loaded. URL: %s", self._page.url)
 
     # ------------------------------------------------------------------
@@ -1212,6 +1230,159 @@ class SwiggyScraper:
     # Public interface
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Swiggy SOH (Stock on Hand) inventory download
+    # Flow: For Supply → Inventory → Stock On Hand → Bulk Download
+    #       → Downloads page → latest "Stock On Hand" row → Download
+    # ------------------------------------------------------------------
+
+    def _download_soh_report(self, report_date: date) -> "Path | None":
+        """
+        Click 'Bulk Download' on the Stock On Hand page, then navigate to Downloads
+        and download the latest Stock On Hand report.
+        Saves as swiggy_soh_YYYY-MM-DD.csv.
+        """
+        date_str = report_date.strftime("%Y-%m-%d")
+        output_path = self.out_dir / f"swiggy_soh_{date_str}.csv"
+
+        self._log.info("[Swiggy] Navigating to Stock On Hand page: %s", SOH_URL)
+        self._page.goto(SOH_URL, wait_until="domcontentloaded")
+        self._page.wait_for_timeout(5000)
+
+        # Ensure "For Supply" tab is active — direct URL navigation doesn't always activate it
+        try:
+            for_supply_tab = self._page.get_by_text("For Supply", exact=True)
+            if for_supply_tab.count() > 0:
+                for_supply_tab.first.click()
+                self._log.info("[Swiggy] Clicked 'For Supply' tab")
+                self._page.wait_for_timeout(3000)
+        except Exception:
+            pass  # already active, continue
+
+        # Navigate to Stock On Hand in left sidebar if not already there
+        try:
+            soh_link = self._page.get_by_text("Stock On Hand", exact=True)
+            if soh_link.count() > 0:
+                soh_link.first.click()
+                self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link")
+                self._page.wait_for_timeout(4000)
+        except Exception:
+            pass
+
+        self._shot("swiggy_soh_before_bulk_download")
+
+        # Click 'Bulk Download' button — try multiple selectors
+        try:
+            bulk_btn = None
+            for selector in [
+                "text=Bulk Download",
+                "button:has-text('Bulk Download')",
+                "a:has-text('Bulk Download')",
+                "[class*='bulk']:has-text('Download')",
+            ]:
+                try:
+                    el = self._page.locator(selector).first
+                    el.wait_for(state="visible", timeout=8_000)
+                    bulk_btn = el
+                    break
+                except Exception:
+                    continue
+
+            if bulk_btn is None:
+                raise Exception("Bulk Download button not found with any selector")
+
+            bulk_btn.click()
+            self._log.info("[Swiggy] Clicked 'Bulk Download' — report enqueued")
+            self._page.wait_for_timeout(2000)
+        except Exception as e:
+            self._log.error("[Swiggy] Could not click Bulk Download: %s", e)
+            self._shot("swiggy_soh_no_bulk_btn")
+            return None
+
+        # Click 'Downloads' sidebar link while For Supply sidebar is still visible
+        # Direct URL navigation 404s — must use the sidebar nav
+        self._log.info("[Swiggy] Clicking 'Downloads' sidebar link")
+        self._shot("swiggy_before_downloads_click")
+        clicked_downloads = False
+        for sel in [
+            "text=Downloads",
+            "[class*='nav'] >> text=Downloads",
+            "[class*='sidebar'] >> text=Downloads",
+            "[class*='menu'] >> text=Downloads",
+            "div >> text=Downloads",
+        ]:
+            try:
+                el = self._page.locator(sel).first
+                if el.count() > 0:
+                    el.click(timeout=5_000)
+                    clicked_downloads = True
+                    self._log.info("[Swiggy] Clicked Downloads via selector: %s", sel)
+                    break
+            except Exception:
+                continue
+        if not clicked_downloads:
+            try:
+                self._page.get_by_text("Downloads", exact=True).first.click(timeout=5_000)
+                clicked_downloads = True
+                self._log.info("[Swiggy] Clicked Downloads via get_by_text")
+            except Exception as e:
+                self._log.warning("[Swiggy] Could not click Downloads sidebar: %s", e)
+
+        self._page.wait_for_timeout(4000)
+        self._shot("swiggy_downloads_page")
+
+        # Poll for the latest ready Stock On Hand report (up to ~2 min)
+        MAX_POLLS = 12
+        for attempt in range(MAX_POLLS):
+            try:
+                self._page.wait_for_selector("text=Stock On Hand", timeout=10_000)
+            except Exception:
+                self._log.warning("[Swiggy] 'Stock On Hand' row not visible on Downloads page yet (attempt %d)", attempt + 1)
+                self._page.reload(wait_until="domcontentloaded")
+                self._page.wait_for_timeout(5000)
+                continue
+
+            # Find the Download button in the first Stock On Hand row
+            rows = self._page.locator("tr, [class*='row'], [class*='Row']").all()
+            download_btn = None
+            for row in rows:
+                if "Stock On Hand" in (row.inner_text() or ""):
+                    # Look for a Download button inside this row
+                    btn = row.locator("button:has-text('Download'), a:has-text('Download')").first
+                    if btn.count() > 0:
+                        download_btn = btn
+                        break
+
+            # Fallback: first Download button on page after Stock On Hand heading
+            if download_btn is None:
+                soh_heading = self._page.locator("text=Stock On Hand").first
+                if soh_heading.count() > 0:
+                    # Get the nearest sibling/parent download button
+                    download_btn = self._page.locator("button:has-text('Download'), a:has-text('Download')").first
+
+            if download_btn and download_btn.count() > 0:
+                self._log.info("[Swiggy] Found Download button — clicking")
+                try:
+                    with self._page.expect_download(timeout=60_000) as dl_info:
+                        download_btn.click()
+                    dl = dl_info.value
+                    dl.save_as(str(output_path))
+                    self._log.info("[Swiggy] SOH download complete: %s (%d bytes)", output_path, output_path.stat().st_size)
+                    return output_path
+                except Exception as e:
+                    self._log.error("[Swiggy] SOH download click failed: %s", e)
+                    self._shot("swiggy_soh_download_failed")
+                    return None
+
+            self._log.info("[Swiggy] Download not ready yet, waiting 10s (attempt %d/%d)…", attempt + 1, MAX_POLLS)
+            self._page.wait_for_timeout(10_000)
+            self._page.reload(wait_until="domcontentloaded")
+            self._page.wait_for_timeout(3000)
+
+        self._log.error("[Swiggy] SOH report did not become available after %d polls", MAX_POLLS)
+        self._shot("swiggy_soh_timeout")
+        return None
+
     def run(self, report_date: date = None) -> dict:
         """
         Full scraping cycle.
@@ -1277,6 +1448,14 @@ class SwiggyScraper:
                 if drive_link:
                     result["drive_link"] = drive_link
                     self._log.info("[Swiggy] Uploaded to Drive: %s", drive_link)
+
+            # Download Stock On Hand inventory snapshot
+            soh_file = self._download_soh_report(report_date)
+            result["soh_file"] = soh_file
+            if soh_file:
+                self._log.info("[Swiggy] SOH file: %s", soh_file)
+            else:
+                self._log.warning("[Swiggy] SOH download failed — sales data still saved")
 
         except Exception as exc:
             self._log.error("[Swiggy] Run failed: %s", exc)

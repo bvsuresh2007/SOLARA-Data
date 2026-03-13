@@ -107,7 +107,7 @@ class AmazonPIScraper:
         except Exception:
             pass
         try:
-            self._pw.__exit__(None, None, None)
+            self._pw.stop()
         except Exception:
             pass
 
@@ -257,6 +257,17 @@ class AmazonPIScraper:
         # ── Set category (AJAX reload, same page — Time Period persists) ──
         cat_sel = self._page.locator('select#category-dropdown')
         cat_sel.wait_for(state="visible", timeout=15_000)
+        # The dropdown is disabled during AJAX chart-data loading after time-period changes.
+        # Wait up to 60s for it to become enabled before selecting.
+        try:
+            self._page.wait_for_function(
+                "() => { const s = document.querySelector('select#category-dropdown'); "
+                "return s && !s.disabled; }",
+                timeout=60_000,
+            )
+            self._log.info("[AmazonPI]   Category dropdown is enabled")
+        except Exception as e:
+            self._log.warning("[AmazonPI]   Category dropdown still disabled after 60s: %s — trying anyway", e)
         cat_sel.select_option(label=category)
         self._log.info("[AmazonPI]   Category = %s", category)
 
@@ -343,8 +354,18 @@ class AmazonPIScraper:
 
         self._shot("tp_dates_filled")
 
-        # Click Apply
-        self._page.locator('#modal-save-button-time-period').click()
+        # Dismiss any still-open calendar popover before clicking Apply.
+        # After picking the "To" date the calendar may stay visible and intercept pointer events.
+        try:
+            self._page.keyboard.press("Escape")
+            self._page.wait_for_timeout(300)
+        except Exception:
+            pass
+
+        # Click Apply — use JS .click() to bypass any lingering calendar overlay.
+        self._page.evaluate(
+            "() => { const btn = document.querySelector('#modal-save-button-time-period'); if (btn) btn.click(); }"
+        )
         self._log.info("[AmazonPI]   Time Period applied: %s", date_str)
         self._page.wait_for_timeout(2000)
         self._shot("tp_done")
@@ -563,26 +584,26 @@ class AmazonPIScraper:
                 except Exception as e:
                     self._log.warning("[AmazonPI] href-click failed for %s: %s", category_slug, e)
 
-            # Method 2: click the download button by row index via JS (handles <button> elements)
+            # Method 2: click the download button by row index via Playwright locator
+            # (JS evaluate click doesn't properly associate with expect_download)
             if not downloaded:
                 try:
+                    # nth-child is 1-based; header is tr:nth-child(1), data rows start at 2
+                    # tds[9] is the 10th column → td:nth-child(10)
+                    nth_row = row_idx + 2
+                    btn_locator = self._page.locator(
+                        f"table tr:nth-child({nth_row}) td:nth-child(10) a, "
+                        f"table tr:nth-child({nth_row}) td:nth-child(10) button"
+                    ).first
                     with self._page.expect_download(timeout=60_000) as dl_info:
-                        self._page.evaluate("""(idx) => {
-                            const trs = Array.from(document.querySelectorAll('table tr'));
-                            const dataRows = trs.slice(1);
-                            const tr = dataRows[idx];
-                            if (!tr) return;
-                            const tds = Array.from(tr.querySelectorAll('td'));
-                            const btn = tds[9]?.querySelector('a, button');
-                            if (btn) btn.click();
-                        }""", row_idx)
+                        btn_locator.click()
                     dl = dl_info.value
                     dl.save_as(str(dest))
                     downloaded_files.append(dest)
                     downloaded = True
-                    self._log.info("[AmazonPI] Downloaded (row-idx click): %s", dest)
+                    self._log.info("[AmazonPI] Downloaded (row-idx locator click): %s", dest)
                 except Exception as e2:
-                    self._log.warning("[AmazonPI] row-idx click failed for %s: %s", category_slug, e2)
+                    self._log.warning("[AmazonPI] row-idx locator click failed for %s: %s", category_slug, e2)
 
             # Method 3: navigate to href URL directly (last resort)
             if not downloaded and link_href and not link_href.startswith("javascript"):

@@ -5,7 +5,9 @@ GET  /api/uploads/types       — list supported file types
 POST /api/uploads/file        — upload and ingest a portal CSV or master Excel
 
 Duplicate behaviour:
-  - Rows whose composite key already exists in the DB are silently skipped.
+  - Flipkart Kitchen / Appliances: latest file always wins — existing rows for
+    the same (portal_id, product_id, sale_date) are deleted and replaced.
+  - All other types: rows whose composite key already exists are silently skipped.
   - Rows with unmapped SKUs or bad dates go into errors[].
   - HTTP 200 is always returned with counts; never 409.
 """
@@ -37,6 +39,14 @@ from ..utils.portal_resolver import PortalResolver
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# ─── File types that overwrite (upsert) existing daily_sales rows ─────────────
+# For these portals the latest uploaded file is always authoritative — existing
+# rows for the same (portal_id, product_id, sale_date) are deleted and replaced.
+_UPSERT_SALES_TYPES = {
+    UploadFileType.FLIPKART_KITCHEN,
+    UploadFileType.FLIPKART_APPLIANCES,
+}
 
 # ─── File types that produce city_daily_sales rows ────────────────────────────
 _CITY_SALES_TYPES = {
@@ -207,11 +217,24 @@ def _process_sales(
             import_log_id=None,
         )
 
-    # ── Deduplicate against daily_sales ───────────────────────────────────────
+    # ── Deduplicate / overwrite against daily_sales ───────────────────────────
     keys = [(r["_portal_id"], r["_product_id"], r["_sale_date"]) for r in resolved]
-    existing_daily = _fetch_existing_daily_keys(db, keys)
-    to_insert = [r for r in resolved if (r["_portal_id"], r["_product_id"], r["_sale_date"]) not in existing_daily]
-    skipped = len(resolved) - len(to_insert)
+
+    if file_type in _UPSERT_SALES_TYPES:
+        # Delete existing rows so the latest uploaded file always wins
+        existing_daily = _fetch_existing_daily_keys(db, keys)
+        rows_to_delete = [k for k in keys if k in existing_daily]
+        if rows_to_delete:
+            db.query(DailySales).filter(
+                tuple_(DailySales.portal_id, DailySales.product_id, DailySales.sale_date)
+                .in_(rows_to_delete)
+            ).delete(synchronize_session=False)
+        to_insert = resolved
+        skipped = 0
+    else:
+        existing_daily = _fetch_existing_daily_keys(db, keys)
+        to_insert = [r for r in resolved if (r["_portal_id"], r["_product_id"], r["_sale_date"]) not in existing_daily]
+        skipped = len(resolved) - len(to_insert)
 
     inserted = 0
     import_log_id = None
