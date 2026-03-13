@@ -83,8 +83,6 @@ export function PortalDailyTable({ data, loading }: Props) {
   const showBlinkitStock = portal_name.toLowerCase() === "blinkit";
   // DOC = Days of Cover — only for Swiggy / Zepto / Blinkit
   const showDoc = showSwiggyStock || showZeptoStock || showBlinkitStock;
-  // Details colSpan: base 5 (Category, Portal SKU, BAU ASP, WH Stock) + conditionals
-  const detailsColSpan = 5 + (showSwiggyStock ? 1 : 0) + (showZeptoStock ? 1 : 0) + (showBlinkitStock ? 2 : 0);
 
   /** Compute Days of Cover for a single row given its DRR. */
   function calcDoc(row: PortalDailyRow, drr: number): number | null {
@@ -198,115 +196,79 @@ export function PortalDailyTable({ data, loading }: Props) {
 
           {/* ── HEADER ────────────────────────────────────────── */}
           <thead>
-            {/* Group header row */}
-            <tr className="border-b border-zinc-700/60">
-              {/* Frozen: Product Info group spanning 3 frozen cols */}
-              <th
-                colSpan={3}
-                className="py-1.5 px-3 text-left text-[10px] text-zinc-600 uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-900"
-                style={{ position: "sticky", top: 0, left: 0, zIndex: Z.frozenHeader, minWidth: FREEZE_END, boxShadow: edgeShadow }}
-              >
-                Product Info
-              </th>
-              {/* Non-frozen scrollable info cols */}
-              <th
-                colSpan={detailsColSpan}
-                className="py-1.5 px-3 text-center text-[10px] text-zinc-600 uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-900"
-                style={{ position: "sticky", top: 0, zIndex: Z.header }}
-              >
-                Details
-              </th>
-              {/* Daily Units group */}
-              <th
-                colSpan={dates.length}
-                className="py-1.5 px-3 text-center text-[10px] text-zinc-600 uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-900"
-                style={{ position: "sticky", top: 0, zIndex: Z.header }}
-              >
-                Daily Units Sold
-              </th>
-              {/* MTD group */}
-              <th
-                colSpan={showDoc ? 4 : 3}
-                className="py-1.5 px-3 text-center text-[10px] text-zinc-600 uppercase tracking-wider bg-zinc-900"
-                style={{ position: "sticky", top: 0, zIndex: Z.header }}
-              >
-                MTD
-              </th>
-            </tr>
-
             {/* Column header row */}
             <tr className="border-b border-zinc-800">
               {/* ── Frozen columns ── */}
               <th
                 className="py-2 px-2 text-zinc-500 font-medium text-right bg-zinc-900"
-                style={{ ...frozenStyle(freeze.row), position: "sticky", top: 28, left: freeze.row.left, zIndex: Z.frozenHeader }}
+                style={{ ...frozenStyle(freeze.row), position: "sticky", top: 0, left: freeze.row.left, zIndex: Z.frozenHeader }}
               >
                 #
               </th>
               <th
                 className="py-2 px-3 text-left text-zinc-400 font-medium bg-zinc-900"
-                style={{ ...frozenStyle(freeze.sku), position: "sticky", top: 28, left: freeze.sku.left, zIndex: Z.frozenHeader }}
+                style={{ ...frozenStyle(freeze.sku), position: "sticky", top: 0, left: freeze.sku.left, zIndex: Z.frozenHeader }}
               >
                 SKU
               </th>
               <th
                 className="py-2 px-3 text-left text-zinc-400 font-medium border-r border-zinc-700/60 bg-zinc-900"
-                style={{ ...frozenStyle(freeze.product), position: "sticky", top: 28, left: freeze.product.left, zIndex: Z.frozenHeader, boxShadow: edgeShadow }}
+                style={{ ...frozenStyle(freeze.product), position: "sticky", top: 0, left: freeze.product.left, zIndex: Z.frozenHeader, boxShadow: edgeShadow }}
               >
                 Product
               </th>
               {/* ── Scrollable info columns ── */}
-              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[140px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[140px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 Category
               </th>
-              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 Portal SKU
               </th>
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 BAU ASP
               </th>
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 WH Stock
               </th>
               {showSwiggyStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   Swiggy Stock
                 </th>
               )}
               {showZeptoStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   Zepto Stock
                 </th>
               )}
               {showBlinkitStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   Backend Qty
                 </th>
               )}
               {showBlinkitStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   Frontend Qty
                 </th>
               )}
               {/* ── Date columns ── */}
               {dates.map((d) => (
-                <th key={d} className="py-2 px-2 text-center text-zinc-400 font-medium min-w-[48px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th key={d} className="py-2 px-2 text-center text-zinc-400 font-medium min-w-[48px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   {fmtDate(d)}
                 </th>
               ))}
               {/* ── MTD columns ── */}
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium border-l border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-right text-zinc-400 font-medium border-l border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 Units
               </th>
-              <th className="py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 DRR
               </th>
               {showDoc && (
-                <th className="py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+                <th className="py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                   DOC
                 </th>
               )}
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900" style={{ position: "sticky", top: 28, zIndex: Z.header }}>
+              <th className="py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 Value
               </th>
             </tr>
