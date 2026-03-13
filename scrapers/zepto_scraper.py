@@ -13,6 +13,12 @@ Report download flow:
   3. Select report type Sales_F, enter yesterday's date → Submit
   4. Refresh page, find the new Sales_F row for yesterday → click Download
   5. Save Excel file
+
+Inventory SOH flow (same page, runs after sales):
+  1. Click Request Report
+  2. Select Vendor Inventory_F (no date fields)
+  3. Submit → refresh → find INVENTORY row → click Download
+  4. Save as zepto_soh_YYYY-MM-DD.xlsx
 """
 
 import logging
@@ -262,15 +268,104 @@ class ZeptoScraper(BaseScraper):
         return output_path
 
     # ------------------------------------------------------------------
-    # run() — overrides BaseScraper to add Drive session sync
+    # Inventory SOH download (Vendor Inventory_F)
+    # ------------------------------------------------------------------
+
+    def download_inventory_report(self, report_date: date = None) -> "Path | None":
+        """
+        Request and download the Vendor Inventory_F report.
+        No date range is needed — Zepto generates a current snapshot.
+        Polls for the INVENTORY row (up to 10 min) then downloads.
+        Returns the local file path, or None on failure (non-fatal).
+        """
+        if report_date is None:
+            report_date = date.today() - timedelta(days=1)
+
+        date_iso = report_date.strftime("%Y-%m-%d")
+        logger.info("[Zepto] Requesting Vendor Inventory_F report")
+
+        # Navigate to reports page
+        self.page.goto(REPORTS_URL, wait_until="domcontentloaded")
+        self.page.wait_for_load_state("networkidle")
+        self.page.wait_for_timeout(1500)
+
+        # --- Click Request Report ---
+        logger.info("[Zepto] Clicking Request Report (inventory)")
+        self.page.locator('button:has-text("Request Report")').first.click()
+        self.page.wait_for_timeout(1500)
+
+        # --- Select Vendor Inventory_F from MUI drawer dropdown ---
+        logger.info("[Zepto] Selecting Vendor Inventory_F report type")
+        drawer = self.page.locator('[role="presentation"]').last
+        report_select_wrapper = drawer.locator('div:has(> input[name="reportType"])').first
+        report_select_wrapper.click()
+        self.page.wait_for_timeout(800)
+
+        listbox = self.page.locator('ul[role="listbox"], [role="listbox"]').first
+        listbox.locator(
+            'li:has-text("Vendor Inventory_F"), [role="option"]:has-text("Vendor Inventory_F")'
+        ).first.click()
+        self.page.wait_for_timeout(500)
+
+        # --- NO date fields for inventory — submit directly ---
+        logger.info("[Zepto] Submitting Vendor Inventory_F request")
+        self.page.locator('button:has-text("Submit")').last.click()
+        self.page.wait_for_timeout(2000)
+
+        # --- Poll for INVENTORY row ---
+        logger.info("[Zepto] Waiting for INVENTORY report row")
+        download_row = None
+        max_poll = 10  # 10 × 60s = up to 10 minutes
+        for refresh_attempt in range(1, max_poll + 1):
+            logger.info("[Zepto] Polling inventory row (attempt %d/%d)", refresh_attempt, max_poll)
+            self.page.reload(wait_until="networkidle")
+            self.page.wait_for_timeout(3000)
+
+            row = self.page.locator('tr:has-text("INVENTORY")').first
+            if row.is_visible():
+                dl_btn = row.locator('button:has-text("Download")')
+                if dl_btn.count() > 0 and dl_btn.first.is_enabled():
+                    download_row = row
+                    logger.info("[Zepto] Inventory row + Download button ready on attempt %d", refresh_attempt)
+                    break
+                logger.info("[Zepto] Inventory row visible but Download not ready yet, continuing poll...")
+                if refresh_attempt < max_poll:
+                    self.page.wait_for_timeout(60_000)
+                continue
+
+            if refresh_attempt < max_poll:
+                logger.info("[Zepto] Inventory row not ready yet, waiting 60s...")
+                self.page.wait_for_timeout(60_000)
+
+        if download_row is None:
+            self._screenshot("zepto_inventory_row_not_found")
+            logger.error("[Zepto] No INVENTORY report row found after %d poll attempts — skipping SOH", max_poll)
+            return None
+
+        output_path = self.portal_data_path / f"zepto_soh_{date_iso}.xlsx"
+        try:
+            with self.page.expect_download(timeout=60_000) as dl_info:
+                download_row.locator('button:has-text("Download")').click()
+            dl_info.value.save_as(str(output_path))
+            logger.info("[Zepto] Inventory SOH saved to %s", output_path)
+            upload_to_drive(portal="Zepto", report_date=report_date, file_path=output_path)
+            return output_path
+        except Exception as exc:
+            logger.error("[Zepto] Inventory download failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # run() — overrides BaseScraper to add Drive session sync + inventory
     # ------------------------------------------------------------------
 
     def run(self, report_date: date = None) -> dict:
         """
-        Wraps BaseScraper.run() with Drive session sync:
+        Full Zepto scrape cycle with Drive session sync:
           1. Download zepto_session.json from Drive (so CI has a saved session)
-          2. Run the normal scrape (login checks session validity, falls back to OTP)
-          3. Upload the refreshed session JSON back to Drive
+          2. Init browser, login (checks session validity, falls back to OTP)
+          3. download_report() — Sales_F for report_date
+          4. download_inventory_report() — Vendor Inventory_F (current snapshot)
+          5. Upload the refreshed session JSON back to Drive
         No-op if PROFILE_STORAGE_DRIVE_FOLDER_ID is not set (local dev).
         """
         try:
@@ -278,12 +373,43 @@ class ZeptoScraper(BaseScraper):
         except ImportError:
             from profile_sync import download_session_file, upload_session_file
 
+        if report_date is None:
+            report_date = date.today() - timedelta(days=1)
+
         download_session_file("zepto")
-        result = super().run(report_date=report_date)
-        # Only upload the session if login succeeded — login() writes SESSION_FILE on success,
-        # and deletes/leaves it absent on failure, so its existence is the reliable indicator.
+
+        result = {
+            "portal": self.portal_name,
+            "date": report_date,
+            "file": None,
+            "soh_file": None,
+            "status": "failed",
+            "error": None,
+        }
+
+        try:
+            self._init_browser()
+            self.login()
+            # Sales report
+            result["file"] = self.download_report(report_date)
+            result["status"] = "success"
+            # Inventory SOH (non-fatal — failure doesn't abort the run)
+            try:
+                result["soh_file"] = self.download_inventory_report(report_date)
+            except Exception as inv_exc:
+                logger.warning("[Zepto] Inventory SOH download failed (non-fatal): %s", inv_exc)
+            self.logout()
+        except Exception as exc:
+            self._log.error("Zepto run failed: %s", exc)
+            self._screenshot("zepto_run_failed")
+            result["error"] = str(exc)
+        finally:
+            self._close_browser()
+
+        # Only upload session if login succeeded
         if self.SESSION_FILE.exists():
             upload_session_file("zepto")
+
         return result
 
     # ------------------------------------------------------------------

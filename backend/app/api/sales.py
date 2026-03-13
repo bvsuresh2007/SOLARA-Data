@@ -726,7 +726,38 @@ def portal_daily_sales(
                 float(r.portal_stock) if r.portal_stock is not None else None
             )
 
-    # 5c. Latest Blinkit backend_stock + frontend_stock from inventory snapshots.
+    # 5c. Latest Zepto portal_stock from inventory snapshots.
+    zepto_stock_map: dict[int, float | None] = {}
+    zepto_portal = db.query(Portal).filter(func.lower(Portal.name) == "zepto").first()
+    if zepto_portal and product_ids:
+        zt_latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == zepto_portal.id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
+        )
+        zt_inv_rows = (
+            db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
+            .join(
+                zt_latest_sq,
+                (InventorySnapshot.product_id == zt_latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == zt_latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == zepto_portal.id)
+            .all()
+        )
+        for r in zt_inv_rows:
+            zepto_stock_map[r.product_id] = (
+                float(r.portal_stock) if r.portal_stock is not None else None
+            )
+
+    # 5d. Latest Blinkit backend_stock + frontend_stock from inventory snapshots.
     blinkit_backend_map: dict[int, float | None] = {}
     blinkit_frontend_map: dict[int, float | None] = {}
     blinkit_portal = db.query(Portal).filter(func.lower(Portal.name) == "blinkit").first()
@@ -809,6 +840,7 @@ def portal_daily_sales(
                 bau_asp=bau_asp,
                 wh_stock=inv_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
+                zepto_stock=zepto_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),
                 frontend_qty=blinkit_frontend_map.get(pid),
                 daily_units={d: agg["daily"].get(d) for d in dates},

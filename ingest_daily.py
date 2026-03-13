@@ -350,6 +350,106 @@ def ingest_swiggy_soh(file_path: str, snapshot_date) -> None:
         db.close()
 
 
+def ingest_zepto_soh(file_path: str, snapshot_date: date) -> None:
+    """
+    Parse the Zepto Vendor Inventory_F report and upsert portal_stock
+    into inventory_snapshots.
+
+    Matches by Item Id / SKU → product_portal_mapping.portal_sku (Zepto codes).
+    Aggregates available/closing stock across any duplicate rows per SKU.
+    """
+    import pandas as pd
+    import math
+    from backend.app.models.sales import ProductPortalMapping
+
+    p = Path(file_path)
+    if not p.exists():
+        print(f"  [zepto_soh] File not found, skipping: {file_path}")
+        return
+
+    df = pd.read_csv(p) if p.suffix.lower() == ".csv" else pd.read_excel(p)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    def find_col(keywords):
+        for kw in keywords:
+            for col in df.columns:
+                if kw in col:
+                    return col
+        return None
+
+    # Zepto inventory report columns (may vary slightly):
+    # "item_id", "item id", "sku", "sku_id" for the product identifier
+    # "closing_stock", "closing stock", "available_stock", "quantity" for stock
+    sku_col   = find_col(["item_id", "item id", "itemid", "sku_id", "sku id", "skuid", "sku"])
+    stock_col = find_col(["closing_stock", "closing stock", "available_stock", "available stock",
+                           "quantity_available", "quantity available", "quantity", "stock"])
+
+    if not sku_col:
+        print(f"  [zepto_soh] Could not find SKU/item_id column. Columns: {list(df.columns)}")
+        return
+    if not stock_col:
+        print(f"  [zepto_soh] Could not find stock column. Columns: {list(df.columns)}")
+        return
+
+    print(f"  [zepto_soh] Columns — sku={sku_col!r} stock={stock_col!r}")
+
+    def safe_float(v):
+        try:
+            f = float(v)
+            return 0.0 if math.isnan(f) else f
+        except (ValueError, TypeError):
+            return 0.0
+
+    # Aggregate stock per SKU (sum across any multi-row per SKU)
+    sku_agg: dict[str, float] = {}
+    for _, row in df.iterrows():
+        sku = str(row.get(sku_col, "")).strip().rstrip(".0")
+        if not sku or sku.lower() in ("nan", ""):
+            continue
+        sku_agg[sku] = sku_agg.get(sku, 0.0) + safe_float(row[stock_col])
+
+    db = SessionLocal()
+    try:
+        zepto_portal = db.query(Portal).filter(Portal.name.ilike("%zepto%")).first()
+        if not zepto_portal:
+            print("  [zepto_soh] Zepto portal not found in DB")
+            return
+
+        mappings = db.query(ProductPortalMapping).filter(
+            ProductPortalMapping.portal_id == zepto_portal.id
+        ).all()
+        portal_sku_to_product = {str(m.portal_sku).strip(): m.product_id for m in mappings if m.portal_sku}
+
+        rows_upserted = 0
+        rows_skipped  = 0
+        for sku, total_stock in sku_agg.items():
+            product_id = portal_sku_to_product.get(sku)
+            if not product_id:
+                rows_skipped += 1
+                continue
+
+            stmt = insert(InventorySnapshot).values(
+                portal_id=zepto_portal.id,
+                product_id=product_id,
+                snapshot_date=snapshot_date,
+                portal_stock=total_stock,
+            ).on_conflict_do_update(
+                index_elements=["portal_id", "product_id", "snapshot_date"],
+                set_={"portal_stock": insert(InventorySnapshot).excluded.portal_stock}
+            )
+            db.execute(stmt)
+            rows_upserted += 1
+
+        db.commit()
+        print(f"  [zepto_soh] upserted={rows_upserted} skipped={rows_skipped} (no portal_sku match)")
+    except Exception as e:
+        db.rollback()
+        print(f"  [zepto_soh] ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     d = REPORT_DATE
     print(f"Ingesting sales data for {d}")
@@ -368,4 +468,8 @@ if __name__ == "__main__":
     swiggy_soh_csv  = f"data/raw/swiggy/swiggy_soh_{d}.csv"
     swiggy_soh_xlsx = f"data/raw/swiggy/swiggy_soh_{d}.xlsx"
     ingest_swiggy_soh(swiggy_soh_csv if Path(swiggy_soh_csv).exists() else swiggy_soh_xlsx, d)
+    print("  [zepto_soh] ingesting SOH inventory...")
+    zepto_soh_csv  = f"data/raw/zepto/zepto_soh_{d}.csv"
+    zepto_soh_xlsx = f"data/raw/zepto/zepto_soh_{d}.xlsx"
+    ingest_zepto_soh(zepto_soh_csv if Path(zepto_soh_csv).exists() else zepto_soh_xlsx, d)
     print("Done.")
