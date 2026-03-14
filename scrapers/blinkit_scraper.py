@@ -488,40 +488,152 @@ class BlinkitScraper:
 
     def _download_soh_report(self, report_date: date) -> "Path | None":
         """
-        Click 'Download SOH Data' on /app/soh and capture the browser download.
-        The button generates a CSV client-side (all 2000+ warehouse rows).
-        Requires accept_downloads=True on the context (set in _init_browser).
-        Saves as blinkit_soh_YYYY-MM-DD.csv.
+        Download the SOH (Stock On Hand) report for report_date.
+
+        Mechanism (discovered via network analysis):
+        - /app/soh "Download SOH Data" button calls POST /v1/reports/soh-details-excel/
+          which returns {'data': {'request_id': NNNN}, ...} — async, just like sales.
+        - The generated file appears on /app/report-requests with a "SOH" report type.
+        - We click the button, then poll /app/report-requests for the SOH row, then
+          download via expect_download (same pattern as sales report).
         """
         date_str = report_date.strftime("%Y-%m-%d")
         output_path = self.out_dir / f"blinkit_soh_{date_str}.csv"
 
-        self._log.info("[Blinkit] Navigating to SOH page")
-        self._page.goto(SOH_URL, wait_until="domcontentloaded")
-        self._page.wait_for_timeout(5000)
-        self._dismiss_modals()
-
-        # Wait for table to load
         try:
-            self._page.wait_for_selector(".ant-table-row", timeout=15_000)
-        except Exception:
-            self._log.error("[Blinkit] SOH table not found")
-            self._shot("soh_no_table")
+            # Step 1: Navigate to SOH page and click the download button to queue the job
+            self._log.info("[Blinkit][SOH] Navigating to SOH page: %s", SOH_URL)
+            self._page.goto(SOH_URL, wait_until="domcontentloaded")
+            self._page.wait_for_timeout(5000)
+            self._dismiss_modals()
+
+            try:
+                self._page.wait_for_selector(".ant-table-row", timeout=15_000)
+            except Exception:
+                self._log.error("[Blinkit][SOH] SOH table not found — cannot queue report")
+                self._shot("soh_no_table")
+                return None
+
+            self._log.info("[Blinkit][SOH] Clicking 'Download SOH Data' to queue async report")
+            btn = self._page.get_by_text("Download SOH Data", exact=True)
+            btn.wait_for(state="visible", timeout=10_000)
+            btn.click()
+            # Small wait for the API call to register before we navigate away
+            self._page.wait_for_timeout(3_000)
+
+            # Step 2: Poll /app/report-requests for the SOH row (same as sales flow)
+            self._log.info("[Blinkit][SOH] Navigating to /app/report-requests to poll")
+            self._page.goto(
+                "https://partnersbiz.com/app/report-requests",
+                wait_until="domcontentloaded",
+            )
+            self._page.wait_for_timeout(3_000)
+
+            max_polls = 20  # up to ~10 minutes
+            for poll in range(max_polls):
+                self._log.info("[Blinkit][SOH] Poll %d/%d", poll + 1, max_polls)
+
+                row_info = self._page.evaluate("""
+                    () => {
+                        const rows = Array.from(document.querySelectorAll('tr'));
+                        for (const row of rows) {
+                            const cells = Array.from(row.querySelectorAll('td'));
+                            if (cells.length < 3) continue;
+                            const reportType = (cells[1]?.innerText || '').trim().toLowerCase();
+                            const status     = (cells[2]?.innerText || '').trim().toLowerCase();
+
+                            // Match any SOH / Stock-on-Hand report type
+                            if (!reportType.includes('soh') &&
+                                    !reportType.includes('stock') &&
+                                    !reportType.includes('inventory')) continue;
+
+                            if (status === 'success') {
+                                const actionsTd = cells[cells.length - 1];
+                                const icon = actionsTd.querySelector(
+                                    'a, button, svg, [class*="action"], [class*="download"]'
+                                );
+                                if (icon && icon.getBoundingClientRect().width > 0) {
+                                    icon.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                    return {status: 'clicked', reportType: cells[1]?.innerText,
+                                            text: actionsTd.innerHTML.substring(0, 100)};
+                                }
+                                const anyEl = Array.from(actionsTd.querySelectorAll('*')).find(
+                                    el => el.getBoundingClientRect().width > 0
+                                );
+                                if (anyEl) {
+                                    anyEl.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                    return {status: 'clicked_fallback',
+                                            reportType: cells[1]?.innerText};
+                                }
+                                return {status: 'success_no_button',
+                                        reportType: cells[1]?.innerText};
+                            }
+
+                            return {status: status, reportType: cells[1]?.innerText};
+                        }
+                        return {status: 'not_found'};
+                    }
+                """)
+
+                self._log.info("[Blinkit][SOH] Row status: %s", row_info)
+
+                if row_info and row_info.get("status") in ("clicked", "clicked_fallback"):
+                    try:
+                        with self._page.expect_download(timeout=30_000) as dl_info:
+                            pass  # already triggered by JS click above
+                        dl = dl_info.value
+                        dl.save_as(str(output_path))
+                        self._log.info("[Blinkit][SOH] Downloaded: %s", output_path)
+                        return output_path
+                    except Exception:
+                        # Retry with explicit JS click
+                        self._log.info("[Blinkit][SOH] expect_download missed — retry click")
+                        try:
+                            with self._page.expect_download(timeout=15_000) as dl_info:
+                                self._page.evaluate("""
+                                    () => {
+                                        const rows = Array.from(document.querySelectorAll('tr'));
+                                        for (const row of rows) {
+                                            const cells = Array.from(row.querySelectorAll('td'));
+                                            if (cells.length < 3) continue;
+                                            const rt = (cells[1]?.innerText || '').toLowerCase();
+                                            if (!rt.includes('soh') && !rt.includes('stock') &&
+                                                    !rt.includes('inventory')) continue;
+                                            const actionsTd = cells[cells.length - 1];
+                                            const icon = actionsTd.querySelector('a, button, [class*="action"]');
+                                            if (icon) {
+                                                icon.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                                                return true;
+                                            }
+                                        }
+                                        return false;
+                                    }
+                                """)
+                            dl = dl_info.value
+                            dl.save_as(str(output_path))
+                            self._log.info("[Blinkit][SOH] Downloaded (retry): %s", output_path)
+                            return output_path
+                        except Exception as e2:
+                            self._log.warning("[Blinkit][SOH] Download click failed: %s", e2)
+
+                if row_info and row_info.get("status") == "success_no_button":
+                    self._log.warning("[Blinkit][SOH] SOH row success but no download button")
+                    self._shot("soh_success_no_button")
+                    break
+
+                if poll < max_polls - 1:
+                    self._log.info("[Blinkit][SOH] Waiting 30s…")
+                    self._page.wait_for_timeout(30_000)
+                    self._page.reload(wait_until="domcontentloaded")
+                    self._page.wait_for_timeout(2_000)
+
+            self._shot("soh_poll_timeout")
+            self._log.warning("[Blinkit][SOH] SOH report not ready after %d polls", max_polls)
             return None
 
-        self._log.info("[Blinkit] Clicking 'Download SOH Data' button")
-        try:
-            with self._page.expect_download(timeout=90_000) as dl_info:
-                btn = self._page.get_by_text("Download SOH Data", exact=True)
-                btn.wait_for(state="visible", timeout=10_000)
-                btn.click()
-            dl = dl_info.value
-            dl.save_as(str(output_path))
-            self._log.info("[Blinkit] SOH download complete: %s (%d bytes)", output_path, output_path.stat().st_size)
-            return output_path
         except Exception as e:
             self._shot("soh_download_failed")
-            self._log.error("[Blinkit] SOH download failed: %s", e)
+            self._log.error("[Blinkit][SOH] Error: %s", e)
             return None
 
     # ------------------------------------------------------------------

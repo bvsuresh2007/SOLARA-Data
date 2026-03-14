@@ -19,7 +19,7 @@ from backend.app.models.sales import Product
 from backend.app.models.metadata import Portal
 
 BATCH = 500
-REPORT_DATE = date(2026, 3, 12)
+REPORT_DATE = date(2026, 3, 13)
 
 
 def ingest(portal_name, file_path):
@@ -178,8 +178,12 @@ def ingest_blinkit_soh(file_path: str, snapshot_date: date) -> None:
         return None
 
     item_id_col  = find_col(["item id", "item_id", "itemid"])
-    backend_col  = find_col(["backend quantity", "backend qty", "backend"])
-    frontend_col = find_col(["frontend quantity", "frontend qty", "frontend"])
+    # Prefer *_inv_qty / *_qty columns before broader "backend" / "frontend" match
+    # to avoid matching "backend_facility_name" or similar descriptor columns.
+    backend_col  = find_col(["backend_inv", "backend inv", "backend qty", "backend quantity",
+                              "backend stock", "backend"])
+    frontend_col = find_col(["frontend_inv", "frontend inv", "frontend qty", "frontend quantity",
+                              "frontend stock", "frontend"])
 
     if not item_id_col:
         print(f"  [blinkit_soh] Could not find item id column. Columns: {list(df.columns)}")
@@ -367,7 +371,13 @@ def ingest_zepto_soh(file_path: str, snapshot_date: date) -> None:
         print(f"  [zepto_soh] File not found, skipping: {file_path}")
         return
 
-    df = pd.read_csv(p) if p.suffix.lower() == ".csv" else pd.read_excel(p)
+    # Zepto sometimes saves CSVs with .xlsx extension — detect by magic bytes
+    with open(p, "rb") as _f:
+        _magic = _f.read(4)
+    if _magic[:2] == b"PK":
+        df = pd.read_excel(p, engine="openpyxl")
+    else:
+        df = pd.read_csv(p)
     df.columns = [str(c).strip().lower() for c in df.columns]
 
     def find_col(keywords):
@@ -380,9 +390,10 @@ def ingest_zepto_soh(file_path: str, snapshot_date: date) -> None:
     # Zepto inventory report columns (may vary slightly):
     # "item_id", "item id", "sku", "sku_id" for the product identifier
     # "closing_stock", "closing stock", "available_stock", "quantity" for stock
-    sku_col   = find_col(["item_id", "item id", "itemid", "sku_id", "sku id", "skuid", "sku"])
+    # Match on EAN barcode first (matches portal_sku in DB), fall back to sku code / item id
+    sku_col   = find_col(["ean", "item_id", "item id", "itemid", "sku_id", "sku id", "skuid", "sku code", "sku"])
     stock_col = find_col(["closing_stock", "closing stock", "available_stock", "available stock",
-                           "quantity_available", "quantity available", "quantity", "stock"])
+                           "quantity_available", "quantity available", "quantity", "stock", "units"])
 
     if not sku_col:
         print(f"  [zepto_soh] Could not find SKU/item_id column. Columns: {list(df.columns)}")
