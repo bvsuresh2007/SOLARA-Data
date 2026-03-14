@@ -183,12 +183,12 @@ function SalesContent() {
       )}
       {loading ? <ChartSkeleton h={320} /> : <RevenueTrend data={trend} />}
       {loading ? (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <ChartSkeleton h={360} />
           <ChartSkeleton h={360} />
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <PortalBreakdown data={byPortal} />
           <CategoryBreakdown data={byCategory} />
         </div>
