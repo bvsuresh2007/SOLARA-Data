@@ -404,8 +404,7 @@ def sales_by_category(
             ppm.portal_id == DailySales.portal_id,
         ))
         .filter(DailySales.portal_id.in_(included))
-        .filter(ProductCategory.l1_name.isnot(None))
-        .filter(func.lower(ProductCategory.l1_name) != "select a category")
+        .filter(ProductCategory.l1_name.in_(["Drinkware", "Cookware", "Kitchen Appliances"]))
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
