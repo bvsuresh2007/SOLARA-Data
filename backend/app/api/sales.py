@@ -584,12 +584,37 @@ def portal_daily_sales(
             DailySales.sale_date <= end_date,
         )
     )
+    mapped = []
     if portal_obj_id is not None:
         mapped = _mapped_product_ids(db, portal_obj_id)
         if mapped:
             sales_q = sales_q.filter(DailySales.product_id.in_(mapped))
     sales_product_ids = sales_q.all()
-    product_ids = [r[0] for r in sales_product_ids]
+    product_ids = set(r[0] for r in sales_product_ids)
+
+    # Also include products that have inventory for this portal (even with no sales).
+    # Applies to Blinkit (backend_stock/frontend_stock), Swiggy, Zepto (portal_stock).
+    if portal_obj_id is not None and not is_all_portals:
+        _inv_portals = {"blinkit", "swiggy", "zepto"}
+        if portal.lower() in _inv_portals:
+            inv_q = db.query(func.distinct(InventorySnapshot.product_id)).filter(
+                InventorySnapshot.portal_id == portal_obj_id,
+            )
+            if portal.lower() == "blinkit":
+                from sqlalchemy import or_
+                inv_q = inv_q.filter(
+                    or_(
+                        InventorySnapshot.backend_stock.isnot(None),
+                        InventorySnapshot.frontend_stock.isnot(None),
+                    )
+                )
+            else:
+                inv_q = inv_q.filter(InventorySnapshot.portal_stock.isnot(None))
+            if mapped:
+                inv_q = inv_q.filter(InventorySnapshot.product_id.in_(mapped))
+            product_ids |= set(r[0] for r in inv_q.all())
+
+    product_ids = list(product_ids)
     if not product_ids:
         return PortalDailyResponse(portal_name=portal_display_name, dates=dates, rows=[])
 
@@ -811,11 +836,13 @@ def portal_daily_sales(
             sales_agg[pid]["total_units"] += int(row.units_sold)
             sales_agg[pid]["total_value"] += float(row.revenue or 0)
 
-    # 7. Assemble — only products that had at least one sale record
+    # 7. Assemble rows — products with sales + inventory-only products
     result_rows: List[PortalDailyRow] = []
+    assembled_pids: set = set()
     for pid, agg in sales_agg.items():
         if pid not in product_map:
             continue
+        assembled_pids.add(pid)
         p = product_map[pid]
         # Use portal-specific BAU ASP from product_portal_mapping first;
         # fall back to products.default_asp; then calculated average
@@ -846,6 +873,32 @@ def portal_daily_sales(
                 daily_units={d: agg["daily"].get(d) for d in dates},
                 mtd_units=agg["total_units"],
                 mtd_value=mtd_value,
+            )
+        )
+
+    # 7b. Inventory-only products (have stock but no sales in this date range)
+    for pid in product_ids:
+        if pid in assembled_pids or pid not in product_map:
+            continue
+        p = product_map[pid]
+        bau_asp = portal_bau_map.get(pid)
+        if bau_asp is None and p.default_asp is not None and float(p.default_asp) > 0:
+            bau_asp = float(p.default_asp)
+        result_rows.append(
+            PortalDailyRow(
+                sku_code=p.sku_code,
+                product_name=p.product_name,
+                category=p.category or "—",
+                portal_sku=p.portal_sku or "—",
+                bau_asp=bau_asp,
+                wh_stock=inv_map.get(pid),
+                swiggy_stock=swiggy_stock_map.get(pid),
+                zepto_stock=zepto_stock_map.get(pid),
+                backend_qty=blinkit_backend_map.get(pid),
+                frontend_qty=blinkit_frontend_map.get(pid),
+                daily_units={d: None for d in dates},
+                mtd_units=0,
+                mtd_value=0.0,
             )
         )
 
