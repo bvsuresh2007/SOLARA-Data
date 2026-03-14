@@ -392,7 +392,7 @@ def sales_by_category(
     bau_rev = _bau_revenue_expr(ppm)
     q = (
         db.query(
-            ProductCategory.l2_name.label("category"),
+            ProductCategory.l1_name.label("category"),
             func.coalesce(func.sum(bau_rev), Decimal("0")).label("total_revenue"),
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
             func.count(func.distinct(DailySales.product_id)).label("product_count"),
@@ -404,8 +404,8 @@ def sales_by_category(
             ppm.portal_id == DailySales.portal_id,
         ))
         .filter(DailySales.portal_id.in_(included))
-        .filter(ProductCategory.l2_name.isnot(None))
-        .filter(func.lower(ProductCategory.l2_name) != "select a category")
+        .filter(ProductCategory.l1_name.isnot(None))
+        .filter(func.lower(ProductCategory.l1_name) != "select a category")
     )
     if start_date:
         q = q.filter(DailySales.sale_date >= start_date)
@@ -418,7 +418,7 @@ def sales_by_category(
             q = q.filter(DailySales.product_id.in_(mapped))
 
     rows = (
-        q.group_by(ProductCategory.l2_name)
+        q.group_by(ProductCategory.l1_name)
         .having(func.sum(DailySales.revenue) > 0)
         .order_by(text("total_revenue DESC NULLS LAST"))
         .all()

@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type {
   SalesSummary, SalesByDimension, SalesTrend,
-  Portal, PortalDailyResponse,
+  Portal, PortalDailyResponse, SalesByCategory,
 } from "@/lib/api";
 import { format, differenceInCalendarDays, subDays } from "date-fns";
 
@@ -13,6 +13,7 @@ import { SalesFilters }           from "@/components/sales/sales-filters";
 import { KpiStrip }               from "@/components/sales/kpi-strip";
 import { RevenueTrend }           from "@/components/sales/revenue-trend";
 import { PortalBreakdown }        from "@/components/sales/portal-breakdown";
+import { CategoryBreakdown }      from "@/components/sales/category-breakdown";
 
 import { PortalDailyTable }       from "@/components/sales/portal-daily-table";
 import { Skeleton }               from "@/components/ui/skeleton";
@@ -49,6 +50,7 @@ function SalesContent() {
   const [prevSummary,    setPrevSummary]    = useState<SalesSummary | null>(null);
   const [latestDate,     setLatestDate]     = useState<string | null>(null);
 
+  const [byCategory,     setByCategory]     = useState<SalesByCategory[]>([]);
   const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
   const [dailyLoading,   setDailyLoading]   = useState(false);
   const [loading,        setLoading]        = useState(true);
@@ -96,13 +98,14 @@ function SalesContent() {
         api.salesTrend(fp),                                         // 3
         api.salesByProduct({ ...fp, limit: 1, sort_by: "revenue" }),// 4
         api.salesByProduct({ ...fp, limit: 1, sort_by: "units" }), // 5
-        ...(prevFp ? [api.salesSummary(prevFp)] : []),              // 6 (optional)
+        api.salesByCategory(fp),                                    // 6
+        ...(prevFp ? [api.salesSummary(prevFp)] : []),              // 7 (optional)
       ];
 
       const results = await Promise.allSettled(promises);
 
-      const [portalsRes, summaryRes, byPortalRes, trendRes, topRevRes, topUnitsRes] = results;
-      const prevSummaryRes = prevFp ? results[6] : undefined;
+      const [portalsRes, summaryRes, byPortalRes, trendRes, topRevRes, topUnitsRes, byCategoryRes] = results;
+      const prevSummaryRes = prevFp ? results[7] : undefined;
 
       if (portalsRes.status    === "fulfilled") setPortals(portalsRes.value as Portal[]);
       if (summaryRes.status    === "fulfilled") setSummary(summaryRes.value as SalesSummary);
@@ -118,6 +121,10 @@ function SalesContent() {
         setTopByUnits((topUnitsRes.value as SalesByDimension[])[0]);
       } else {
         setTopByUnits(null);
+      }
+
+      if (byCategoryRes?.status === "fulfilled") {
+        setByCategory(byCategoryRes.value as SalesByCategory[]);
       }
 
       // Previous-period summary for growth calculation
@@ -175,7 +182,17 @@ function SalesContent() {
         />
       )}
       {loading ? <ChartSkeleton h={320} /> : <RevenueTrend data={trend} />}
-      {loading ? <ChartSkeleton h={360} /> : <PortalBreakdown data={byPortal} />}
+      {loading ? (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <ChartSkeleton h={360} />
+          <ChartSkeleton h={360} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <PortalBreakdown data={byPortal} />
+          <CategoryBreakdown data={byCategory} />
+        </div>
+      )}
       <PortalDailyTable data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
     </main>
   );
