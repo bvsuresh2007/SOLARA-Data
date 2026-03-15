@@ -5,7 +5,7 @@ COPY package.json ./
 RUN npm install --frozen-lockfile
 
 COPY . .
-ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_URL=https://solara-backend-goe6h2dneq-el.a.run.app
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
