@@ -3,6 +3,7 @@ File upload API — partial duplicate handling.
 
 GET  /api/uploads/types       — list supported file types
 POST /api/uploads/file        — upload and ingest a portal CSV or master Excel
+POST /api/uploads/sku-mapping — upload SKU mapping file to sync product names & new SKUs
 
 Duplicate behaviour:
   - Flipkart Kitchen / Appliances: latest file always wins — existing rows for
@@ -12,6 +13,7 @@ Duplicate behaviour:
   - HTTP 200 is always returned with counts; never 409.
 """
 
+import io
 import logging
 import time
 from collections import defaultdict
@@ -19,6 +21,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models.inventory import ImportLog, InventorySnapshot
-from ..models.sales import CityDailySales, DailySales
+from ..models.sales import CityDailySales, DailySales, Product
 from ..schemas.uploads import (
     FILE_TYPE_META,
     FileTypeInfo,
@@ -36,6 +39,16 @@ from ..schemas.uploads import (
 )
 from ..utils.excel_parsers import ColumnMismatchError, _parse_date_ymd, parse_file
 from ..utils.portal_resolver import PortalResolver
+
+
+class SkuMappingResult(BaseModel):
+    file_name: str
+    rows_parsed: int
+    updated: int
+    added: int
+    skipped: int
+    errors: list[str]
+    time_taken_s: Optional[float] = None
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -522,6 +535,136 @@ def _process_master_excel(
     return UploadResult(
         file_type="", file_name="", rows_parsed=0,
         inserted=inserted, skipped=skipped, errors=errors, import_log_id=import_log_id,
+    )
+
+
+# =============================================================================
+# POST /sku-mapping
+# =============================================================================
+
+@router.post(
+    "/sku-mapping",
+    response_model=SkuMappingResult,
+    summary="Upload SKU mapping file to sync product names and add new SKUs",
+)
+async def upload_sku_mapping(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Accepts an .xlsx or .csv with at minimum a SKU column and a Product name column.
+    Expected columns (case-insensitive, flexible naming):
+      - SKU / sku_code / sku code / SKU CODE
+      - Product / product_name / product name / Product Name / PRODUCT
+      - Category / category_name / l2_name  (optional)
+
+    For each row:
+      - If the SKU already exists in products → UPDATE product_name (and category if provided)
+      - If the SKU does not exist → INSERT new product
+    Returns counts of updated / added / skipped rows.
+    """
+    import pandas as pd
+
+    t_start = time.monotonic()
+    filename = file.filename or "sku_mapping"
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds 20 MB limit")
+
+    # ── Parse file ────────────────────────────────────────────────────────────
+    try:
+        ext = (filename.rsplit(".", 1)[-1]).lower()
+        if ext in ("xlsx", "xls"):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            df = pd.read_csv(io.BytesIO(content))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail={"message": f"Could not parse file: {exc}"})
+
+    # Normalise column names
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def find_col(keywords: list[str]) -> Optional[str]:
+        for kw in keywords:
+            for col in df.columns:
+                if col.lower() == kw.lower():
+                    return col
+        for kw in keywords:
+            for col in df.columns:
+                if kw.lower() in col.lower():
+                    return col
+        return None
+
+    sku_col      = find_col(["SKU", "sku_code", "sku code", "SKU CODE"])
+    product_col  = find_col(["Product", "product_name", "product name", "Product Name", "PRODUCT"])
+    category_col = find_col(["Category", "category_name", "l2_name", "CATEGORY"])
+
+    if not sku_col:
+        raise HTTPException(status_code=422, detail={"message": f"Could not find SKU column. Columns found: {list(df.columns)}"})
+    if not product_col:
+        raise HTTPException(status_code=422, detail={"message": f"Could not find Product name column. Columns found: {list(df.columns)}"})
+
+    rows_parsed = len(df)
+    updated = added = skipped = 0
+    errors: list[str] = []
+
+    # Build category name → id lookup if category column present
+    cat_name_to_id: dict[str, int] = {}
+    if category_col:
+        from ..models.metadata import ProductCategory  # type: ignore
+        cats = db.query(ProductCategory).all()
+        for c in cats:
+            cat_name_to_id[c.l2_name.lower().strip()] = c.id
+            cat_name_to_id[c.l1_name.lower().strip()] = c.id  # fallback
+
+    try:
+        for _, row in df.iterrows():
+            sku = str(row.get(sku_col, "")).strip()
+            product_name = str(row.get(product_col, "")).strip()
+
+            if not sku or sku.lower() == "nan":
+                skipped += 1
+                continue
+            if not product_name or product_name.lower() == "nan":
+                skipped += 1
+                continue
+
+            # Resolve category_id if provided
+            category_id: Optional[int] = None
+            if category_col:
+                cat_raw = str(row.get(category_col, "")).strip().lower()
+                category_id = cat_name_to_id.get(cat_raw)
+
+            existing = db.query(Product).filter(Product.sku_code == sku).first()
+            if existing:
+                existing.product_name = product_name
+                if category_id is not None:
+                    existing.category_id = category_id
+                updated += 1
+            else:
+                new_product = Product(
+                    sku_code=sku,
+                    product_name=product_name,
+                    category_id=category_id,
+                    unit_type="pieces",
+                )
+                db.add(new_product)
+                added += 1
+
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Error processing SKU mapping file %s", filename)
+        raise HTTPException(status_code=500, detail={"message": f"Database error: {exc}"})
+
+    return SkuMappingResult(
+        file_name=filename,
+        rows_parsed=rows_parsed,
+        updated=updated,
+        added=added,
+        skipped=skipped,
+        errors=errors,
+        time_taken_s=round(time.monotonic() - t_start, 1),
     )
 
 

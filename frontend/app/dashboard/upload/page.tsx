@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import type { DragEvent, ChangeEvent } from "react";
 import {
-  Upload, FileSpreadsheet, Check, AlertTriangle, X, Loader2,
+  Upload, FileSpreadsheet, Check, AlertTriangle, X, Loader2, RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import {
 import { NavTabs } from "@/components/ui/nav-tabs";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+// ─── Portal file upload types ────────────────────────────────────────────────
 
 interface FileType {
   value: string;
@@ -44,17 +46,103 @@ interface ParseError422 {
   columns_found_in_file?: string[];
 }
 
+// ─── SKU Mapping types ───────────────────────────────────────────────────────
+
+interface SkuMappingResult {
+  file_name: string;
+  rows_parsed: number;
+  updated: number;
+  added: number;
+  skipped: number;
+  errors: string[];
+  time_taken_s: number | null;
+}
+
+// ─── Shared drop-zone component ──────────────────────────────────────────────
+
+function FileDropZone({
+  file,
+  onFile,
+  onClear,
+  accept = ".xlsx,.xls,.csv",
+}: {
+  file: File | null;
+  onFile: (f: File) => void;
+  onClear: () => void;
+  accept?: string;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+
+  function pick(f: File) {
+    const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["xlsx", "xls", "csv"].includes(ext)) return;
+    onFile(f);
+  }
+  function onDragOver(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(true); }
+  function onDragLeave(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(false); }
+  function onDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer.files[0]; if (f) pick(f);
+  }
+  function onInputChange(e: ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]; if (f) pick(f); e.target.value = "";
+  }
+
+  return (
+    <div
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+      onClick={() => ref.current?.click()}
+      className={`relative rounded-xl border-2 border-dashed cursor-pointer transition-all duration-150 p-10 text-center select-none ${
+        dragging ? "border-orange-500 bg-orange-500/5"
+          : file ? "border-zinc-600 bg-zinc-800/40"
+          : "border-zinc-700 hover:border-zinc-500 hover:bg-zinc-800/20"
+      }`}
+    >
+      <input ref={ref} type="file" accept={accept} onChange={onInputChange} className="hidden" />
+      {file ? (
+        <div className="space-y-2">
+          <FileSpreadsheet size={32} className="mx-auto text-orange-400" />
+          <p className="text-zinc-100 font-medium text-sm">{file.name}</p>
+          <p className="text-zinc-500 text-xs">{(file.size / 1024).toFixed(1)} KB</p>
+          <Button
+            variant="ghost" size="sm"
+            onClick={(e) => { e.stopPropagation(); onClear(); }}
+            className="text-xs text-zinc-600 hover:text-zinc-300 h-auto py-1"
+          >
+            Remove
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Upload size={32} className={`mx-auto transition-colors ${dragging ? "text-orange-400" : "text-zinc-600"}`} />
+          <div>
+            <p className="text-zinc-300 text-sm font-medium">Drag & drop or click to browse</p>
+            <p className="text-zinc-600 text-xs mt-1">.xlsx · .xls · .csv</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
 export default function UploadPage() {
+  // Portal file upload state
   const [fileTypes, setFileTypes]       = useState<FileType[]>([]);
   const [selectedType, setSelectedType] = useState<string>("");
-  const [file, setFile]                 = useState<File | null>(null);
-  const [dragging, setDragging]         = useState(false);
+  const [portalFile, setPortalFile]     = useState<File | null>(null);
   const [uploading, setUploading]       = useState(false);
   const [result, setResult]             = useState<UploadResult | null>(null);
   const [parseError, setParseError]     = useState<ParseError422 | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // SKU mapping upload state
+  const [skuFile, setSkuFile]           = useState<File | null>(null);
+  const [skuUploading, setSkuUploading] = useState(false);
+  const [skuResult, setSkuResult]       = useState<SkuMappingResult | null>(null);
+  const [skuError, setSkuError]         = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`${BASE}/api/uploads/types`)
@@ -68,34 +156,16 @@ export default function UploadPage() {
 
   const selectedTypeInfo = fileTypes.find((t) => t.value === selectedType);
 
-  function clearResult() { setResult(null); setParseError(null); setNetworkError(null); }
-  function pickFile(f: File) {
-    const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
-    if (!["xlsx", "xls", "csv"].includes(ext)) {
-      clearResult();
-      setNetworkError(`Unsupported file type ".${ext}". Please upload an .xlsx, .xls, or .csv file.`);
-      return;
-    }
-    setFile(f); clearResult();
-  }
-  function onDragOver(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(true); }
-  function onDragLeave(e: DragEvent<HTMLDivElement>) { e.preventDefault(); setDragging(false); }
-  function onDrop(e: DragEvent<HTMLDivElement>) {
-    e.preventDefault(); setDragging(false);
-    const f = e.dataTransfer.files[0]; if (f) pickFile(f);
-  }
-  function onInputChange(e: ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (f) pickFile(f); e.target.value = "";
-  }
+  function clearPortal() { setResult(null); setParseError(null); setNetworkError(null); }
 
-  async function handleUpload() {
-    if (!file || !selectedType || uploading) return;
-    if (file.size > 50 * 1024 * 1024) {
-      setNetworkError(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 50 MB.`);
+  async function handlePortalUpload() {
+    if (!portalFile || !selectedType || uploading) return;
+    if (portalFile.size > 50 * 1024 * 1024) {
+      setNetworkError(`File too large (${(portalFile.size / 1024 / 1024).toFixed(1)} MB). Max 50 MB.`);
       return;
     }
-    setUploading(true); clearResult();
-    const form = new FormData(); form.append("file", file);
+    setUploading(true); clearPortal();
+    const form = new FormData(); form.append("file", portalFile);
     try {
       const res = await fetch(`${BASE}/api/uploads/file?file_type=${selectedType}`, { method: "POST", body: form });
       const data = await res.json();
@@ -108,22 +178,123 @@ export default function UploadPage() {
     } finally { setUploading(false); }
   }
 
-  const canUpload = !!file && !!selectedType && !uploading;
+  async function handleSkuUpload() {
+    if (!skuFile || skuUploading) return;
+    setSkuUploading(true); setSkuResult(null); setSkuError(null);
+    const form = new FormData(); form.append("file", skuFile);
+    try {
+      const res = await fetch(`${BASE}/api/uploads/sku-mapping`, { method: "POST", body: form });
+      const data = await res.json();
+      if (res.ok) setSkuResult(data as SkuMappingResult);
+      else setSkuError(data?.detail?.message ?? data?.detail ?? `Server error ${res.status}`);
+    } catch (err) {
+      console.error("[SkuMapping] network error:", err);
+      setSkuError("Network error — could not reach the backend.");
+    } finally { setSkuUploading(false); }
+  }
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-6 space-y-6">
+    <main className="min-h-screen bg-zinc-950 p-6 space-y-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-50">Upload Data</h1>
           <p className="text-sm text-zinc-500 mt-0.5">
-            Push portal CSV exports or master Excel directly into the database
+            Push portal CSV exports, master Excel, or update the SKU master
           </p>
         </div>
         <NavTabs />
       </header>
 
-      <div className="max-w-2xl space-y-4">
-        {/* Step 1 */}
+      {/* ── SKU Mapping section ─────────────────────────────────────────────── */}
+      <section className="max-w-2xl space-y-4">
+        <div className="flex items-center gap-3">
+          <RefreshCw size={16} className="text-orange-400" />
+          <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">SKU Mapping</h2>
+          <span className="text-xs text-zinc-600">Update product names & add new SKUs</span>
+        </div>
+
+        <Card>
+          <CardContent className="pt-5 space-y-4">
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Upload a file with columns <span className="font-mono text-zinc-300">SKU</span>, <span className="font-mono text-zinc-300">Product</span>, and optionally <span className="font-mono text-zinc-300">Category</span>.
+              Existing products get their name updated; new SKUs are added automatically.
+            </p>
+
+            <FileDropZone
+              file={skuFile}
+              onFile={(f) => { setSkuFile(f); setSkuResult(null); setSkuError(null); }}
+              onClear={() => { setSkuFile(null); setSkuResult(null); setSkuError(null); }}
+            />
+
+            <Button
+              onClick={handleSkuUpload}
+              disabled={!skuFile || skuUploading}
+              className="w-full rounded-xl py-5 text-sm font-semibold"
+            >
+              {skuUploading
+                ? <><Loader2 size={16} className="animate-spin" />Syncing…</>
+                : <><RefreshCw size={16} />Sync SKU Mapping</>}
+            </Button>
+
+            {skuError && (
+              <div className="flex items-start gap-3 rounded-xl border border-red-800 bg-red-950/30 px-4 py-3">
+                <X size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-red-300">{skuError}</p>
+              </div>
+            )}
+
+            {skuResult && (
+              <Card className={skuResult.updated > 0 || skuResult.added > 0 ? "border-green-800" : "border-zinc-700"}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Check size={16} className="text-green-400" />
+                    <span className="text-zinc-100">SKU Mapping Synced</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-4 gap-3 text-center">
+                    <div>
+                      <p className="text-2xl font-bold text-zinc-400">{skuResult.rows_parsed}</p>
+                      <p className="text-xs text-zinc-500 mt-1">Parsed</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-blue-400">{skuResult.updated}</p>
+                      <p className="text-xs text-zinc-500 mt-1">Updated</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-green-400">{skuResult.added}</p>
+                      <p className="text-xs text-zinc-500 mt-1">Added</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-zinc-600">{skuResult.skipped}</p>
+                      <p className="text-xs text-zinc-500 mt-1">Skipped</p>
+                    </div>
+                  </div>
+                  {skuResult.errors.length > 0 && (
+                    <div className="max-h-32 overflow-y-auto rounded-lg bg-zinc-800/50 p-3 space-y-1">
+                      {skuResult.errors.map((e, i) => (
+                        <p key={i} className="text-xs text-zinc-400">{e}</p>
+                      ))}
+                    </div>
+                  )}
+                  {skuResult.time_taken_s != null && (
+                    <p className="text-[10px] text-zinc-600 text-right">Processed in {skuResult.time_taken_s}s</p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* ── Portal / Sales data section ─────────────────────────────────────── */}
+      <section className="max-w-2xl space-y-4">
+        <div className="flex items-center gap-3">
+          <Upload size={16} className="text-orange-400" />
+          <h2 className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Portal Sales &amp; Inventory</h2>
+          <span className="text-xs text-zinc-600">Push CSV exports into the database</span>
+        </div>
+
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-xs text-zinc-500 font-semibold uppercase tracking-widest">
@@ -134,7 +305,7 @@ export default function UploadPage() {
             {fileTypes.length === 0 && !networkError ? (
               <div className="h-9 rounded-lg bg-zinc-800 animate-pulse" />
             ) : (
-              <Select value={selectedType} onValueChange={(v) => { setSelectedType(v); clearResult(); }}>
+              <Select value={selectedType} onValueChange={(v) => { setSelectedType(v); clearPortal(); }}>
                 <SelectTrigger className="w-full bg-zinc-800 border-zinc-700 text-zinc-100">
                   <SelectValue placeholder="Select file type…" />
                 </SelectTrigger>
@@ -159,7 +330,6 @@ export default function UploadPage() {
           </CardContent>
         </Card>
 
-        {/* Step 2 */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-xs text-zinc-500 font-semibold uppercase tracking-widest">
@@ -167,44 +337,15 @@ export default function UploadPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div
-              onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`relative rounded-xl border-2 border-dashed cursor-pointer transition-all duration-150 p-12 text-center select-none ${
-                dragging ? "border-orange-500 bg-orange-500/5"
-                  : file ? "border-zinc-600 bg-zinc-800/40"
-                  : "border-zinc-700 hover:border-zinc-500 hover:bg-zinc-800/20"
-              }`}
-            >
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={onInputChange} className="hidden" />
-              {file ? (
-                <div className="space-y-2">
-                  <FileSpreadsheet size={36} className="mx-auto text-orange-400" />
-                  <p className="text-zinc-100 font-medium text-sm">{file.name}</p>
-                  <p className="text-zinc-500 text-xs">{(file.size / 1024).toFixed(1)} KB</p>
-                  <Button
-                    variant="ghost" size="sm"
-                    onClick={(e) => { e.stopPropagation(); setFile(null); clearResult(); }}
-                    className="text-xs text-zinc-600 hover:text-zinc-300 h-auto py-1"
-                  >
-                    Remove
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <Upload size={36} className={`mx-auto transition-colors ${dragging ? "text-orange-400" : "text-zinc-600"}`} />
-                  <div>
-                    <p className="text-zinc-300 text-sm font-medium">Drag & drop or click to browse</p>
-                    <p className="text-zinc-600 text-xs mt-1">.xlsx · .xls · .csv</p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <FileDropZone
+              file={portalFile}
+              onFile={(f) => { setPortalFile(f); clearPortal(); }}
+              onClear={() => { setPortalFile(null); clearPortal(); }}
+            />
           </CardContent>
         </Card>
 
-        {/* Upload button */}
-        <Button onClick={handleUpload} disabled={!canUpload} className="w-full rounded-xl py-6 text-sm font-semibold">
+        <Button onClick={handlePortalUpload} disabled={!portalFile || !selectedType || uploading} className="w-full rounded-xl py-6 text-sm font-semibold">
           {uploading ? <><Loader2 size={16} className="animate-spin" />Uploading…</> : <><Upload size={16} />Upload File</>}
         </Button>
 
@@ -322,17 +463,13 @@ export default function UploadPage() {
               )}
 
               <div className="flex items-center gap-4 text-[10px] text-zinc-600">
-                {result.import_log_id && (
-                  <span>Audit log ID: {result.import_log_id}</span>
-                )}
-                {result.time_taken_s != null && (
-                  <span className="ml-auto">Processed in {result.time_taken_s}s</span>
-                )}
+                {result.import_log_id && <span>Audit log ID: {result.import_log_id}</span>}
+                {result.time_taken_s != null && <span className="ml-auto">Processed in {result.time_taken_s}s</span>}
               </div>
             </CardContent>
           </Card>
         )}
-      </div>
+      </section>
     </main>
   );
 }
