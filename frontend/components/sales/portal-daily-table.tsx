@@ -380,26 +380,26 @@ export function PortalDailyTable({ data, loading }: Props) {
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               {/* WH Stock total */}
-              <td className={`py-2.5 px-2 text-center font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+              <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {rows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
               {showSwiggyStock && (
-                <td className="py-2.5 px-2 text-center font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                   {rows.reduce((s, r) => s + (r.swiggy_stock ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showZeptoStock && (
-                <td className="py-2.5 px-2 text-center font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                   {rows.reduce((s, r) => s + (r.zepto_stock ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showBlinkitStock && (
-                <td className="py-2.5 px-2 text-center font-bold tabular-nums text-zinc-200 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                   {rows.reduce((s, r) => s + (r.backend_qty ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showBlinkitStock && (
-                <td className="py-2.5 px-2 text-center font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                   {rows.reduce((s, r) => s + (r.frontend_qty ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
