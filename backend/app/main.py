@@ -22,7 +22,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3131",
+        "https://solara-frontend-891651347357.asia-south1.run.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
