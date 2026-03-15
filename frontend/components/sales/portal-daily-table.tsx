@@ -99,7 +99,7 @@ export function PortalDailyTable({ data, loading }: Props) {
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
     const headers = [
-      "#", "SKU", "Product", "Category", "Portal SKU", "BAU ASP", "WH Stock",
+      "#", "SKU", "Product", "Portal SKU", "BAU ASP", "WH Stock",
       ...(showSwiggyStock  ? ["Swiggy Stock"] : []),
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
@@ -111,7 +111,6 @@ export function PortalDailyTable({ data, loading }: Props) {
       i + 1,
       row.sku_code,
       row.product_name,
-      row.category,
       row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
@@ -218,9 +217,6 @@ export function PortalDailyTable({ data, loading }: Props) {
                 Product
               </th>
               {/* ── Scrollable info columns ── */}
-              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[140px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                Category
-              </th>
               <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
                 Portal SKU
               </th>
@@ -299,8 +295,6 @@ export function PortalDailyTable({ data, loading }: Props) {
                 >
                   <span className="block truncate max-w-[190px]" title={row.product_name}>{row.product_name}</span>
                 </td>
-                {/* Scrollable: Category */}
-                <td className="py-1.5 px-3 text-zinc-500">{row.category}</td>
                 {/* Scrollable: Portal SKU */}
                 <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
                 {/* Scrollable: BAU ASP */}
@@ -375,8 +369,7 @@ export function PortalDailyTable({ data, loading }: Props) {
               >
                 Total
               </td>
-              {/* Scrollable info cols — empty (Category, Portal SKU, BAU ASP) */}
-              <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
+              {/* Scrollable info cols — empty (Portal SKU, BAU ASP) */}
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               {/* WH Stock total */}
