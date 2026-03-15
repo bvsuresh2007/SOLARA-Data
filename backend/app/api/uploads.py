@@ -614,8 +614,10 @@ async def upload_sku_mapping(
         from ..models.metadata import ProductCategory  # type: ignore
         cats = db.query(ProductCategory).all()
         for c in cats:
-            cat_name_to_id[c.l2_name.lower().strip()] = c.id
-            cat_name_to_id[c.l1_name.lower().strip()] = c.id  # fallback
+            if c.l2_name:
+                cat_name_to_id[c.l2_name.lower().strip()] = c.id
+            if c.l1_name:
+                cat_name_to_id[c.l1_name.lower().strip()] = c.id  # fallback
 
     try:
         for _, row in df.iterrows():
