@@ -26,7 +26,7 @@ def _bau_revenue_expr(ppm_alias=None):
     if ppm_alias is not None:
         return case(
             (
-                and_(ppm_alias.bau_asp.isnot(None), ppm_alias.bau_asp > 0),
+                ppm_alias.bau_asp.isnot(None),
                 ppm_alias.bau_asp * DailySales.units_sold,
             ),
             (
@@ -661,7 +661,6 @@ def portal_daily_sales(
                 ProductPortalMapping.portal_id == portal_obj_id,
                 ProductPortalMapping.product_id.in_(product_ids),
                 ProductPortalMapping.bau_asp.isnot(None),
-                ProductPortalMapping.bau_asp > 0,
             )
             .all()
         )
@@ -852,9 +851,11 @@ def portal_daily_sales(
         else:
             asps = agg["asps"]
             bau_asp = round(sum(asps) / len(asps), 2) if asps else None
-        # MTD value: use BAU ASP * units when available, else raw revenue
+        # MTD value: use BAU ASP * units when available and non-zero, else raw revenue
         if bau_asp is not None and bau_asp > 0:
             mtd_value = round(bau_asp * agg["total_units"], 0)
+        elif bau_asp == 0:
+            mtd_value = 0
         else:
             mtd_value = round(agg["total_value"], 0)
         result_rows.append(
