@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useMemo } from "react";
 import { format, parseISO } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PortalDailyResponse, PortalDailyRow } from "@/lib/api";
@@ -36,9 +37,14 @@ function DocBadge({ v }: { v: number | null }) {
   return <span className={cls}>{v.toFixed(1)}d</span>;
 }
 
+// ─── Sort icon ────────────────────────────────────────────────────────────────
+
+function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
+  if (!active) return <span className="ml-1 text-zinc-700 select-none">↕</span>;
+  return <span className="ml-1 text-zinc-300 select-none">{dir === "asc" ? "↑" : "↓"}</span>;
+}
+
 // ─── Frozen column config ───────────────────────────────────────────────────
-// Only freeze 3 columns: #, SKU, Product — keeps it lightweight
-// Widths: # = 36px, SKU = 110px, Product = 200px  → total = 346px
 
 const freeze = {
   row:     { w: 36,  left: 0   },
@@ -46,25 +52,34 @@ const freeze = {
   product: { w: 200, left: 146 },
 } as const;
 
-const FREEZE_END = 346; // last frozen col right edge
+const FREEZE_END = 346;
 
-// z-layers: frozen-body=10, frozen-header=30, header-scrollable=20, footer=25, frozen-footer=35
 const Z = { body: 10, header: 20, frozenHeader: 30, footer: 25, frozenFooter: 35 } as const;
 
-/** Inline style for a frozen cell */
 function frozenStyle(col: { w: number; left: number }) {
   return { position: "sticky" as const, left: col.left, minWidth: col.w, width: col.w };
 }
+
+// ─── Sort key type ────────────────────────────────────────────────────────────
+
+type SortKey =
+  | "sku" | "product" | "portal_sku" | "bau_asp" | "wh_stock"
+  | "swiggy_stock" | "zepto_stock" | "backend_qty" | "frontend_qty"
+  | "mtd_units" | "drr" | "doc" | "mtd_value"
+  | { date: string };   // per-day sort
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
   data: PortalDailyResponse | null;
   loading: boolean;
-  portalSelected?: boolean; // kept for backwards compat, but no longer used
+  portalSelected?: boolean;
 }
 
 export function PortalDailyTable({ data, loading }: Props) {
+  const [sortKey, setSortKey] = useState<SortKey>("mtd_units");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   if (loading) return <Skeleton className="w-full rounded-xl" style={{ height: 360 }} />;
 
   if (!data || data.rows.length === 0) {
@@ -77,14 +92,11 @@ export function PortalDailyTable({ data, loading }: Props) {
 
   const { dates, rows, portal_name } = data;
 
-  // Portal-specific column visibility
   const showSwiggyStock  = portal_name.toLowerCase() === "swiggy";
   const showZeptoStock   = portal_name.toLowerCase() === "zepto";
   const showBlinkitStock = portal_name.toLowerCase() === "blinkit";
-  // DOC = Days of Cover — only for Swiggy / Zepto / Blinkit
   const showDoc = showSwiggyStock || showZeptoStock || showBlinkitStock;
 
-  /** Compute Days of Cover for a single row given its DRR. */
   function calcDoc(row: PortalDailyRow, drr: number): number | null {
     if (drr <= 0) return null;
     if (showBlinkitStock) {
@@ -95,6 +107,62 @@ export function PortalDailyTable({ data, loading }: Props) {
     if (showZeptoStock)  return row.zepto_stock  != null ? row.zepto_stock  / drr : null;
     return null;
   }
+
+  // ─── Sorting ───────────────────────────────────────────────────────────────
+
+  function toggleSort(key: SortKey) {
+    const keyStr = typeof key === "string" ? key : key.date;
+    const curStr = typeof sortKey === "string" ? sortKey : (sortKey as { date: string }).date;
+    if (keyStr === curStr) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      // Numeric cols default desc, text cols default asc
+      const textCols: SortKey[] = ["sku", "product", "portal_sku"];
+      const isText = typeof key === "string" && (textCols as string[]).includes(key);
+      setSortDir(isText ? "asc" : "desc");
+    }
+  }
+
+  function isActive(key: SortKey): boolean {
+    if (typeof key === "object" && typeof sortKey === "object")
+      return key.date === (sortKey as { date: string }).date;
+    return key === sortKey;
+  }
+
+  /** Null-safe numeric value for a row given the current sort key. Nulls always last. */
+  function rowVal(row: PortalDailyRow): string | number {
+    const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
+    if (typeof sortKey === "object") return row.daily_units[sortKey.date] ?? -Infinity;
+    switch (sortKey) {
+      case "sku":          return row.sku_code;
+      case "product":      return row.product_name;
+      case "portal_sku":   return row.portal_sku ?? "";
+      case "bau_asp":      return row.bau_asp ?? -Infinity;
+      case "wh_stock":     return row.wh_stock ?? -Infinity;
+      case "swiggy_stock": return row.swiggy_stock ?? -Infinity;
+      case "zepto_stock":  return row.zepto_stock ?? -Infinity;
+      case "backend_qty":  return row.backend_qty ?? -Infinity;
+      case "frontend_qty": return row.frontend_qty ?? -Infinity;
+      case "mtd_units":    return row.mtd_units;
+      case "drr":          return drr;
+      case "doc":          return calcDoc(row, drr) ?? -Infinity;
+      case "mtd_value":    return row.mtd_value;
+      default:             return 0;
+    }
+  }
+
+  const sortedRows = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const av = rowVal(a), bv = rowVal(b);
+      if (typeof av === "string" && typeof bv === "string") {
+        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      const an = av as number, bn = bv as number;
+      return sortDir === "asc" ? an - bn : bn - an;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, sortKey, sortDir]);
 
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
@@ -107,11 +175,8 @@ export function PortalDailyTable({ data, loading }: Props) {
       "MTD Units", "DRR", ...(showDoc ? ["DOC"] : []), "MTD Value",
     ];
 
-    const csvRows = rows.map((row, i) => [
-      i + 1,
-      row.sku_code,
-      row.product_name,
-      row.portal_sku,
+    const csvRows = sortedRows.map((row, i) => [
+      i + 1, row.sku_code, row.product_name, row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
       ...(showSwiggyStock  ? [row.swiggy_stock  != null ? row.swiggy_stock  : "—"] : []),
@@ -130,7 +195,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     ]);
 
     const totals = [
-      "Total", "", "", "", "", "", "",
+      "Total", "", "", "", "", "",
       ...(showSwiggyStock  ? [""] : []),
       ...(showZeptoStock   ? [""] : []),
       ...(showBlinkitStock ? ["", ""] : []),
@@ -147,23 +212,20 @@ export function PortalDailyTable({ data, loading }: Props) {
         ? `"${s.replace(/"/g, '""')}"` : s;
     };
 
-    const csv = [headers, ...csvRows, totals]
-      .map(row => row.map(escape).join(","))
-      .join("\n");
-
+    const csv = [headers, ...csvRows, totals].map(row => row.map(escape).join(",")).join("\n");
     const dateFrom = dates[0] ?? "start";
     const dateTo   = dates[dates.length - 1] ?? "end";
-    const filename = `${portal_name}_${dateFrom}_${dateTo}.csv`;
-
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
+    a.href = url; a.download = `${portal_name}_${dateFrom}_${dateTo}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
-  // Shadow applied via box-shadow on the last frozen column
   const edgeShadow = "4px 0 6px -2px rgba(0,0,0,0.45)";
+
+  /** Reusable clickable th wrapper */
+  const thCls = "cursor-pointer select-none hover:text-zinc-200 transition-colors";
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
@@ -193,150 +255,119 @@ export function PortalDailyTable({ data, loading }: Props) {
       <div className="overflow-auto max-h-[70vh]">
         <table className="w-full text-xs whitespace-nowrap border-collapse">
 
-          {/* ── HEADER ────────────────────────────────────────── */}
+          {/* ── HEADER ── */}
           <thead>
-            {/* Column header row */}
             <tr className="border-b border-zinc-800">
-              {/* ── Frozen columns ── */}
+              {/* Frozen: # */}
               <th
-                className="py-2 px-2 text-zinc-500 font-medium text-right bg-zinc-900"
+                className={`py-2 px-2 text-zinc-500 font-medium text-right bg-zinc-900 ${thCls}`}
                 style={{ ...frozenStyle(freeze.row), position: "sticky", top: 0, left: freeze.row.left, zIndex: Z.frozenHeader }}
+                onClick={() => toggleSort("sku")}
               >
                 #
               </th>
+              {/* Frozen: SKU */}
               <th
-                className="py-2 px-3 text-left text-zinc-400 font-medium bg-zinc-900"
+                className={`py-2 px-3 text-left text-zinc-400 font-medium bg-zinc-900 ${thCls}`}
                 style={{ ...frozenStyle(freeze.sku), position: "sticky", top: 0, left: freeze.sku.left, zIndex: Z.frozenHeader }}
+                onClick={() => toggleSort("sku")}
               >
-                SKU
+                SKU<SortIcon active={isActive("sku")} dir={sortDir} />
               </th>
+              {/* Frozen: Product */}
               <th
-                className="py-2 px-3 text-left text-zinc-400 font-medium border-r border-zinc-700/60 bg-zinc-900"
+                className={`py-2 px-3 text-left text-zinc-400 font-medium border-r border-zinc-700/60 bg-zinc-900 ${thCls}`}
                 style={{ ...frozenStyle(freeze.product), position: "sticky", top: 0, left: freeze.product.left, zIndex: Z.frozenHeader, boxShadow: edgeShadow }}
+                onClick={() => toggleSort("product")}
               >
-                Product
+                Product<SortIcon active={isActive("product")} dir={sortDir} />
               </th>
-              {/* ── Scrollable info columns ── */}
-              <th className="py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                Portal SKU
+              {/* Portal SKU */}
+              <th className={`py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("portal_sku")}>
+                Portal SKU<SortIcon active={isActive("portal_sku")} dir={sortDir} />
               </th>
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                BAU ASP
+              {/* BAU ASP */}
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("bau_asp")}>
+                BAU ASP<SortIcon active={isActive("bau_asp")} dir={sortDir} />
               </th>
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                WH Stock
+              {/* WH Stock */}
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("wh_stock")}>
+                WH Stock<SortIcon active={isActive("wh_stock")} dir={sortDir} />
               </th>
               {showSwiggyStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  Swiggy Stock
+                <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("swiggy_stock")}>
+                  Swiggy Stock<SortIcon active={isActive("swiggy_stock")} dir={sortDir} />
                 </th>
               )}
               {showZeptoStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  Zepto Stock
+                <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("zepto_stock")}>
+                  Zepto Stock<SortIcon active={isActive("zepto_stock")} dir={sortDir} />
                 </th>
               )}
               {showBlinkitStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  Backend Qty
+                <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("backend_qty")}>
+                  Backend Qty<SortIcon active={isActive("backend_qty")} dir={sortDir} />
                 </th>
               )}
               {showBlinkitStock && (
-                <th className="py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  Frontend Qty
+                <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("frontend_qty")}>
+                  Frontend Qty<SortIcon active={isActive("frontend_qty")} dir={sortDir} />
                 </th>
               )}
-              {/* ── Date columns ── */}
+              {/* Date columns */}
               {dates.map((d) => (
-                <th key={d} className="py-2 px-2 text-center text-zinc-400 font-medium min-w-[48px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  {fmtDate(d)}
+                <th key={d} className={`py-2 px-2 text-center text-zinc-400 font-medium min-w-[48px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort({ date: d })}>
+                  {fmtDate(d)}<SortIcon active={isActive({ date: d })} dir={sortDir} />
                 </th>
               ))}
-              {/* ── MTD columns ── */}
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium border-l border-zinc-700/60 bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                Units
+              {/* MTD columns */}
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium border-l border-zinc-700/60 bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("mtd_units")}>
+                Units<SortIcon active={isActive("mtd_units")} dir={sortDir} />
               </th>
-              <th className="py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                DRR
+              <th className={`py-2 px-3 text-right text-sky-500 font-medium bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("drr")}>
+                DRR<SortIcon active={isActive("drr")} dir={sortDir} />
               </th>
               {showDoc && (
-                <th className="py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                  DOC
+                <th className={`py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("doc")}>
+                  DOC<SortIcon active={isActive("doc")} dir={sortDir} />
                 </th>
               )}
-              <th className="py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900" style={{ position: "sticky", top: 0, zIndex: Z.header }}>
-                Value
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("mtd_value")}>
+                Value<SortIcon active={isActive("mtd_value")} dir={sortDir} />
               </th>
             </tr>
           </thead>
 
-          {/* ── BODY ──────────────────────────────────────────── */}
+          {/* ── BODY ── */}
           <tbody className="divide-y divide-zinc-800/50">
-            {rows.map((row: PortalDailyRow, i: number) => (
+            {sortedRows.map((row: PortalDailyRow, i: number) => (
               <tr key={row.sku_code} className="hover:bg-zinc-800/30 transition-colors">
-                {/* Frozen: # */}
-                <td
-                  className="py-1.5 px-2 text-zinc-600 text-right bg-zinc-900"
-                  style={{ ...frozenStyle(freeze.row), zIndex: Z.body }}
-                >
-                  {i + 1}
-                </td>
-                {/* Frozen: SKU */}
-                <td
-                  className="py-1.5 px-3 font-mono text-zinc-400 bg-zinc-900"
-                  style={{ ...frozenStyle(freeze.sku), zIndex: Z.body }}
-                >
-                  {row.sku_code}
-                </td>
-                {/* Frozen: Product (last frozen — has edge shadow) */}
-                <td
-                  className="py-1.5 px-3 text-zinc-200 border-r border-zinc-700/60 bg-zinc-900"
-                  style={{ ...frozenStyle(freeze.product), zIndex: Z.body, boxShadow: edgeShadow }}
-                >
+                <td className="py-1.5 px-2 text-zinc-600 text-right bg-zinc-900" style={{ ...frozenStyle(freeze.row), zIndex: Z.body }}>{i + 1}</td>
+                <td className="py-1.5 px-3 font-mono text-zinc-400 bg-zinc-900" style={{ ...frozenStyle(freeze.sku), zIndex: Z.body }}>{row.sku_code}</td>
+                <td className="py-1.5 px-3 text-zinc-200 border-r border-zinc-700/60 bg-zinc-900" style={{ ...frozenStyle(freeze.product), zIndex: Z.body, boxShadow: edgeShadow }}>
                   <span className="block truncate max-w-[190px]" title={row.product_name}>{row.product_name}</span>
                 </td>
-                {/* Scrollable: Portal SKU */}
                 <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
-                {/* Scrollable: BAU ASP */}
                 <td className="py-1.5 px-3 text-right text-zinc-300 font-mono">{fmtAsp(row.bau_asp)}</td>
-                {/* Scrollable: WH Stock */}
                 <td className={`py-1.5 px-3 text-right${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
                   <StockBadge v={row.wh_stock} />
                 </td>
-                {/* Scrollable: Swiggy Stock (Swiggy portal only) */}
                 {showSwiggyStock && (
-                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60">
-                    <StockBadge v={row.swiggy_stock} />
-                  </td>
+                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60"><StockBadge v={row.swiggy_stock} /></td>
                 )}
-                {/* Scrollable: Zepto Stock (Zepto portal only) */}
                 {showZeptoStock && (
-                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60">
-                    <StockBadge v={row.zepto_stock} />
-                  </td>
+                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60"><StockBadge v={row.zepto_stock} /></td>
                 )}
-                {/* Scrollable: Backend Qty (Blinkit only) */}
                 {showBlinkitStock && (
-                  <td className="py-1.5 px-3 text-right">
-                    <StockBadge v={row.backend_qty} />
-                  </td>
+                  <td className="py-1.5 px-3 text-right"><StockBadge v={row.backend_qty} /></td>
                 )}
-                {/* Scrollable: Frontend Qty (Blinkit only) */}
                 {showBlinkitStock && (
-                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60">
-                    <StockBadge v={row.frontend_qty} />
-                  </td>
+                  <td className="py-1.5 px-3 text-right border-r border-zinc-700/60"><StockBadge v={row.frontend_qty} /></td>
                 )}
-                {/* Date columns */}
                 {dates.map((d) => {
                   const { text, cls } = unitCell(row.daily_units[d]);
-                  return (
-                    <td key={d} className={`py-1.5 px-2 text-center tabular-nums ${cls}`}>
-                      {text}
-                    </td>
-                  );
+                  return <td key={d} className={`py-1.5 px-2 text-center tabular-nums ${cls}`}>{text}</td>;
                 })}
-                {/* MTD */}
                 <td className="py-1.5 px-3 text-right font-semibold text-zinc-100 border-l border-zinc-700/60 tabular-nums">
                   {row.mtd_units.toLocaleString("en-IN")}
                 </td>
@@ -345,11 +376,7 @@ export function PortalDailyTable({ data, loading }: Props) {
                 </td>
                 {showDoc && (() => {
                   const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
-                  return (
-                    <td className="py-1.5 px-3 text-right tabular-nums">
-                      <DocBadge v={calcDoc(row, drr)} />
-                    </td>
-                  );
+                  return <td className="py-1.5 px-3 text-right tabular-nums"><DocBadge v={calcDoc(row, drr)} /></td>;
                 })()}
                 <td className="py-1.5 px-3 text-right text-orange-400 font-semibold font-mono tabular-nums">
                   {fmtRevenue(row.mtd_value)}
@@ -358,21 +385,15 @@ export function PortalDailyTable({ data, loading }: Props) {
             ))}
           </tbody>
 
-          {/* ── FOOTER (Totals) ───────────────────────────────── */}
+          {/* ── FOOTER (Totals) ── */}
           <tfoot>
             <tr className="border-t-2 border-zinc-600 bg-zinc-800">
-              {/* Frozen: spans the 3 frozen cols */}
-              <td
-                colSpan={3}
-                className="py-2.5 px-3 text-zinc-300 font-bold text-right text-[11px] uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-800"
-                style={{ position: "sticky", left: 0, bottom: 0, zIndex: Z.frozenFooter, minWidth: FREEZE_END, boxShadow: edgeShadow }}
-              >
+              <td colSpan={3} className="py-2.5 px-3 text-zinc-300 font-bold text-right text-[11px] uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-800"
+                style={{ position: "sticky", left: 0, bottom: 0, zIndex: Z.frozenFooter, minWidth: FREEZE_END, boxShadow: edgeShadow }}>
                 Total
               </td>
-              {/* Scrollable info cols — empty (Portal SKU, BAU ASP) */}
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
-              {/* WH Stock total */}
               <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {rows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
@@ -396,42 +417,25 @@ export function PortalDailyTable({ data, loading }: Props) {
                   {rows.reduce((s, r) => s + (r.frontend_qty ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
-              {/* Date totals */}
               {dates.map((d) => {
                 const total = rows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0);
                 const { cls } = unitCell(total || null);
                 return (
-                  <td
-                    key={d}
-                    className={`py-2.5 px-2 text-center font-semibold tabular-nums bg-zinc-800 ${cls}`}
-                    style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
-                  >
+                  <td key={d} className={`py-2.5 px-2 text-center font-semibold tabular-nums bg-zinc-800 ${cls}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                     {total > 0 ? total : "—"}
                   </td>
                 );
               })}
-              {/* MTD totals */}
-              <td
-                className="py-2.5 px-3 text-right font-bold text-zinc-50 border-l border-zinc-700/60 tabular-nums bg-zinc-800"
-                style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
-              >
+              <td className="py-2.5 px-3 text-right font-bold text-zinc-50 border-l border-zinc-700/60 tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {rows.reduce((s, r) => s + r.mtd_units, 0).toLocaleString("en-IN")}
               </td>
-              <td
-                className="py-2.5 px-3 text-right font-bold text-sky-400 tabular-nums bg-zinc-800"
-                style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
-              >
-                {dates.length > 0
-                  ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1)
-                  : "—"}
+              <td className="py-2.5 px-3 text-right font-bold text-sky-400 tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                {dates.length > 0 ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—"}
               </td>
               {showDoc && (
                 <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               )}
-              <td
-                className="py-2.5 px-3 text-right font-bold text-orange-400 font-mono tabular-nums bg-zinc-800"
-                style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}
-              >
+              <td className="py-2.5 px-3 text-right font-bold text-orange-400 font-mono tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0))}
               </td>
             </tr>
