@@ -80,17 +80,10 @@ export function PortalDailyTable({ data, loading }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("mtd_units");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  if (loading) return <Skeleton className="w-full rounded-xl" style={{ height: 360 }} />;
-
-  if (!data || data.rows.length === 0) {
-    return (
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-6 py-10 text-center">
-        <p className="text-sm text-zinc-500">No sales data for the selected portal and date range.</p>
-      </div>
-    );
-  }
-
-  const { dates, rows, portal_name } = data;
+  // Derive portal info before hooks — safe because hooks are always called first
+  const rows        = data?.rows        ?? [];
+  const dates       = data?.dates       ?? [];
+  const portal_name = data?.portal_name ?? "";
 
   const showSwiggyStock  = portal_name.toLowerCase() === "swiggy";
   const showZeptoStock   = portal_name.toLowerCase() === "zepto";
@@ -163,6 +156,17 @@ export function PortalDailyTable({ data, loading }: Props) {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, sortKey, sortDir]);
+
+  // ─── Early returns AFTER all hooks ────────────────────────────────────────
+  if (loading) return <Skeleton className="w-full rounded-xl" style={{ height: 360 }} />;
+
+  if (!data || rows.length === 0) {
+    return (
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-6 py-10 text-center">
+        <p className="text-sm text-zinc-500">No sales data for the selected portal and date range.</p>
+      </div>
+    );
+  }
 
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
