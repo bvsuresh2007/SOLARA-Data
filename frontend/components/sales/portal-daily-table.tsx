@@ -79,6 +79,7 @@ interface Props {
 export function PortalDailyTable({ data, loading }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("mtd_units");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [search, setSearch]   = useState("");
 
   // Derive portal info before hooks — safe because hooks are always called first
   const rows        = data?.rows        ?? [];
@@ -157,6 +158,16 @@ export function PortalDailyTable({ data, loading }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, sortKey, sortDir]);
 
+  // ─── Search filter ────────────────────────────────────────────────────────
+  const q = search.trim().toLowerCase();
+  const visibleRows = q
+    ? sortedRows.filter(r =>
+        r.sku_code.toLowerCase().includes(q) ||
+        r.product_name.toLowerCase().includes(q) ||
+        (r.portal_sku ?? "").toLowerCase().includes(q)
+      )
+    : sortedRows;
+
   // ─── Early returns AFTER all hooks ────────────────────────────────────────
   if (loading) return <Skeleton className="w-full rounded-xl" style={{ height: 360 }} />;
 
@@ -179,7 +190,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       "MTD Units", "DRR", ...(showDoc ? ["DOC"] : []), "MTD Value",
     ];
 
-    const csvRows = sortedRows.map((row, i) => [
+    const csvRows = visibleRows.map((row, i) => [
       i + 1, row.sku_code, row.product_name, row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
@@ -234,16 +245,34 @@ export function PortalDailyTable({ data, loading }: Props) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
       {/* Card header */}
-      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="font-semibold text-zinc-100 text-base">Daily Units Breakdown</h2>
           <p className="text-xs text-zinc-500 mt-0.5">
             {portal_name} · {dates[0] ? fmtDate(dates[0]) : "—"} – {dates[dates.length - 1] ? fmtDate(dates[dates.length - 1]) : "—"}
           </p>
         </div>
+        {/* Search */}
+        <div className="relative flex-1 min-w-[160px] max-w-[280px]">
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 text-xs pointer-events-none">🔍</span>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search SKU / product…"
+            className="w-full pl-7 pr-7 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
+          />
+          {search && (
+            <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-xs">✕</button>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-zinc-500">
-            <span className="text-zinc-300 font-semibold">{rows.length}</span> products ·{" "}
+            {q ? (
+              <><span className="text-zinc-300 font-semibold">{visibleRows.length}</span>/<span className="text-zinc-500">{rows.length}</span> products</>
+            ) : (
+              <><span className="text-zinc-300 font-semibold">{rows.length}</span> products</>
+            )}{" "}·{" "}
             <span className="text-zinc-300 font-semibold">{dates.length}</span> days
           </span>
           <button
@@ -344,7 +373,7 @@ export function PortalDailyTable({ data, loading }: Props) {
 
           {/* ── BODY ── */}
           <tbody className="divide-y divide-zinc-800/50">
-            {sortedRows.map((row: PortalDailyRow, i: number) => (
+            {visibleRows.map((row: PortalDailyRow, i: number) => (
               <tr key={row.sku_code} className="hover:bg-zinc-800/30 transition-colors">
                 <td className="py-1.5 px-2 text-zinc-600 text-right bg-zinc-900" style={{ ...frozenStyle(freeze.row), zIndex: Z.body }}>{i + 1}</td>
                 <td className="py-1.5 px-3 font-mono text-zinc-400 bg-zinc-900" style={{ ...frozenStyle(freeze.sku), zIndex: Z.body }}>{row.sku_code}</td>
