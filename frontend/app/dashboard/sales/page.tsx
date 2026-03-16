@@ -193,7 +193,7 @@ function SalesContent() {
           <CategoryBreakdown data={byCategory} />
         </div>
       )}
-      <PortalDailyTable data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
+      <PortalDailyTable key={portalId ?? "all"} data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
     </main>
   );
 }
