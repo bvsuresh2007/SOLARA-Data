@@ -346,6 +346,13 @@ class EasyEcomParser:
                 continue  # explicitly skipped marketplace
             # Selling Price is already the line-item total (not per-unit)
             revenue = _f(row.get("Selling Price", 0))
+            # COMBO SKUs: Item Quantity = suborders × sub_product_count.
+            # Use Suborder Quantity to count actual combo packs sold.
+            sku_type = str(row.get("SKU Type", "")).strip().upper()
+            if sku_type == "COMBO":
+                quantity_sold = _f(row.get("Suborder Quantity", 1))
+            else:
+                quantity_sold = _f(row.get("Item Quantity", 1))
             rows.append({
                 "portal": portal,
                 "sale_date": _parse_iso(row.get("Order Date")),
@@ -355,7 +362,7 @@ class EasyEcomParser:
                 "l2_category": "",
                 "l3_category": "",
                 "revenue": revenue,
-                "quantity_sold": _f(row.get("Item Quantity", 1)),
+                "quantity_sold": quantity_sold,
                 "order_count": 1,
                 "discount_amount": 0.0,
                 "net_revenue": revenue,
