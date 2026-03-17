@@ -292,11 +292,11 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...(showSwiggyStock  ? [""] : []),
       ...(showZeptoStock   ? [""] : []),
       ...(showBlinkitStock ? ["", ""] : []),
-      ...dates.map(d => rows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0)),
-      rows.reduce((s, r) => s + r.mtd_units, 0),
-      dates.length > 0 ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—",
+      ...dates.map(d => visibleRows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0)),
+      visibleRows.reduce((s, r) => s + r.mtd_units, 0),
+      dates.length > 0 ? (visibleRows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—",
       ...(showDoc ? [""] : []),
-      fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0)),
+      fmtRevenue(visibleRows.reduce((s, r) => s + r.mtd_value, 0)),
     ];
 
     const escape = (v: unknown) => {
@@ -517,30 +517,30 @@ export function PortalDailyTable({ data, loading }: Props) {
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                {rows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
+                {visibleRows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
               {showSwiggyStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                  {rows.reduce((s, r) => s + (r.swiggy_stock ?? 0), 0).toLocaleString("en-IN")}
+                  {visibleRows.reduce((s, r) => s + (r.swiggy_stock ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showZeptoStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                  {rows.reduce((s, r) => s + (r.zepto_stock ?? 0), 0).toLocaleString("en-IN")}
+                  {visibleRows.reduce((s, r) => s + (r.zepto_stock ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showBlinkitStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                  {rows.reduce((s, r) => s + (r.backend_qty ?? 0), 0).toLocaleString("en-IN")}
+                  {visibleRows.reduce((s, r) => s + (r.backend_qty ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {showBlinkitStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                  {rows.reduce((s, r) => s + (r.frontend_qty ?? 0), 0).toLocaleString("en-IN")}
+                  {visibleRows.reduce((s, r) => s + (r.frontend_qty ?? 0), 0).toLocaleString("en-IN")}
                 </td>
               )}
               {dates.map((d) => {
-                const total = rows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0);
+                const total = visibleRows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0);
                 const { cls } = unitCell(total || null);
                 return (
                   <td key={d} className={`py-2.5 px-2 text-center font-semibold tabular-nums bg-zinc-800 ${cls}`} style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
@@ -549,16 +549,16 @@ export function PortalDailyTable({ data, loading }: Props) {
                 );
               })}
               <td className="py-2.5 px-3 text-right font-bold text-zinc-50 border-l border-zinc-700/60 tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                {rows.reduce((s, r) => s + r.mtd_units, 0).toLocaleString("en-IN")}
+                {visibleRows.reduce((s, r) => s + r.mtd_units, 0).toLocaleString("en-IN")}
               </td>
               <td className="py-2.5 px-3 text-right font-bold text-sky-400 tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                {dates.length > 0 ? (rows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—"}
+                {dates.length > 0 ? (visibleRows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—"}
               </td>
               {showDoc && (
                 <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               )}
               <td className="py-2.5 px-3 text-right font-bold text-orange-400 font-mono tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
-                {fmtRevenue(rows.reduce((s, r) => s + r.mtd_value, 0))}
+                {fmtRevenue(visibleRows.reduce((s, r) => s + r.mtd_value, 0))}
               </td>
             </tr>
           </tfoot>
