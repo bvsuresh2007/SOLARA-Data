@@ -118,10 +118,10 @@ const freeze = {
   row:      { w: 36,  left: 0   },
   sku:      { w: 110, left: 36  },
   sub_cat:  { w: 160, left: 146 },
-  product:  { w: 190, left: 306 },
+  product:  { w: 260, left: 306 },
 } as const;
 
-const FREEZE_END = 496;
+const FREEZE_END = 566;
 
 const Z = { body: 10, header: 20, frozenHeader: 30, footer: 25, frozenFooter: 35 } as const;
 
@@ -466,8 +466,8 @@ export function PortalDailyTable({ data, loading }: Props) {
                 <td className="py-1.5 px-3 text-zinc-400 text-[11px] bg-zinc-900" style={{ ...frozenStyle(freeze.sub_cat), zIndex: Z.body }}>
                   <span className="block truncate max-w-[150px]" title={row.sub_category ?? ""}>{row.sub_category ?? "—"}</span>
                 </td>
-                <td className="py-1.5 px-3 text-zinc-200 border-r border-zinc-700/60 bg-zinc-900" style={{ ...frozenStyle(freeze.product), zIndex: Z.body, boxShadow: edgeShadow }}>
-                  <span className="block truncate max-w-[180px]" title={row.product_name}>{row.product_name}</span>
+                <td className="py-1.5 px-3 text-[10px] text-zinc-200 border-r border-zinc-700/60 bg-zinc-900" style={{ ...frozenStyle(freeze.product), zIndex: Z.body, boxShadow: edgeShadow }}>
+                  {row.product_name}
                 </td>
                 <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
                 <td className="py-1.5 px-3 text-right text-zinc-300 font-mono">{fmtAsp(row.bau_asp)}</td>
