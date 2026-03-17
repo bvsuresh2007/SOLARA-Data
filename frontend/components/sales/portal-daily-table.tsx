@@ -262,7 +262,7 @@ export function PortalDailyTable({ data, loading }: Props) {
 
   // Sort groups by the active sort key's aggregate
   const sortedCats = useMemo(() => {
-    const cats = [...groups.keys()];
+    const cats = Array.from(groups.keys());
     if (sortKey === "sub_category") {
       return cats.sort((a, b) => {
         const cmp = sortDir === "asc"
