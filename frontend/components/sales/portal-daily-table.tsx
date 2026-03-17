@@ -37,6 +37,74 @@ function DocBadge({ v }: { v: number | null }) {
   return <span className={cls}>{v.toFixed(1)}d</span>;
 }
 
+// ─── Sub-category canonical sort order ────────────────────────────────────────
+
+const SUB_CATEGORY_ORDER: string[] = [
+  "Air Fryer",
+  "Air Fryer Combo",
+  "Air Fryer Oven",
+  "Air Fryer Oven Combo",
+  "Blendkwik",
+  "Cast Iron Cookware - Combo",
+  "Cast Iron Cookware - Combo (Crwonstone)",
+  "Cast Iron-Fry pan",
+  "Cast Iron-Fry pan (Crownstone)",
+  "Cast Iron-Kadhai",
+  "Cast Iron-Kadhai (Crownstone)",
+  "Cast Iron-Pancake Pan (Crownstone)",
+  "Cast Iron-Paniyaram",
+  "Cast Iron-Tawa",
+  "Cast Iron-Tawa (Crownstone)",
+  "Ceramic Cookware Set of 2",
+  "Ceramic Cookware Set of 3",
+  "Ceramic Cookware-Casserole (Belmont)",
+  "Ceramic Cookware-Fry pan (Belmont)",
+  "Ceramic Cookware-Tawa (Belmont)",
+  "Chopping Board",
+  "Electric Kettle",
+  "Electric Kettle-MP",
+  "Electric Lighter",
+  "Food Thermometer",
+  "Glass Tumbler",
+  "Kids Lunch Boxes",
+  "Kids Lunch Boxes combo",
+  "Knife Set",
+  "MontClaire Combo",
+  "MontClaire Fry Pan",
+  "MontClaire Kadai",
+  "Mugs/Tumblers - Insulated (Classic)",
+  "Mugs/Tumblers - Insulated (Echo)",
+  "Mugs/Tumblers - Insulated (Elixir)",
+  "Oil Sprayer",
+  "Protein Shaker",
+  "Shelf Liner",
+  "Slow Juicer",
+  "Spatula Sets",
+  "Stand Blender",
+  "Stand Blender- FBA",
+  "Sterra Combo",
+  "Sterra Fry Pan",
+  "Sterra Kadai",
+  "Sterra Sauce Pan",
+  "Water Bottle - Gallon Motivational 3.8L",
+  "Water Bottle - Insulated",
+  "Water Bottle - Insulated (Orion)",
+  "Water Bottle - Insulated Kids",
+  "Water Bottle - Kids Motivational",
+  "Water Bottle - Motivational",
+  "Water Bottle - PG Motivational 2.2L",
+  "Water Bottle - Stainless Steel",
+];
+
+// Build a lookup: sub_category (lowercase) → index; unknown → 9999
+const SUB_CAT_RANK = new Map(
+  SUB_CATEGORY_ORDER.map((s, i) => [s.toLowerCase(), i])
+);
+function subCatRank(s: string | null) {
+  if (!s) return 9999;
+  return SUB_CAT_RANK.get(s.toLowerCase()) ?? 9999;
+}
+
 // ─── Sort icon ────────────────────────────────────────────────────────────────
 
 function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
@@ -150,12 +218,16 @@ export function PortalDailyTable({ data, loading }: Props) {
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
+      // Sub-category uses canonical order map, then mtd_value desc within same group
+      if (sortKey === "sub_category") {
+        const ra = subCatRank(a.sub_category), rb = subCatRank(b.sub_category);
+        const cmp = sortDir === "asc" ? ra - rb : rb - ra;
+        if (cmp !== 0) return cmp;
+        return b.mtd_value - a.mtd_value;  // tiebreaker: highest sales first
+      }
       const av = rowVal(a), bv = rowVal(b);
       if (typeof av === "string" && typeof bv === "string") {
-        const cmp = sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-        // Within the same sub-category, sort by mtd_value descending
-        if (cmp === 0 && sortKey === "sub_category") return b.mtd_value - a.mtd_value;
-        return cmp;
+        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
       }
       const an = av as number, bn = bv as number;
       return sortDir === "asc" ? an - bn : bn - an;
