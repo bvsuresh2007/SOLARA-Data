@@ -138,6 +138,7 @@ export const MOCK_PORTAL_DAILY: PortalDailyResponse = {
   rows: productNames.slice(0, 6).map((name, i) => ({
     sku_code: `SOL-${String(i + 101).padStart(4, "0")}`,
     product_name: name,
+    sub_category: null,
     category: MOCK_SALES_BY_CATEGORY[i % MOCK_SALES_BY_CATEGORY.length].category,
     portal_sku: `B0${String(Math.random()).slice(2, 10).toUpperCase()}`,
     bau_asp: 800 + i * 120,
