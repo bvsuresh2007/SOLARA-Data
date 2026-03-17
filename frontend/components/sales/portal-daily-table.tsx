@@ -144,7 +144,7 @@ interface Props {
 
 export function PortalDailyTable({ data, loading }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("mtd_value");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [search, setSearch]   = useState("");
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
 
