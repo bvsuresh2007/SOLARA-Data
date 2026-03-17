@@ -78,8 +78,8 @@ interface Props {
 }
 
 export function PortalDailyTable({ data, loading }: Props) {
-  const [sortKey, setSortKey] = useState<SortKey>("mtd_units");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [sortKey, setSortKey] = useState<SortKey>("sub_category");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch]   = useState("");
 
   // Derive portal info before hooks — safe because hooks are always called first
@@ -152,7 +152,10 @@ export function PortalDailyTable({ data, loading }: Props) {
     return [...rows].sort((a, b) => {
       const av = rowVal(a), bv = rowVal(b);
       if (typeof av === "string" && typeof bv === "string") {
-        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+        const cmp = sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+        // Within the same sub-category, sort by mtd_value descending
+        if (cmp === 0 && sortKey === "sub_category") return b.mtd_value - a.mtd_value;
+        return cmp;
       }
       const an = av as number, bn = bv as number;
       return sortDir === "asc" ? an - bn : bn - an;
