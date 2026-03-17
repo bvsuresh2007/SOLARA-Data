@@ -79,6 +79,7 @@ class TargetAchievement(BaseModel):
 class PortalDailyRow(BaseModel):
     sku_code: str
     product_name: str
+    sub_category: Optional[str] = None   # Product Sub-category
     category: str
     portal_sku: str
     bau_asp: Optional[float]

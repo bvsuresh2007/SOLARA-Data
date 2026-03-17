@@ -47,12 +47,13 @@ function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
 // ─── Frozen column config ───────────────────────────────────────────────────
 
 const freeze = {
-  row:     { w: 36,  left: 0   },
-  sku:     { w: 110, left: 36  },
-  product: { w: 200, left: 146 },
+  row:      { w: 36,  left: 0   },
+  sku:      { w: 110, left: 36  },
+  sub_cat:  { w: 160, left: 146 },
+  product:  { w: 190, left: 306 },
 } as const;
 
-const FREEZE_END = 346;
+const FREEZE_END = 496;
 
 const Z = { body: 10, header: 20, frozenHeader: 30, footer: 25, frozenFooter: 35 } as const;
 
@@ -63,7 +64,7 @@ function frozenStyle(col: { w: number; left: number }) {
 // ─── Sort key type ────────────────────────────────────────────────────────────
 
 type SortKey =
-  | "sku" | "product" | "portal_sku" | "bau_asp" | "wh_stock"
+  | "sku" | "sub_category" | "product" | "portal_sku" | "bau_asp" | "wh_stock"
   | "swiggy_stock" | "zepto_stock" | "backend_qty" | "frontend_qty"
   | "mtd_units" | "drr" | "doc" | "mtd_value"
   | { date: string };   // per-day sort
@@ -112,7 +113,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     } else {
       setSortKey(key);
       // Numeric cols default desc, text cols default asc
-      const textCols: SortKey[] = ["sku", "product", "portal_sku"];
+      const textCols: SortKey[] = ["sku", "sub_category", "product", "portal_sku"];
       const isText = typeof key === "string" && (textCols as string[]).includes(key);
       setSortDir(isText ? "asc" : "desc");
     }
@@ -130,6 +131,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     if (typeof sortKey === "object") return row.daily_units[sortKey.date] ?? -Infinity;
     switch (sortKey) {
       case "sku":          return row.sku_code;
+      case "sub_category": return row.sub_category ?? "";
       case "product":      return row.product_name;
       case "portal_sku":   return row.portal_sku ?? "";
       case "bau_asp":      return row.bau_asp ?? -Infinity;
@@ -164,6 +166,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     ? sortedRows.filter(r =>
         r.sku_code.toLowerCase().includes(q) ||
         r.product_name.toLowerCase().includes(q) ||
+        (r.sub_category ?? "").toLowerCase().includes(q) ||
         (r.portal_sku ?? "").toLowerCase().includes(q)
       )
     : sortedRows;
@@ -182,7 +185,7 @@ export function PortalDailyTable({ data, loading }: Props) {
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
     const headers = [
-      "#", "SKU", "Product", "Portal SKU", "BAU ASP", "WH Stock",
+      "#", "SKU", "Product Sub-category", "Product Name", "Portal SKU", "BAU ASP", "WH Stock",
       ...(showSwiggyStock  ? ["Swiggy Stock"] : []),
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
@@ -191,7 +194,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     ];
 
     const csvRows = visibleRows.map((row, i) => [
-      i + 1, row.sku_code, row.product_name, row.portal_sku,
+      i + 1, row.sku_code, row.sub_category ?? "—", row.product_name, row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
       ...(showSwiggyStock  ? [row.swiggy_stock  != null ? row.swiggy_stock  : "—"] : []),
@@ -210,7 +213,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     ]);
 
     const totals = [
-      "Total", "", "", "", "", "",
+      "Total", "", "", "", "", "", "",
       ...(showSwiggyStock  ? [""] : []),
       ...(showZeptoStock   ? [""] : []),
       ...(showBlinkitStock ? ["", ""] : []),
@@ -307,13 +310,21 @@ export function PortalDailyTable({ data, loading }: Props) {
               >
                 SKU<SortIcon active={isActive("sku")} dir={sortDir} />
               </th>
-              {/* Frozen: Product */}
+              {/* Frozen: Product Sub-category */}
+              <th
+                className={`py-2 px-3 text-left text-zinc-400 font-medium bg-zinc-900 ${thCls}`}
+                style={{ ...frozenStyle(freeze.sub_cat), position: "sticky", top: 0, left: freeze.sub_cat.left, zIndex: Z.frozenHeader }}
+                onClick={() => toggleSort("sub_category")}
+              >
+                Sub-category<SortIcon active={isActive("sub_category")} dir={sortDir} />
+              </th>
+              {/* Frozen: Product Name */}
               <th
                 className={`py-2 px-3 text-left text-zinc-400 font-medium border-r border-zinc-700/60 bg-zinc-900 ${thCls}`}
                 style={{ ...frozenStyle(freeze.product), position: "sticky", top: 0, left: freeze.product.left, zIndex: Z.frozenHeader, boxShadow: edgeShadow }}
                 onClick={() => toggleSort("product")}
               >
-                Product<SortIcon active={isActive("product")} dir={sortDir} />
+                Product Name<SortIcon active={isActive("product")} dir={sortDir} />
               </th>
               {/* Portal SKU */}
               <th className={`py-2 px-3 text-left text-zinc-400 font-medium min-w-[110px] bg-zinc-900 ${thCls}`} style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("portal_sku")}>
@@ -377,8 +388,11 @@ export function PortalDailyTable({ data, loading }: Props) {
               <tr key={row.sku_code} className="hover:bg-zinc-800/30 transition-colors">
                 <td className="py-1.5 px-2 text-zinc-600 text-right bg-zinc-900" style={{ ...frozenStyle(freeze.row), zIndex: Z.body }}>{i + 1}</td>
                 <td className="py-1.5 px-3 font-mono text-zinc-400 bg-zinc-900" style={{ ...frozenStyle(freeze.sku), zIndex: Z.body }}>{row.sku_code}</td>
+                <td className="py-1.5 px-3 text-zinc-400 text-[11px] bg-zinc-900" style={{ ...frozenStyle(freeze.sub_cat), zIndex: Z.body }}>
+                  <span className="block truncate max-w-[150px]" title={row.sub_category ?? ""}>{row.sub_category ?? "—"}</span>
+                </td>
                 <td className="py-1.5 px-3 text-zinc-200 border-r border-zinc-700/60 bg-zinc-900" style={{ ...frozenStyle(freeze.product), zIndex: Z.body, boxShadow: edgeShadow }}>
-                  <span className="block truncate max-w-[190px]" title={row.product_name}>{row.product_name}</span>
+                  <span className="block truncate max-w-[180px]" title={row.product_name}>{row.product_name}</span>
                 </td>
                 <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
                 <td className="py-1.5 px-3 text-right text-zinc-300 font-mono">{fmtAsp(row.bau_asp)}</td>
@@ -421,7 +435,7 @@ export function PortalDailyTable({ data, loading }: Props) {
           {/* ── FOOTER (Totals) ── */}
           <tfoot>
             <tr className="border-t-2 border-zinc-600 bg-zinc-800">
-              <td colSpan={3} className="py-2.5 px-3 text-zinc-300 font-bold text-right text-[11px] uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-800"
+              <td colSpan={4} className="py-2.5 px-3 text-zinc-300 font-bold text-right text-[11px] uppercase tracking-wider border-r border-zinc-700/60 bg-zinc-800"
                 style={{ position: "sticky", left: 0, bottom: 0, zIndex: Z.frozenFooter, minWidth: FREEZE_END, boxShadow: edgeShadow }}>
                 Total
               </td>

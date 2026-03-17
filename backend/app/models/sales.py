@@ -12,6 +12,7 @@ class Product(Base):
     id           = Column(Integer, primary_key=True)
     sku_code     = Column(String(100), unique=True, nullable=False)
     product_name = Column(String(500), nullable=False)
+    sub_category = Column(String(255), nullable=True)  # Product Sub-category
     category_id  = Column(Integer, ForeignKey("product_categories.id", ondelete="SET NULL"))
     default_asp  = Column(Numeric(10, 2))           # BAU ASP from master Excel
     unit_type    = Column(String(50), default="pieces")

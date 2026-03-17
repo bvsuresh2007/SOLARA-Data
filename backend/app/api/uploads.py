@@ -596,7 +596,8 @@ async def upload_sku_mapping(
         return None
 
     sku_col      = find_col(["SKU", "sku_code", "sku code", "SKU CODE"])
-    product_col  = find_col(["Product", "product_name", "product name", "Product Name", "PRODUCT"])
+    sub_cat_col  = find_col(["Product Sub-category", "sub_category", "sub-category", "subcategory", "Sub Category", "Sub-Category"])
+    product_col  = find_col(["Product Name", "product_name", "product name", "PRODUCT NAME", "Product", "PRODUCT"])
     category_col = find_col(["Category", "category_name", "l2_name", "CATEGORY"])
 
     if not sku_col:
@@ -631,6 +632,13 @@ async def upload_sku_mapping(
                 skipped += 1
                 continue
 
+            # Sub-category (optional)
+            sub_category: Optional[str] = None
+            if sub_cat_col:
+                raw = str(row.get(sub_cat_col, "")).strip()
+                if raw and raw.lower() != "nan":
+                    sub_category = raw
+
             # Resolve category_id if provided
             category_id: Optional[int] = None
             if category_col:
@@ -640,6 +648,8 @@ async def upload_sku_mapping(
             existing = db.query(Product).filter(Product.sku_code == sku).first()
             if existing:
                 existing.product_name = product_name
+                if sub_category is not None:
+                    existing.sub_category = sub_category
                 if category_id is not None:
                     existing.category_id = category_id
                 updated += 1
@@ -647,6 +657,7 @@ async def upload_sku_mapping(
                 new_product = Product(
                     sku_code=sku,
                     product_name=product_name,
+                    sub_category=sub_category,
                     category_id=category_id,
                     unit_type="pieces",
                 )

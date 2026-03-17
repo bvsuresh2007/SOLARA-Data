@@ -624,6 +624,7 @@ def portal_daily_sales(
                 Product.id,
                 Product.sku_code,
                 Product.product_name,
+                Product.sub_category,
                 Product.default_asp,
                 ProductCategory.l2_name.label("category"),
                 ProductPortalMapping.portal_sku,
@@ -643,6 +644,7 @@ def portal_daily_sales(
                 Product.id,
                 Product.sku_code,
                 Product.product_name,
+                Product.sub_category,
                 Product.default_asp,
                 ProductCategory.l2_name.label("category"),
                 literal(None).label("portal_sku"),
@@ -862,6 +864,7 @@ def portal_daily_sales(
             PortalDailyRow(
                 sku_code=p.sku_code,
                 product_name=p.product_name,
+                sub_category=p.sub_category or None,
                 category=p.category or "—",
                 portal_sku=p.portal_sku or "—",
                 bau_asp=bau_asp,
@@ -888,6 +891,7 @@ def portal_daily_sales(
             PortalDailyRow(
                 sku_code=p.sku_code,
                 product_name=p.product_name,
+                sub_category=p.sub_category or None,
                 category=p.category or "—",
                 portal_sku=p.portal_sku or "—",
                 bau_asp=bau_asp,

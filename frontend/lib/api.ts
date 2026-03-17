@@ -120,6 +120,7 @@ export interface InventorySummary {
 export interface PortalDailyRow {
   sku_code: string;
   product_name: string;
+  sub_category: string | null;
   category: string;
   portal_sku: string;
   bau_asp: number | null;
