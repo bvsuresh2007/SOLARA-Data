@@ -47,6 +47,7 @@ class SkuMappingResult(BaseModel):
     updated: int
     added: int
     skipped: int
+    mappings_synced: int = 0
     errors: list[str]
     time_taken_s: Optional[float] = None
 
@@ -564,6 +565,8 @@ async def upload_sku_mapping(
     Returns counts of updated / added / skipped rows.
     """
     import pandas as pd
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from ..models.sales import ProductPortalMapping
 
     t_start = time.monotonic()
     filename = file.filename or "sku_mapping"
@@ -575,13 +578,13 @@ async def upload_sku_mapping(
     try:
         ext = (filename.rsplit(".", 1)[-1]).lower()
         if ext in ("xlsx", "xls"):
-            df = pd.read_excel(io.BytesIO(content))
+            df = pd.read_excel(io.BytesIO(content), dtype=str)
         else:
-            df = pd.read_csv(io.BytesIO(content))
+            df = pd.read_csv(io.BytesIO(content), dtype=str)
     except Exception as exc:
         raise HTTPException(status_code=422, detail={"message": f"Could not parse file: {exc}"})
 
-    # Normalise column names
+    df = df.fillna("")
     df.columns = [str(c).strip() for c in df.columns]
 
     def find_col(keywords: list[str]) -> Optional[str]:
@@ -605,8 +608,28 @@ async def upload_sku_mapping(
     if not product_col:
         raise HTTPException(status_code=422, detail={"message": f"Could not find Product name column. Columns found: {list(df.columns)}"})
 
+    # Portal columns: (search keywords, portal name in DB)
+    _PORTAL_COLS = [
+        (["ASIN"],                                     "amazon"),
+        (["FSN"],                                      "flipkart"),
+        (["Myntra (Style ID)", "Myntra"],              "myntra"),
+        (["(Blinkit) Style ID", "Blinkit Style ID"],   "blinkit"),
+        (["Swiggy Code"],                              "swiggy"),
+        (["Zepto EAN"],                                "zepto"),
+    ]
+    portal_col_map: list[tuple[str, int]] = []  # (col_name, portal_id)
+    portal_id_rows = db.execute(
+        __import__("sqlalchemy").text("SELECT name, id FROM portals")
+    ).fetchall()
+    portal_name_to_id = {r[0]: r[1] for r in portal_id_rows}
+    for keywords, portal_name in _PORTAL_COLS:
+        col = find_col(keywords)
+        pid = portal_name_to_id.get(portal_name)
+        if col and pid:
+            portal_col_map.append((col, pid))
+
     rows_parsed = len(df)
-    updated = added = skipped = 0
+    updated = added = skipped = mappings_synced = 0
     errors: list[str] = []
 
     # Build category name → id lookup if category column present
@@ -618,28 +641,28 @@ async def upload_sku_mapping(
             if c.l2_name:
                 cat_name_to_id[c.l2_name.lower().strip()] = c.id
             if c.l1_name:
-                cat_name_to_id[c.l1_name.lower().strip()] = c.id  # fallback
+                cat_name_to_id[c.l1_name.lower().strip()] = c.id
 
+    # ── Pass 1: upsert products ───────────────────────────────────────────────
+    sku_to_product_id: dict[str, int] = {}
     try:
         for _, row in df.iterrows():
             sku = str(row.get(sku_col, "")).strip()
             product_name = str(row.get(product_col, "")).strip()
 
-            if not sku or sku.lower() == "nan":
+            if not sku or sku.lower() in ("nan", ""):
                 skipped += 1
                 continue
-            if not product_name or product_name.lower() == "nan":
+            if not product_name or product_name.lower() in ("nan", ""):
                 skipped += 1
                 continue
 
-            # Sub-category (optional)
             sub_category: Optional[str] = None
             if sub_cat_col:
                 raw = str(row.get(sub_cat_col, "")).strip()
-                if raw and raw.lower() != "nan":
+                if raw and raw.lower() not in ("nan", ""):
                     sub_category = raw
 
-            # Resolve category_id if provided
             category_id: Optional[int] = None
             if category_col:
                 cat_raw = str(row.get(category_col, "")).strip().lower()
@@ -652,6 +675,7 @@ async def upload_sku_mapping(
                     existing.sub_category = sub_category
                 if category_id is not None:
                     existing.category_id = category_id
+                sku_to_product_id[sku] = existing.id
                 updated += 1
             else:
                 new_product = Product(
@@ -662,6 +686,8 @@ async def upload_sku_mapping(
                     unit_type="pieces",
                 )
                 db.add(new_product)
+                db.flush()  # get the new id
+                sku_to_product_id[sku] = new_product.id
                 added += 1
 
         db.commit()
@@ -670,12 +696,51 @@ async def upload_sku_mapping(
         logger.exception("Error processing SKU mapping file %s", filename)
         raise HTTPException(status_code=500, detail={"message": f"Database error: {exc}"})
 
+    # ── Pass 2: upsert portal mappings ────────────────────────────────────────
+    if portal_col_map and sku_to_product_id:
+        mapping_rows: list[dict] = []
+        for _, row in df.iterrows():
+            sku = str(row.get(sku_col, "")).strip()
+            product_id = sku_to_product_id.get(sku)
+            if not product_id:
+                continue
+            for col_name, portal_id in portal_col_map:
+                val = str(row.get(col_name, "")).strip()
+                if not val or val.lower() in ("nan", "0", ""):
+                    continue
+                mapping_rows.append({
+                    "product_id": product_id,
+                    "portal_id": portal_id,
+                    "portal_sku": val,
+                })
+
+        if mapping_rows:
+            try:
+                _BATCH = 500
+                for i in range(0, len(mapping_rows), _BATCH):
+                    batch = mapping_rows[i: i + _BATCH]
+                    stmt = pg_insert(ProductPortalMapping).values(batch).on_conflict_do_update(
+                        index_elements=["portal_id", "portal_sku"],
+                        set_={
+                            "product_id": pg_insert(ProductPortalMapping).excluded.product_id,
+                            "updated_at": __import__("sqlalchemy").func.now(),
+                        },
+                    )
+                    db.execute(stmt)
+                db.commit()
+                mappings_synced = len(mapping_rows)
+            except Exception as exc:
+                db.rollback()
+                logger.exception("Error upserting portal mappings from SKU file %s", filename)
+                errors.append(f"Portal mapping upsert failed: {exc}")
+
     return SkuMappingResult(
         file_name=filename,
         rows_parsed=rows_parsed,
         updated=updated,
         added=added,
         skipped=skipped,
+        mappings_synced=mappings_synced,
         errors=errors,
         time_taken_s=round(time.monotonic() - t_start, 1),
     )

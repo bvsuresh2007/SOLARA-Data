@@ -54,6 +54,7 @@ interface SkuMappingResult {
   updated: number;
   added: number;
   skipped: number;
+  mappings_synced: number;
   errors: string[];
   time_taken_s: number | null;
 }
@@ -216,8 +217,8 @@ export default function UploadPage() {
         <Card>
           <CardContent className="pt-5 space-y-4">
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Upload a file with columns <span className="font-mono text-zinc-300">SKU</span>, <span className="font-mono text-zinc-300">Product</span>, and optionally <span className="font-mono text-zinc-300">Category</span>.
-              Existing products get their name updated; new SKUs are added automatically.
+              Upload the SKU mapping file with columns <span className="font-mono text-zinc-300">SKU</span>, <span className="font-mono text-zinc-300">Product</span>, and portal ID columns (<span className="font-mono text-zinc-300">ASIN</span>, <span className="font-mono text-zinc-300">FSN</span>, <span className="font-mono text-zinc-300">Swiggy Code</span>, <span className="font-mono text-zinc-300">Zepto EAN</span>, etc.).
+              Products are added/updated and all portal mappings are synced in one step.
             </p>
 
             <FileDropZone
@@ -252,7 +253,7 @@ export default function UploadPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-4 gap-3 text-center">
+                  <div className="grid grid-cols-5 gap-3 text-center">
                     <div>
                       <p className="text-2xl font-bold text-zinc-400">{skuResult.rows_parsed}</p>
                       <p className="text-xs text-zinc-500 mt-1">Parsed</p>
@@ -264,6 +265,10 @@ export default function UploadPage() {
                     <div>
                       <p className="text-2xl font-bold text-green-400">{skuResult.added}</p>
                       <p className="text-xs text-zinc-500 mt-1">Added</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-orange-400">{skuResult.mappings_synced}</p>
+                      <p className="text-xs text-zinc-500 mt-1">Mappings</p>
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-zinc-600">{skuResult.skipped}</p>
