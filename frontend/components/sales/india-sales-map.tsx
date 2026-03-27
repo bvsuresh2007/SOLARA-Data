@@ -178,7 +178,7 @@ export default function IndiaSalesMap({ data }: Props) {
                         key={geo.rsmKey}
                         geography={geo}
                         fill="#27272a"
-                        stroke="#52525b"
+                        stroke="#ffffff"
                         strokeWidth={0.5}
                         style={{
                           default: { outline: "none" },
@@ -212,16 +212,43 @@ export default function IndiaSalesMap({ data }: Props) {
                         strokeWidth={isHovered ? 1.5 : 0.5}
                         className="cursor-pointer"
                       />
-                      {(isHovered || c.share > 0.05) && (
+
+                      {isHovered && (
+                        <g style={{ pointerEvents: "none" }}>
+                          {/* Background rect */}
+                          <rect
+                            x={-60}
+                            y={-radius - 38}
+                            width={120}
+                            height={30}
+                            rx={4}
+                            fill="#18181b"
+                            stroke="#52525b"
+                            strokeWidth={0.8}
+                          />
+                          {/* City name */}
+                          <text
+                            textAnchor="middle"
+                            y={-radius - 24}
+                            style={{ fontSize: 10, fill: "#ffffff", fontWeight: 600 }}
+                          >
+                            {c.name}
+                          </text>
+                          {/* Revenue value */}
+                          <text
+                            textAnchor="middle"
+                            y={-radius - 12}
+                            style={{ fontSize: 9, fill: "#a1a1aa" }}
+                          >
+                            {fmtRevenue(c.revenue)} &middot; {Math.round(c.quantity).toLocaleString("en-IN")} units
+                          </text>
+                        </g>
+                      )}
+                      {!isHovered && c.share > 0.05 && (
                         <text
                           textAnchor="middle"
                           y={-radius - 4}
-                          style={{
-                            fontSize: isHovered ? 10 : 8,
-                            fill: "#e4e4e7",
-                            fontWeight: isHovered ? 600 : 400,
-                            pointerEvents: "none",
-                          }}
+                          style={{ fontSize: 8, fill: "#e4e4e7", fontWeight: 400, pointerEvents: "none" }}
                         >
                           {c.name}
                         </text>
