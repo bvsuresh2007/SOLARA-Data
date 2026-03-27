@@ -390,7 +390,7 @@ export default function IndiaSalesMap({ data }: Props) {
                     onMouseEnter={() => setHovered(c.name)}
                     onMouseLeave={() => setHovered(null)}
                   >
-                    <span className="text-zinc-600 w-3 text-right font-mono text-[10px]">{i + 1}</span>
+                    <span className="text-zinc-300 w-3 text-right font-mono text-[10px]">{i + 1}</span>
                     <div className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{ backgroundColor: interpolateColor(t) }} />
                     <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
@@ -423,7 +423,7 @@ export default function IndiaSalesMap({ data }: Props) {
               return (
                 <div key={s.name} className="group">
                   <div className="flex items-center gap-2 text-xs">
-                    <span className="text-zinc-600 w-5 text-right font-mono text-[10px]">{i + 1}</span>
+                    <span className="text-zinc-300 w-5 text-right font-mono text-[10px]">{i + 1}</span>
                     <span className="text-zinc-300 w-32 truncate text-[11px]">{s.name}</span>
                     <div className="flex-1 h-4 bg-zinc-800/50 rounded overflow-hidden relative">
                       <div
