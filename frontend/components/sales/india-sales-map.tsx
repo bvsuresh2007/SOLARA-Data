@@ -82,6 +82,28 @@ function titleCase(s: string): string {
   return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/* ── City name normalisation — merge duplicates & aliases ─────────────── */
+const CITY_ALIASES: Record<string, string> = {
+  "bangalore": "Bengaluru",
+  "gurgaon": "Gurugram",
+  "trivandrum": "Thiruvananthapuram",
+  "calicut": "Kozhikode",
+  "mysore": "Mysuru",
+  "mangalore": "Mangaluru",
+  "allahabad": "Prayagraj",
+  "trichy": "Tiruchirappalli",
+  "belgaum": "Belagavi",
+};
+
+function normalizeCityName(raw: string): string {
+  const trimmed = raw.trim();
+  // Title-case it first (handles ALL CAPS like "HYDERABAD" → "Hyderabad")
+  const titled = titleCase(trimmed);
+  // Check alias table (case-insensitive)
+  const alias = CITY_ALIASES[trimmed.toLowerCase()];
+  return alias ?? titled;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Component
    ══════════════════════════════════════════════════════════════════════════ */
@@ -106,26 +128,34 @@ export default function IndiaSalesMap({ data }: Props) {
     }
 
     const totalCityRevenue = cityEntries.reduce((s, d) => s + d.total_revenue, 0);
-    let maxRev = 0;
 
-    const cities = cityEntries
-      .map((d) => {
-        const key = d.dimension_name.trim();
-        const coords = CITY_COORDS[key] ?? CITY_COORDS[key.toLowerCase()];
-        if (!coords) return null;
-        if (d.total_revenue > maxRev) maxRev = d.total_revenue;
-        return {
-          name: d.dimension_name,
-          coords: coords as [number, number],
-          revenue: d.total_revenue,
-          quantity: d.total_quantity,
-          share: totalCityRevenue > 0 ? d.total_revenue / totalCityRevenue : 0,
-        };
-      })
-      .filter(Boolean) as {
-        name: string; coords: [number, number]; revenue: number;
-        quantity: number; share: number;
-      }[];
+    // Merge duplicates: normalise names then aggregate revenue/quantity
+    const cityAgg = new Map<string, { revenue: number; quantity: number; coords: [number, number] }>();
+    for (const d of cityEntries) {
+      const raw = d.dimension_name.trim();
+      const coords = CITY_COORDS[raw] ?? CITY_COORDS[raw.toLowerCase()];
+      if (!coords) continue;
+      const normalized = normalizeCityName(raw);
+      const existing = cityAgg.get(normalized);
+      if (existing) {
+        existing.revenue += d.total_revenue;
+        existing.quantity += d.total_quantity;
+      } else {
+        cityAgg.set(normalized, { revenue: d.total_revenue, quantity: d.total_quantity, coords: coords as [number, number] });
+      }
+    }
+
+    let maxRev = 0;
+    const cities = Array.from(cityAgg.entries()).map(([name, v]) => {
+      if (v.revenue > maxRev) maxRev = v.revenue;
+      return {
+        name,
+        coords: v.coords,
+        revenue: v.revenue,
+        quantity: v.quantity,
+        share: totalCityRevenue > 0 ? v.revenue / totalCityRevenue : 0,
+      };
+    });
 
     // Sort states by revenue descending
     stateEntries.sort((a, b) => b.revenue - a.revenue);
