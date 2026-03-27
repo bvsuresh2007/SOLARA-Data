@@ -33,38 +33,70 @@ const STATE_NAMES = new Set([
 
 /* ── City coordinates [lng, lat] ──────────────────────────────────────── */
 const CITY_COORDS: Record<string, [number, number]> = {
-  "mumbai": [72.878, 19.076], "delhi": [77.209, 28.614], "bengaluru": [77.594, 12.972],
-  "bangalore": [77.594, 12.972], "hyderabad": [78.487, 17.385], "chennai": [80.270, 13.083],
+  // Metros
+  "mumbai": [72.878, 19.076], "delhi": [77.209, 28.614], "new delhi": [77.209, 28.614],
+  "bengaluru": [77.594, 12.972], "bangalore": [77.594, 12.972],
+  "hyderabad": [78.487, 17.385], "chennai": [80.270, 13.083],
   "kolkata": [88.364, 22.573], "pune": [73.856, 18.52], "ahmedabad": [72.571, 23.023],
-  "jaipur": [75.787, 26.912], "lucknow": [80.947, 26.847], "surat": [72.831, 21.170],
-  "chandigarh": [76.779, 30.734], "indore": [75.858, 22.720], "bhopal": [77.413, 23.259],
-  "nagpur": [79.089, 21.146], "patna": [85.145, 25.612], "vadodara": [73.181, 22.307],
-  "coimbatore": [76.956, 11.017], "kochi": [76.267, 9.931], "visakhapatnam": [83.218, 17.687],
-  "guwahati": [91.736, 26.145], "bhubaneswar": [85.825, 20.297], "dehradun": [78.032, 30.317],
-  "thiruvananthapuram": [76.936, 8.524], "mysuru": [76.639, 12.296], "mysore": [76.639, 12.296],
-  "mangalore": [74.856, 12.914], "mangaluru": [74.856, 12.914],
+  // North India
+  "jaipur": [75.787, 26.912], "lucknow": [80.947, 26.847], "agra": [78.015, 27.177],
+  "varanasi": [82.991, 25.318], "kanpur": [80.332, 26.449], "prayagraj": [81.846, 25.435],
+  "allahabad": [81.846, 25.435], "meerut": [77.706, 28.984], "aligarh": [78.078, 27.883],
+  "bareilly": [79.432, 28.367], "moradabad": [78.773, 28.839], "gorakhpur": [83.379, 26.760],
+  "mathura": [77.673, 27.492], "saharanpur": [77.541, 29.964], "muzaffarnagar": [77.707, 29.473],
+  "firozabad": [78.395, 27.150], "shahjahanpur": [79.905, 27.883],
   "noida": [77.391, 28.535], "gurugram": [77.027, 28.459], "gurgaon": [77.027, 28.459],
   "ghaziabad": [77.438, 28.669], "faridabad": [77.317, 28.408], "greater noida": [77.504, 28.475],
+  "gautam buddha nagar": [77.504, 28.475], // Greater Noida district
+  "chandigarh": [76.779, 30.734], "dehradun": [78.032, 30.317],
+  "amritsar": [74.872, 31.634], "ludhiana": [75.857, 30.901], "jalandhar": [75.576, 31.326],
+  "jammu": [74.857, 32.735], "patiala": [76.387, 30.340], "bathinda": [74.951, 30.211],
+  "panipat": [76.968, 29.390], "karnal": [76.990, 29.686], "ambala": [76.777, 30.378],
+  "rohtak": [76.606, 28.894], "hisar": [75.723, 29.154], "sonipat": [77.016, 28.994],
+  "shimla": [77.172, 31.105], "haridwar": [78.169, 29.946],
+  // West India
+  "surat": [72.831, 21.170], "vadodara": [73.181, 22.307], "rajkot": [70.802, 22.304],
+  "nashik": [73.789, 19.998], "aurangabad": [75.343, 19.876],
   "navi mumbai": [73.030, 19.037], "thane": [72.978, 19.218],
-  "rajkot": [70.802, 22.304], "nashik": [73.789, 19.998], "aurangabad": [75.343, 19.876],
-  "vijayawada": [80.648, 16.506], "warangal": [79.599, 17.978],
+  "nagpur": [79.089, 21.146], "indore": [75.858, 22.720], "bhopal": [77.413, 23.259],
+  "jodhpur": [73.049, 26.279], "udaipur": [73.713, 24.585], "kota": [75.864, 25.180],
+  "panaji": [73.876, 15.380], "goa": [73.876, 15.380],
+  "kolhapur": [74.234, 16.705], "solapur": [75.910, 17.659], "sangli": [74.563, 16.853],
+  "palghar": [72.770, 19.694], "kalyan": [73.130, 19.244], "vasai": [72.801, 19.365],
+  "bhiwandi": [73.059, 19.301], "anand": [72.929, 22.560], "gandhinagar": [72.680, 23.215],
+  "bhavnagar": [72.153, 21.764], "jamnagar": [70.066, 22.471],
+  // South India
+  "coimbatore": [76.956, 11.017], "kochi": [76.267, 9.931], "ernakulam": [76.267, 9.931],
+  "visakhapatnam": [83.218, 17.687], "vijayawada": [80.648, 16.506],
+  "thiruvananthapuram": [76.936, 8.524], "trivandrum": [76.936, 8.524],
+  "mysuru": [76.639, 12.296], "mysore": [76.639, 12.296],
+  "mangalore": [74.856, 12.914], "mangaluru": [74.856, 12.914],
   "madurai": [78.120, 9.925], "tiruchirappalli": [78.688, 10.791], "trichy": [78.688, 10.791],
   "salem": [78.146, 11.665], "tiruppur": [77.340, 11.109],
-  "ranchi": [85.310, 23.345], "jamshedpur": [86.203, 22.805],
-  "raipur": [81.630, 21.252], "agra": [78.015, 27.177], "varanasi": [82.991, 25.318],
-  "kanpur": [80.332, 26.449], "prayagraj": [81.846, 25.435], "allahabad": [81.846, 25.435],
-  "meerut": [77.706, 28.984], "jodhpur": [73.049, 26.279], "udaipur": [73.713, 24.585],
-  "kota": [75.864, 25.180], "amritsar": [74.872, 31.634], "ludhiana": [75.857, 30.901],
-  "jalandhar": [75.576, 31.326], "jammu": [74.857, 32.735],
-  "siliguri": [88.395, 26.727], "durgapur": [87.322, 23.553],
+  "warangal": [79.599, 17.978], "guntur": [80.436, 16.307],
   "hubli": [75.124, 15.364], "belgaum": [74.498, 15.849], "belagavi": [74.498, 15.849],
   "kozhikode": [75.780, 11.259], "calicut": [75.780, 11.259],
-  "thrissur": [76.214, 10.527], "trivandrum": [76.936, 8.524],
-  "panaji": [73.876, 15.380], "goa": [73.876, 15.380], "shimla": [77.172, 31.105],
-  "BANGALORE": [77.594, 12.972], "MUMBAI": [72.878, 19.076],
-  "PUNE": [73.856, 18.52], "HYDERABAD": [78.487, 17.385],
-  "CHENNAI": [80.270, 13.083], "THANE": [72.978, 19.218],
-  "KOLKATA": [88.364, 22.573],
+  "thrissur": [76.214, 10.527], "kollam": [76.583, 8.893], "palakkad": [76.651, 10.776],
+  "kottayam": [76.522, 9.591], "kannur": [75.370, 11.869], "malappuram": [76.084, 11.042],
+  "tirunelveli": [77.713, 8.727], "vellore": [79.133, 12.916], "erode": [77.727, 11.341],
+  "thanjavur": [79.138, 10.787], "dindigul": [77.976, 10.368], "thoothukudi": [78.136, 8.764],
+  "nellore": [79.986, 14.450], "rajahmundry": [81.804, 17.005], "kakinada": [82.231, 16.960],
+  "tirupati": [79.420, 13.629], "kadapa": [78.824, 14.468], "anantapur": [77.600, 14.680],
+  "kurnool": [78.037, 15.828], "karimnagar": [79.128, 18.437], "nizamabad": [78.094, 18.673],
+  "chengalpattu": [79.978, 12.694], "davanagere": [75.923, 14.467], "bellary": [76.386, 15.143],
+  "shimoga": [75.568, 13.930], "tumkur": [77.101, 13.340], "gulbarga": [76.838, 17.329],
+  "udupi": [74.746, 13.341], "hassan": [76.100, 13.008],
+  // East India
+  "patna": [85.145, 25.612], "ranchi": [85.310, 23.345], "jamshedpur": [86.203, 22.805],
+  "bhubaneswar": [85.825, 20.297], "guwahati": [91.736, 26.145],
+  "raipur": [81.630, 21.252], "siliguri": [88.395, 26.727], "durgapur": [87.322, 23.553],
+  "cuttack": [85.879, 20.462], "bokaro": [86.151, 23.669], "dhanbad": [86.433, 23.796],
+  "muzaffarpur": [85.391, 26.121], "gaya": [84.999, 24.796], "bhagalpur": [86.992, 25.244],
+  "howrah": [88.263, 22.593], "asansol": [86.953, 23.681], "kharagpur": [87.323, 22.346],
+  "bilaspur": [82.145, 22.075], "durg": [81.285, 21.190], "bhilai": [81.380, 21.209],
+  "sambalpur": [83.976, 21.467], "berhampur": [84.794, 19.315],
+  "jorhat": [94.216, 26.757], "dibrugarh": [94.912, 27.473], "tezpur": [92.796, 26.637],
+  "imphal": [93.937, 24.817], "shillong": [91.886, 25.578], "agartala": [91.276, 23.831],
 };
 
 /* ── Color interpolation — cyan → amber → red ────────────────────────── */
@@ -93,6 +125,18 @@ const CITY_ALIASES: Record<string, string> = {
   "allahabad": "Prayagraj",
   "trichy": "Tiruchirappalli",
   "belgaum": "Belagavi",
+  "new delhi": "Delhi",
+  "ernakulam": "Kochi",
+  "gautam buddha nagar": "Greater Noida",
+  "kalyan": "Thane",          // Kalyan-Dombivli = Thane metro
+  "vasai": "Thane",            // Vasai-Virar = Thane metro
+  "bhiwandi": "Thane",         // Bhiwandi = Thane district
+  "howrah": "Kolkata",         // Howrah = Kolkata metro
+  "palghar": "Navi Mumbai",    // Palghar = Mumbai metro
+  "gulbarga": "Kalaburagi",
+  "shimoga": "Shivamogga",
+  "bellary": "Ballari",
+  "tumkur": "Tumakuru",
 };
 
 function normalizeCityName(raw: string): string {
