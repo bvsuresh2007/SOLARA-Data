@@ -172,6 +172,83 @@ function normalizeStateName(raw: string): string {
   return alias ?? titled;
 }
 
+/* ── City → State mapping (for deriving state totals from city data) ── */
+const CITY_TO_STATE: Record<string, string> = {
+  // Maharashtra
+  "mumbai": "Maharashtra", "pune": "Maharashtra", "nashik": "Maharashtra", "nagpur": "Maharashtra",
+  "aurangabad": "Maharashtra", "navi mumbai": "Maharashtra", "thane": "Maharashtra",
+  "kolhapur": "Maharashtra", "solapur": "Maharashtra", "sangli": "Maharashtra",
+  "palghar": "Maharashtra", "kalyan": "Maharashtra", "vasai": "Maharashtra", "bhiwandi": "Maharashtra",
+  // Karnataka
+  "bengaluru": "Karnataka", "bangalore": "Karnataka", "mysuru": "Karnataka", "mysore": "Karnataka",
+  "mangalore": "Karnataka", "mangaluru": "Karnataka", "hubli": "Karnataka",
+  "belgaum": "Karnataka", "belagavi": "Karnataka", "davanagere": "Karnataka",
+  "bellary": "Karnataka", "shimoga": "Karnataka", "tumkur": "Karnataka",
+  "gulbarga": "Karnataka", "udupi": "Karnataka", "hassan": "Karnataka",
+  // Tamil Nadu
+  "chennai": "Tamil Nadu", "coimbatore": "Tamil Nadu", "madurai": "Tamil Nadu",
+  "tiruchirappalli": "Tamil Nadu", "trichy": "Tamil Nadu", "salem": "Tamil Nadu",
+  "tiruppur": "Tamil Nadu", "vellore": "Tamil Nadu", "erode": "Tamil Nadu",
+  "thanjavur": "Tamil Nadu", "dindigul": "Tamil Nadu", "thoothukudi": "Tamil Nadu",
+  "tirunelveli": "Tamil Nadu", "chengalpattu": "Tamil Nadu",
+  // Telangana
+  "hyderabad": "Telangana", "warangal": "Telangana", "karimnagar": "Telangana",
+  "nizamabad": "Telangana",
+  // Andhra Pradesh
+  "visakhapatnam": "Andhra Pradesh", "vijayawada": "Andhra Pradesh", "guntur": "Andhra Pradesh",
+  "nellore": "Andhra Pradesh", "rajahmundry": "Andhra Pradesh", "kakinada": "Andhra Pradesh",
+  "tirupati": "Andhra Pradesh", "kadapa": "Andhra Pradesh", "anantapur": "Andhra Pradesh",
+  "kurnool": "Andhra Pradesh",
+  // Kerala
+  "kochi": "Kerala", "ernakulam": "Kerala", "thiruvananthapuram": "Kerala",
+  "trivandrum": "Kerala", "kozhikode": "Kerala", "calicut": "Kerala",
+  "thrissur": "Kerala", "kollam": "Kerala", "palakkad": "Kerala",
+  "kottayam": "Kerala", "kannur": "Kerala", "malappuram": "Kerala",
+  // Gujarat
+  "ahmedabad": "Gujarat", "surat": "Gujarat", "vadodara": "Gujarat", "rajkot": "Gujarat",
+  "anand": "Gujarat", "gandhinagar": "Gujarat", "bhavnagar": "Gujarat", "jamnagar": "Gujarat",
+  // Rajasthan
+  "jaipur": "Rajasthan", "jodhpur": "Rajasthan", "udaipur": "Rajasthan", "kota": "Rajasthan",
+  // Uttar Pradesh
+  "lucknow": "Uttar Pradesh", "agra": "Uttar Pradesh", "varanasi": "Uttar Pradesh",
+  "kanpur": "Uttar Pradesh", "prayagraj": "Uttar Pradesh", "allahabad": "Uttar Pradesh",
+  "meerut": "Uttar Pradesh", "noida": "Uttar Pradesh", "ghaziabad": "Uttar Pradesh",
+  "greater noida": "Uttar Pradesh", "gautam buddha nagar": "Uttar Pradesh",
+  "aligarh": "Uttar Pradesh", "bareilly": "Uttar Pradesh", "moradabad": "Uttar Pradesh",
+  "gorakhpur": "Uttar Pradesh", "mathura": "Uttar Pradesh", "saharanpur": "Uttar Pradesh",
+  "muzaffarnagar": "Uttar Pradesh", "firozabad": "Uttar Pradesh", "shahjahanpur": "Uttar Pradesh",
+  // Delhi / NCR
+  "delhi": "Delhi", "new delhi": "Delhi",
+  // Haryana
+  "gurugram": "Haryana", "gurgaon": "Haryana", "faridabad": "Haryana",
+  "panipat": "Haryana", "karnal": "Haryana", "ambala": "Haryana",
+  "rohtak": "Haryana", "hisar": "Haryana", "sonipat": "Haryana",
+  // Punjab
+  "amritsar": "Punjab", "ludhiana": "Punjab", "jalandhar": "Punjab",
+  "patiala": "Punjab", "bathinda": "Punjab",
+  // West Bengal
+  "kolkata": "West Bengal", "siliguri": "West Bengal", "durgapur": "West Bengal",
+  "howrah": "West Bengal", "asansol": "West Bengal", "kharagpur": "West Bengal",
+  // Bihar
+  "patna": "Bihar", "muzaffarpur": "Bihar", "gaya": "Bihar", "bhagalpur": "Bihar",
+  // Jharkhand
+  "ranchi": "Jharkhand", "jamshedpur": "Jharkhand", "bokaro": "Jharkhand", "dhanbad": "Jharkhand",
+  // Odisha
+  "bhubaneswar": "Odisha", "cuttack": "Odisha", "sambalpur": "Odisha", "berhampur": "Odisha",
+  // Chhattisgarh
+  "raipur": "Chhattisgarh", "bilaspur": "Chhattisgarh", "durg": "Chhattisgarh", "bhilai": "Chhattisgarh",
+  // Madhya Pradesh
+  "indore": "Madhya Pradesh", "bhopal": "Madhya Pradesh",
+  // Assam
+  "guwahati": "Assam", "jorhat": "Assam", "dibrugarh": "Assam", "tezpur": "Assam",
+  // Other NE & UTs
+  "imphal": "Manipur", "shillong": "Meghalaya", "agartala": "Tripura",
+  "chandigarh": "Chandigarh", "jammu": "Jammu & Kashmir",
+  "dehradun": "Uttarakhand", "haridwar": "Uttarakhand",
+  "shimla": "Himachal Pradesh",
+  "panaji": "Goa", "goa": "Goa",
+};
+
 /* ══════════════════════════════════════════════════════════════════════════
    Component
    ══════════════════════════════════════════════════════════════════════════ */
@@ -186,8 +263,16 @@ export default function IndiaSalesMap({ data }: Props) {
     const stateAgg = new Map<string, { revenue: number; quantity: number }>();
     const cityEntries: typeof data = [];
 
-    // Names that should appear in BOTH states and cities lists
-    const BOTH_STATE_AND_CITY = new Set(["delhi", "new delhi", "goa"]);
+    // Helper to add revenue to state aggregation
+    const addToState = (stateName: string, revenue: number, quantity: number) => {
+      const existing = stateAgg.get(stateName);
+      if (existing) {
+        existing.revenue += revenue;
+        existing.quantity += quantity;
+      } else {
+        stateAgg.set(stateName, { revenue, quantity });
+      }
+    };
 
     for (const d of data) {
       const name = d.dimension_name.trim();
@@ -195,31 +280,18 @@ export default function IndiaSalesMap({ data }: Props) {
       const lower = name.toLowerCase();
       const isState = STATE_NAMES.has(upper);
       const hasCoords = !!(CITY_COORDS[name] ?? CITY_COORDS[lower]);
-      const isBoth = BOTH_STATE_AND_CITY.has(lower);
 
-      if (isBoth && isState) {
-        // Add to BOTH state and city lists
-        const normalized = normalizeStateName(name);
-        const existing = stateAgg.get(normalized);
-        if (existing) {
-          existing.revenue += d.total_revenue;
-          existing.quantity += d.total_quantity;
-        } else {
-          stateAgg.set(normalized, { revenue: d.total_revenue, quantity: d.total_quantity });
-        }
-        cityEntries.push(d);
-      } else if (isState && !hasCoords) {
-        // Pure state — no city coords
-        const normalized = normalizeStateName(name);
-        const existing = stateAgg.get(normalized);
-        if (existing) {
-          existing.revenue += d.total_revenue;
-          existing.quantity += d.total_quantity;
-        } else {
-          stateAgg.set(normalized, { revenue: d.total_revenue, quantity: d.total_quantity });
-        }
+      if (isState && !hasCoords) {
+        // Pure state entry (e.g. "MAHARASHTRA", "KARNATAKA") — state only
+        addToState(normalizeStateName(name), d.total_revenue, d.total_quantity);
       } else {
+        // City entry — add to city list
         cityEntries.push(d);
+        // Also derive state from city→state mapping and add to state agg
+        const parentState = CITY_TO_STATE[lower];
+        if (parentState) {
+          addToState(parentState, d.total_revenue, d.total_quantity);
+        }
       }
     }
 
