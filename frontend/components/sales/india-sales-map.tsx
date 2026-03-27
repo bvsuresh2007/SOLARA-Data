@@ -186,9 +186,30 @@ export default function IndiaSalesMap({ data }: Props) {
     const stateAgg = new Map<string, { revenue: number; quantity: number }>();
     const cityEntries: typeof data = [];
 
+    // Names that should appear in BOTH states and cities lists
+    const BOTH_STATE_AND_CITY = new Set(["delhi", "new delhi", "goa"]);
+
     for (const d of data) {
       const name = d.dimension_name.trim();
-      if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name] && !CITY_COORDS[name.toLowerCase()]) {
+      const upper = name.toUpperCase();
+      const lower = name.toLowerCase();
+      const isState = STATE_NAMES.has(upper);
+      const hasCoords = !!(CITY_COORDS[name] ?? CITY_COORDS[lower]);
+      const isBoth = BOTH_STATE_AND_CITY.has(lower);
+
+      if (isBoth && isState) {
+        // Add to BOTH state and city lists
+        const normalized = normalizeStateName(name);
+        const existing = stateAgg.get(normalized);
+        if (existing) {
+          existing.revenue += d.total_revenue;
+          existing.quantity += d.total_quantity;
+        } else {
+          stateAgg.set(normalized, { revenue: d.total_revenue, quantity: d.total_quantity });
+        }
+        cityEntries.push(d);
+      } else if (isState && !hasCoords) {
+        // Pure state — no city coords
         const normalized = normalizeStateName(name);
         const existing = stateAgg.get(normalized);
         if (existing) {
