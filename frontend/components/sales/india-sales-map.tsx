@@ -151,14 +151,14 @@ export default function IndiaSalesMap({ data }: Props) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-start">
           {/* ── Map ─────────────────────────────────────────────────── */}
-          <div className="flex-1 min-w-0" style={{ maxHeight: 520 }}>
+          <div className="min-w-0" style={{ maxWidth: 360, maxHeight: 380 }}>
             <ComposableMap
               projection="geoMercator"
-              projectionConfig={{ center: INDIA_CENTER, scale: 800 }}
-              width={500}
-              height={560}
+              projectionConfig={{ center: INDIA_CENTER, scale: 600 }}
+              width={360}
+              height={380}
               style={{ width: "100%", height: "auto" }}
             >
               <ZoomableGroup center={INDIA_CENTER} zoom={1} minZoom={1} maxZoom={4}>
