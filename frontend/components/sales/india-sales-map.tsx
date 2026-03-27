@@ -268,6 +268,31 @@ export default function IndiaSalesMap({ data }: Props) {
               <span className="text-[10px] text-zinc-600 ml-1">Revenue</span>
             </div>
           </div>
+
+          {/* Top 10 Cities legend */}
+          <div className="mt-3 pt-3 border-t border-zinc-800">
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Top 10 Cities</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              {[...cities].sort((a, b) => b.revenue - a.revenue).slice(0, 10).map((c, i) => {
+                const t = maxRevenue > 0 ? c.revenue / maxRevenue : 0;
+                return (
+                  <div
+                    key={c.name}
+                    className={`flex items-center gap-1.5 text-xs cursor-pointer rounded px-1 py-0.5 transition-colors
+                      ${hovered === c.name ? "bg-zinc-800" : "hover:bg-zinc-800/50"}`}
+                    onMouseEnter={() => setHovered(c.name)}
+                    onMouseLeave={() => setHovered(null)}
+                  >
+                    <span className="text-zinc-600 w-3 text-right font-mono text-[10px]">{i + 1}</span>
+                    <div className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: interpolateColor(t) }} />
+                    <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
+                    <span className="text-zinc-500 tabular-nums text-[10px]">{fmtRevenue(c.revenue)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
