@@ -328,8 +328,8 @@ export default function IndiaSalesMap({ data }: Props) {
                         }}
                       />
                     </div>
-                    <span className="text-zinc-400 tabular-nums text-[11px] w-16 text-right">{fmtRevenue(s.revenue)}</span>
-                    <span className="text-zinc-600 tabular-nums text-[10px] w-10 text-right">{(s.share * 100).toFixed(1)}%</span>
+                    <span className="text-zinc-200 tabular-nums text-[11px] w-16 text-right font-medium">{fmtRevenue(s.revenue)}</span>
+                    <span className="text-zinc-200 tabular-nums text-[10px] w-10 text-right font-medium">{(s.share * 100).toFixed(1)}%</span>
                   </div>
                 </div>
               );
