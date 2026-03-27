@@ -63,7 +63,7 @@ jobs:
   deploy-frontend:
     name: Deploy Frontend
     runs-on: ubuntu-22.04
-    needs: deploy-backend
+    # needs: deploy-backend  # temporarily disabled — Docker Hub rate limit on backend
 
     steps:
       - uses: actions/checkout@v4
