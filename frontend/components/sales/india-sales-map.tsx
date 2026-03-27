@@ -75,12 +75,20 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "KOLKATA": [88.364, 22.573],
 };
 
-/* ── Color interpolation ──────────────────────────────────────────────── */
+/* ── Color interpolation — bright, visible gradient ───────────────────── */
 function interpolateColor(t: number): string {
-  // #134e4a (teal-900) → #f97316 (orange-500)
-  const r = Math.round(19 + t * (249 - 19));
-  const g = Math.round(78 + t * (115 - 78));
-  const b = Math.round(74 + t * (22 - 74));
+  // #22d3ee (cyan-400) → #f59e0b (amber-500) → #ef4444 (red-500)
+  if (t < 0.5) {
+    const s = t * 2; // 0→1 within first half
+    const r = Math.round(34 + s * (245 - 34));
+    const g = Math.round(211 + s * (158 - 211));
+    const b = Math.round(238 + s * (11 - 238));
+    return `rgb(${r},${g},${b})`;
+  }
+  const s = (t - 0.5) * 2; // 0→1 within second half
+  const r = Math.round(245 + s * (239 - 245));
+  const g = Math.round(158 + s * (68 - 158));
+  const b = Math.round(11 + s * (68 - 11));
   return `rgb(${r},${g},${b})`;
 }
 
@@ -151,14 +159,14 @@ export default function IndiaSalesMap({ data }: Props) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex gap-4 items-start">
+        <div className="flex flex-col lg:flex-row gap-6 items-center justify-center">
           {/* ── Map ─────────────────────────────────────────────────── */}
-          <div className="min-w-0" style={{ maxWidth: 360, maxHeight: 380 }}>
+          <div className="min-w-0" style={{ width: 400, maxHeight: 420 }}>
             <ComposableMap
               projection="geoMercator"
-              projectionConfig={{ center: INDIA_CENTER, scale: 600 }}
-              width={360}
-              height={380}
+              projectionConfig={{ center: INDIA_CENTER, scale: 650 }}
+              width={400}
+              height={420}
               style={{ width: "100%", height: "auto" }}
             >
               <ZoomableGroup center={INDIA_CENTER} zoom={1} minZoom={1} maxZoom={4}>
@@ -169,12 +177,12 @@ export default function IndiaSalesMap({ data }: Props) {
                       <Geography
                         key={geo.rsmKey}
                         geography={geo}
-                        fill="#1c1c1f"
-                        stroke="#3f3f46"
-                        strokeWidth={0.4}
+                        fill="#27272a"
+                        stroke="#52525b"
+                        strokeWidth={0.5}
                         style={{
                           default: { outline: "none" },
-                          hover: { fill: "#27272a", outline: "none" },
+                          hover: { fill: "#3f3f46", outline: "none" },
                           pressed: { outline: "none" },
                         }}
                       />
@@ -199,9 +207,9 @@ export default function IndiaSalesMap({ data }: Props) {
                       <circle
                         r={isHovered ? radius * 1.5 : radius}
                         fill={color}
-                        fillOpacity={isHovered ? 0.95 : 0.7}
-                        stroke={isHovered ? "#fff" : color}
-                        strokeWidth={isHovered ? 1 : 0.3}
+                        fillOpacity={isHovered ? 1 : 0.85}
+                        stroke={isHovered ? "#fff" : "rgba(255,255,255,0.3)"}
+                        strokeWidth={isHovered ? 1.5 : 0.5}
                         className="cursor-pointer"
                       />
                       {(isHovered || c.share > 0.05) && (
