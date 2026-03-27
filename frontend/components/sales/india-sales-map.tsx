@@ -144,7 +144,7 @@ export default function IndiaSalesMap({ data }: Props) {
 
     for (const d of data) {
       const name = d.dimension_name.trim();
-      if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name]) {
+      if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name] && !CITY_COORDS[name.toLowerCase()]) {
         const normalized = normalizeStateName(name);
         const existing = stateAgg.get(normalized);
         if (existing) {
@@ -350,7 +350,7 @@ export default function IndiaSalesMap({ data }: Props) {
                     <div className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{ backgroundColor: interpolateColor(t) }} />
                     <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
-                    <span className="text-zinc-500 tabular-nums text-[10px]">{fmtRevenue(c.revenue)}</span>
+                    <span className="text-zinc-200 tabular-nums text-[10px] font-medium">{fmtRevenue(c.revenue)}</span>
                   </div>
                 );
               })}
