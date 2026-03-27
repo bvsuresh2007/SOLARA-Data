@@ -437,7 +437,7 @@ export default function IndiaSalesMap({ data }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-1.5 max-h-[460px] overflow-y-auto pr-1">
+          <div className="space-y-1.5">
             {states.map((s, i) => {
               const barPct = maxStateRevenue > 0 ? (s.revenue / maxStateRevenue) * 100 : 0;
               const t = maxStateRevenue > 0 ? s.revenue / maxStateRevenue : 0;
