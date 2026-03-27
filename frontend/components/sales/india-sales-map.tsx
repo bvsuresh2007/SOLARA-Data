@@ -97,10 +97,34 @@ const CITY_ALIASES: Record<string, string> = {
 
 function normalizeCityName(raw: string): string {
   const trimmed = raw.trim();
-  // Title-case it first (handles ALL CAPS like "HYDERABAD" → "Hyderabad")
   const titled = titleCase(trimmed);
-  // Check alias table (case-insensitive)
   const alias = CITY_ALIASES[trimmed.toLowerCase()];
+  return alias ?? titled;
+}
+
+/* ── State name normalisation — merge duplicates & aliases ────────────── */
+const STATE_ALIASES: Record<string, string> = {
+  "chattisgarh": "Chhattisgarh",
+  "orissa": "Odisha",
+  "pondicherry": "Puducherry",
+  "uttaranchal": "Uttarakhand",
+  "new delhi": "Delhi",
+  "nct of delhi": "Delhi",
+  "ncr": "Delhi",
+  "jammu and kashmir": "Jammu & Kashmir",
+  "jammu & kashmir": "Jammu & Kashmir",
+  "j&k": "Jammu & Kashmir",
+  "dadra and nagar haveli and daman and diu": "Dadra & Nagar Haveli",
+  "dadra and nagar haveli": "Dadra & Nagar Haveli",
+  "daman and diu": "Daman & Diu",
+  "andaman and nicobar": "Andaman & Nicobar",
+  "andaman and nicobar islands": "Andaman & Nicobar",
+};
+
+function normalizeStateName(raw: string): string {
+  const trimmed = raw.trim();
+  const titled = titleCase(trimmed);
+  const alias = STATE_ALIASES[trimmed.toLowerCase()];
   return alias ?? titled;
 }
 
@@ -115,13 +139,20 @@ export default function IndiaSalesMap({ data }: Props) {
   const { cities, states, maxRevenue, totalCityRevenue, totalStateRevenue, maxStateRevenue } = useMemo(() => {
     if (!data?.length) return { cities: [], states: [], maxRevenue: 0, totalCityRevenue: 0, totalStateRevenue: 0, maxStateRevenue: 0 };
 
-    const stateEntries: { name: string; revenue: number; quantity: number }[] = [];
+    const stateAgg = new Map<string, { revenue: number; quantity: number }>();
     const cityEntries: typeof data = [];
 
     for (const d of data) {
       const name = d.dimension_name.trim();
       if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name]) {
-        stateEntries.push({ name: titleCase(name), revenue: d.total_revenue, quantity: d.total_quantity });
+        const normalized = normalizeStateName(name);
+        const existing = stateAgg.get(normalized);
+        if (existing) {
+          existing.revenue += d.total_revenue;
+          existing.quantity += d.total_quantity;
+        } else {
+          stateAgg.set(normalized, { revenue: d.total_revenue, quantity: d.total_quantity });
+        }
       } else {
         cityEntries.push(d);
       }
@@ -157,14 +188,16 @@ export default function IndiaSalesMap({ data }: Props) {
       };
     });
 
-    // Sort states by revenue descending
-    stateEntries.sort((a, b) => b.revenue - a.revenue);
-    const totalStateRevenue = stateEntries.reduce((s, d) => s + d.revenue, 0);
-    const maxStateRevenue = stateEntries.length > 0 ? stateEntries[0].revenue : 0;
+    // Convert state map to sorted array
+    const stateList = Array.from(stateAgg.entries())
+      .map(([name, v]) => ({ name, revenue: v.revenue, quantity: v.quantity }))
+      .sort((a, b) => b.revenue - a.revenue);
+    const totalStateRevenue = stateList.reduce((s, d) => s + d.revenue, 0);
+    const maxStateRevenue = stateList.length > 0 ? stateList[0].revenue : 0;
 
     return {
       cities,
-      states: stateEntries.map((s) => ({
+      states: stateList.map((s) => ({
         ...s,
         share: totalStateRevenue > 0 ? s.revenue / totalStateRevenue : 0,
       })),
