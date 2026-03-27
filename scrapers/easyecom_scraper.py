@@ -106,7 +106,7 @@ class EasyecomBaseScraper:
             user_data_dir=str(profile),
             headless=self.headless,
             slow_mo=300 if not self.headless else 0,
-            args=["--start-maximized"] if not self.headless else [],
+            args=["--start-maximized"] if not self.headless else ["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
             viewport={"width": 1400, "height": 900},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -282,10 +282,15 @@ class SwiggyScraper:
         otp = self._get_otp_from_gmail(after_epoch=otp_requested_at)
         if not otp:
             self._shot("reauth_otp_timeout")
-            raise RuntimeError(
-                "[Swiggy] Could not fetch OTP from Gmail. "
-                "Check token.json and that email is delivered to the inbox."
-            )
+            if not self.headless:
+                # Manual fallback: browser window is visible — ask user to type OTP
+                self._log.info("[Swiggy] Gmail fetch failed. Browser is open — enter OTP manually.")
+                otp = input(">>> Enter Swiggy OTP manually: ").strip()
+            if not otp:
+                raise RuntimeError(
+                    "[Swiggy] Could not fetch OTP from Gmail. "
+                    "Check token.json and that email is delivered to the inbox."
+                )
 
         # Enter OTP
         self._log.info("[Swiggy] Entering OTP: %s", otp)

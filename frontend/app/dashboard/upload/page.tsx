@@ -405,7 +405,7 @@ export default function UploadPage() {
                   ? <Check size={16} className="text-green-400" />
                   : <AlertTriangle size={16} className="text-yellow-400" />}
                 <span className="text-zinc-100">
-                  {result.inserted > 0 ? "Import Complete" : "No New Rows — All Duplicates"}
+                  {result.inserted > 0 ? "Import Complete" : "No Rows to Import"}
                 </span>
               </CardTitle>
             </CardHeader>
@@ -438,7 +438,7 @@ export default function UploadPage() {
                   </div>
                   <div className="flex items-center gap-4 mt-2 text-[10px] text-zinc-500">
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Inserted</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-zinc-600 inline-block" />Skipped (duplicate)</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-zinc-600 inline-block" />Updated (existing)</span>
                     {result.errors.length > 0 && (
                       <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-600 inline-block" />Errors</span>
                     )}

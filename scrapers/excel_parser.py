@@ -298,7 +298,7 @@ EASYECOM_MP_MAP: dict[str, str | None] = {
     "amazon.in":               None,          # Amazon comes from Amazon PI scraper
     "vendor central dropship": None,          # Skip
     "flipkart":                None,          # Skip — handled separately
-    "myntra ppmp":             None,          # Skip — handled separately
+    "myntra ppmp":             "myntra",      # Myntra PPMP via EasyEcom
     "shopify":                 "shopify",
     "meesho-api":              "meesho",
     "nykaa fashion":           "nykaa_fashion",
@@ -443,10 +443,16 @@ class EasyEcomInventoryParser:
 class AmazonPIParser:
     """
     Amazon PI (Vendor/PI dashboard) ASIN revenue report parser.
-    Actual columns: asin, itemName, lbrBrandName, orderMonth, orderDay,
-                    orderYear, orderAmt, orderQuantity, category, subcategory,
-                    stateName, postalCode.
-    City-level data is not available; stateName is used as a location proxy.
+
+    Supports BOTH old and new column formats (Amazon PI UI redesign 2026-03):
+      Old: asin, itemName, lbrBrandName, orderMonth, orderDay,
+           orderYear, orderAmt, orderQuantity, category, subcategory,
+           stateName, postalCode
+      New: asin, itemName, brandName, orderDay, orderMonth,
+           orderYear, grossSales, grossUnits, netSales, netUnits,
+           indexedGlanceViews, category, subcategory, stateName,
+           city, postalCode
+
     portal_product_id = asin.
     """
 
@@ -465,21 +471,26 @@ class AmazonPIParser:
                 )
             except Exception:
                 sale_date = None
-            revenue = _f(row.get("orderAmt", 0))
-            qty = _f(row.get("orderQuantity", 0))
+            # Support both old (orderAmt/orderQuantity) and new (grossSales/netSales) columns
+            revenue = _f(row.get("netSales")) or _f(row.get("grossSales")) or _f(row.get("orderAmt", 0))
+            qty = _f(row.get("netUnits")) or _f(row.get("grossUnits")) or _f(row.get("orderQuantity", 0))
+            gross_rev = _f(row.get("grossSales")) or revenue
+            # Prefer city (new format), fall back to stateName (old format)
+            city = str(row.get("city", "")).strip()
+            if not city or city.lower() == "nan":
+                city = str(row.get("stateName", "")).strip()
             rows.append({
                 "portal": "amazon",
                 "sale_date": sale_date,
                 "portal_product_id": asin,
-                # stateName (e.g. "GUJARAT") used as location; no city-level data
-                "city": str(row.get("stateName", "")).strip(),
+                "city": city,
                 "l1_category": str(row.get("category", "")).strip(),
                 "l2_category": str(row.get("subcategory", "")).strip(),
                 "l3_category": "",
                 "revenue": revenue,
                 "quantity_sold": qty,
-                "order_count": 1,  # each row is one order in the long format
-                "discount_amount": 0.0,
+                "order_count": 1,
+                "discount_amount": gross_rev - revenue if gross_rev > revenue else 0.0,
                 "net_revenue": revenue,
             })
         return rows

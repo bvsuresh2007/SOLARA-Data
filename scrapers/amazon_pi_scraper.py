@@ -25,6 +25,7 @@ Standalone (visible, keeps browser open after login):
 
 import logging
 import os
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -58,7 +59,7 @@ CATEGORIES = [
     "Tableware",
 ]
 
-REPORT_TYPE = "ASIN wise revenue and unit sales"
+REPORT_TYPE = "ASIN-wise Sales & Indexed GVs at a City Level"
 
 
 class AmazonPIScraper:
@@ -66,7 +67,7 @@ class AmazonPIScraper:
 
     portal_name = "amazon_pi"
 
-    def __init__(self, headless: bool = True, raw_data_path: str = None):
+    def __init__(self, headless: bool = False, raw_data_path: str = None):  # headless=False: new React UI hangs in headless mode
         self.headless = headless
         self.raw_data_path = Path(raw_data_path or os.getenv("RAW_DATA_PATH", "./data/raw"))
         self.out_dir = self.raw_data_path / self.portal_name
@@ -125,7 +126,14 @@ class AmazonPIScraper:
 
     def login(self) -> None:
         self._log.info("[AmazonPI] Navigating to %s", self.login_url)
-        self._page.goto(self.login_url, wait_until="domcontentloaded")
+        try:
+            self._page.goto(self.login_url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            # login_url (e.g. brand-summary) may time out if that page no longer exists.
+            # Fall back to reports/sbg which is always reachable when logged in.
+            self._log.info("[AmazonPI] login_url timed out — retrying with reports/sbg")
+            self._page.goto("https://pi.amazon.in/reports/sbg", wait_until="domcontentloaded",
+                            timeout=45_000)
 
         if self._page.url.startswith("https://pi.amazon.in"):
             self._log.info("[AmazonPI] Session active — skipping login. URL: %s", self._page.url)
@@ -216,29 +224,177 @@ class AmazonPIScraper:
         self._page.goto("https://pi.amazon.in/reports/sbg", wait_until="domcontentloaded")
 
         # ── Brand = SOLARA ─────────────────────────────────────────────
-        brand_sel = self._page.locator('select#brand-dropdown')
-        brand_sel.wait_for(state="visible", timeout=15_000)
-        brand_sel.select_option(label="SOLARA")
-        self._log.info("[AmazonPI]   Brand = SOLARA")
+        # Amazon PI changed from native <select> to a custom button listbox.
+        # We must click the button and re-select SOLARA to trigger the data load.
+        brand_btn = self._page.locator('[data-testid="undefined-brand-dropdown"] button')
+        brand_btn.wait_for(state="visible", timeout=30_000)
+        brand_text = brand_btn.inner_text().strip()
+        self._log.info("[AmazonPI]   Brand button visible: %s — clicking to trigger data load", brand_text)
+        brand_btn.click()
+        self._page.wait_for_timeout(1500)
+        # Select exact "SOLARA" from the listbox (not "Essentials by SOLARA" which has no data).
+        listbox = self._page.locator('[role="listbox"]')
+        listbox.wait_for(state="visible", timeout=10_000)
+        options = listbox.locator('[role="option"]')
+        solara_option = None
+        for i in range(options.count()):
+            if options.nth(i).inner_text().strip() == "SOLARA":
+                solara_option = options.nth(i)
+                break
+        if solara_option is None:
+            solara_option = options.filter(has_text=re.compile(r"^SOLARA$", re.I)).first
+        # Use JS click for option (rendered in <div id="portal"> overlay)
+        solara_option.evaluate("el => el.click()")
+        self._log.info("[AmazonPI]   Brand = SOLARA selected")
 
-        # Wait for the page to settle after brand selection.
+        # Page re-renders after brand selection — wait for content to load.
+        # #aue-time-period-option appears once chart data is ready (~15s).
+        self._page.wait_for_timeout(5000)
         try:
-            self._page.wait_for_load_state("networkidle", timeout=20_000)
+            self._page.wait_for_load_state("networkidle", timeout=30_000)
         except Exception:
             pass
-        self._page.locator('#aue-time-period-option').wait_for(state="visible", timeout=25_000)
+        self._page.locator('#aue-time-period-option').wait_for(state="visible", timeout=120_000)
         self._page.wait_for_timeout(1000)
 
         # ── Set Time Period ONCE (before any category switch) ──────────
         self._set_time_period(report_date)
 
         # ── Iterate categories via dropdown — no page.goto() between them ──
+        # Storage And Containers needs a wider date range (the Generate Excel button
+        # doesn't render for single-day period). Process it last with a 15-day range.
+        storage_cat = "Storage And Containers"
         for category in CATEGORIES:
+            if category == storage_cat:
+                continue  # handle separately below
             try:
                 self._generate_for_category(category, report_date)
             except Exception as exc:
                 self._log.error("[AmazonPI] Category %s failed: %s", category, exc)
                 self._shot(f"error_{category[:6].replace(' ', '_')}")
+
+        # ── Storage And Containers: full page reload + fresh setup ──
+        # The Generate Excel button doesn't render when switching categories via dropdown.
+        # Fix: reload the SBG page fresh, select category FIRST, then set time period.
+        try:
+            self._log.info("[AmazonPI] Full page reload for %s", storage_cat)
+
+            # Reload the SBG page completely — fresh DOM state
+            self._page.goto("https://pi.amazon.in/reports/sbg",
+                            wait_until="domcontentloaded", timeout=30_000)
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=20_000)
+            except Exception:
+                pass
+            self._page.wait_for_timeout(3000)
+
+            # Re-select Brand = SOLARA (page reload resets brand to default)
+            brand_btn = self._page.locator('[data-testid="undefined-brand-dropdown"] button')
+            brand_btn.wait_for(state="visible", timeout=30_000)
+            brand_btn.click()
+            self._page.wait_for_timeout(1500)
+            listbox = self._page.locator('[role="listbox"]')
+            listbox.wait_for(state="visible", timeout=10_000)
+            opts = listbox.locator('[role="option"]')
+            for i in range(opts.count()):
+                if opts.nth(i).inner_text().strip() == "SOLARA":
+                    opts.nth(i).evaluate("el => el.click()")
+                    break
+            self._log.info("[AmazonPI]   Brand = SOLARA re-selected after reload")
+            self._page.wait_for_timeout(5000)
+
+            # Wait for time period section to appear (page fully loaded after brand selection)
+            self._page.locator('#aue-time-period-option').wait_for(
+                state="visible", timeout=120_000)
+            self._page.wait_for_timeout(1000)
+
+            # Select Storage And Containers
+            # force=True click to bypass overlay, then JS for option
+            cat_btn = self._page.locator('[data-testid="sbg-category-dropdown"] button')
+            cat_btn.wait_for(state="visible", timeout=30_000)
+            cat_btn.click(force=True)
+            # Wait for listbox options to render
+            self._page.wait_for_function(
+                "() => document.querySelectorAll('[role=\"option\"]').length > 0",
+                timeout=15_000,
+            )
+            self._page.wait_for_timeout(500)
+            opt_result = self._page.evaluate("""(cat) => {
+                const options = document.querySelectorAll('[role="option"]');
+                for (const opt of options) {
+                    if (opt.innerText && opt.innerText.trim().toLowerCase().includes(cat.toLowerCase())) {
+                        opt.click();
+                        return {selected: true, text: opt.innerText.trim()};
+                    }
+                }
+                return {selected: false, texts: Array.from(options).map(o => o.innerText?.trim())};
+            }""", storage_cat)
+            if not opt_result.get("selected"):
+                raise RuntimeError(f"Category '{storage_cat}' not found: {opt_result.get('texts')}")
+            self._log.info("[AmazonPI]   Category = %s", storage_cat)
+
+            # Select ALL sub-categories
+            self._select_all_subcategories()
+
+            # Wait for page to settle after category + subcategory selection
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=20_000)
+            except Exception:
+                pass
+            self._page.wait_for_timeout(3000)
+
+            # Set time period (single day)
+            self._set_time_period(report_date)
+
+            # Wait again after time period for download section to render
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=20_000)
+            except Exception:
+                pass
+            self._page.wait_for_timeout(5000)
+
+            # Now scroll to download section, select report type, and try Generate Excel
+            self._page.evaluate("""
+                const el = document.querySelector('#aue-report-download');
+                if (el) el.scrollIntoView({behavior: 'instant', block: 'center'});
+                else window.scrollTo(0, document.body.scrollHeight);
+            """)
+            self._page.wait_for_timeout(2000)
+
+            # Select the correct report type
+            storage_dl_section = self._page.locator('#aue-report-download')
+            self._select_report_type(storage_dl_section)
+            self._page.wait_for_timeout(1000)
+
+            # Dump what we see
+            result = self._page.evaluate("""() => {
+                const section = document.querySelector('#aue-report-download');
+                if (!section) return {found: false, html: 'NO SECTION'};
+                const btns = section.querySelectorAll('button');
+                const btnTexts = [];
+                for (const btn of btns) {
+                    btnTexts.push(btn.innerText?.trim() || '(empty)');
+                    if (btn.innerText && btn.innerText.trim().includes('Generate Excel')) {
+                        btn.scrollIntoView({block: 'center'});
+                        btn.click();
+                        return {found: true, btnTexts: btnTexts};
+                    }
+                }
+                return {found: false, btnTexts: btnTexts, html: section.innerHTML.substring(0, 800)};
+            }""")
+
+            if result.get("found"):
+                self._log.info("[AmazonPI]   Generate Excel clicked via JS for %s", storage_cat)
+                self._shot(f"after_gen_{storage_cat[:6].replace(' ', '_')}")
+            else:
+                self._log.info("[AmazonPI]   Buttons found: %s", result.get("btnTexts"))
+                self._log.info("[AmazonPI]   Section HTML: %s", result.get("html", "")[:800])
+                self._shot(f"no_gen_{storage_cat[:6].replace(' ', '_')}")
+                raise RuntimeError("Generate Excel not found for " + storage_cat)
+
+        except Exception as exc:
+            self._log.error("[AmazonPI] Category %s failed: %s", storage_cat, exc)
+            self._shot(f"error_{storage_cat[:6].replace(' ', '_')}")
 
         self._log.info("[AmazonPI] All generation requests queued. Moving to Download Center.")
         files = self._download_from_center(report_date)
@@ -254,121 +410,483 @@ class AmazonPIScraper:
         """
         self._log.info("[AmazonPI] Generating: %s — %s", category, report_date)
 
-        # ── Set category (AJAX reload, same page — Time Period persists) ──
-        cat_sel = self._page.locator('select#category-dropdown')
-        cat_sel.wait_for(state="visible", timeout=15_000)
-        # The dropdown is disabled during AJAX chart-data loading after time-period changes.
-        # Wait up to 60s for it to become enabled before selecting.
-        try:
-            self._page.wait_for_function(
-                "() => { const s = document.querySelector('select#category-dropdown'); "
-                "return s && !s.disabled; }",
-                timeout=60_000,
-            )
-            self._log.info("[AmazonPI]   Category dropdown is enabled")
-        except Exception as e:
-            self._log.warning("[AmazonPI]   Category dropdown still disabled after 60s: %s — trying anyway", e)
-        cat_sel.select_option(label=category)
+        # Dismiss any open dropdown overlay from previous category
+        self._page.keyboard.press("Escape")
+        self._page.wait_for_timeout(300)
+        # Also click body to close any React portal overlay
+        self._page.evaluate("() => { document.body.click(); }")
+        self._page.wait_for_timeout(300)
+
+        # ── Set category — custom button listbox (data-testid="sbg-category-dropdown") ──
+        # Uses JS click because React portal (<div id="portal">) renders the listbox
+        # options in an overlay that intercepts Playwright's standard click.
+        self._page.wait_for_function(
+            "() => { const b = document.querySelector('[data-testid=\"sbg-category-dropdown\"] button'); "
+            "return b && !b.disabled; }",
+            timeout=60_000,
+        )
+        # force=True click to open dropdown (bypasses overlay actionability checks)
+        cat_btn = self._page.locator('[data-testid="sbg-category-dropdown"] button')
+        cat_btn.click(force=True)
+        # Wait for listbox options to render
+        self._page.wait_for_function(
+            "() => document.querySelectorAll('[role=\"option\"]').length > 0",
+            timeout=15_000,
+        )
+        self._page.wait_for_timeout(500)
+        # JS click to select option (bypasses <div id="portal"> overlay)
+        opt_result = self._page.evaluate("""(cat) => {
+            const options = document.querySelectorAll('[role="option"]');
+            for (const opt of options) {
+                if (opt.innerText && opt.innerText.trim().toLowerCase().includes(cat.toLowerCase())) {
+                    opt.click();
+                    return {selected: true, text: opt.innerText.trim()};
+                }
+            }
+            return {selected: false, texts: Array.from(options).map(o => o.innerText?.trim())};
+        }""", category)
+        if not opt_result.get("selected"):
+            raise RuntimeError(f"Category '{category}' not found in dropdown: {opt_result.get('texts')}")
         self._log.info("[AmazonPI]   Category = %s", category)
 
+        # Select ALL sub-categories (default only selects top N, missing some ASINs)
+        self._select_all_subcategories()
+
         # Wait for AJAX to settle (chart data loads for this category).
-        # The chart may not load if the category has no data for our date; that's OK —
-        # the Downloads section is always available.
+        # Some categories (e.g. Storage And Containers) take 5+ seconds for the
+        # download section to render after category switch.
         try:
             self._page.wait_for_load_state("networkidle", timeout=20_000)
         except Exception:
             pass
-        self._page.wait_for_timeout(1500)
+        self._page.wait_for_timeout(3000)
 
-        # ── Scroll to Downloads section ────────────────────────────────
+        # Wait for the download section to exist in the DOM before scrolling
+        try:
+            self._page.locator('#aue-report-download').wait_for(state="attached", timeout=15_000)
+        except Exception:
+            self._log.info("[AmazonPI]   #aue-report-download not in DOM yet — waiting longer")
+            self._page.wait_for_timeout(5000)
+
+        # ── Scroll to Downloads section (#aue-report-download) ────────
+        # The download section is deep below the fold (y~1900). Scroll aggressively.
         self._page.evaluate("""
-            const el = document.querySelector('select#download-dropdown')
-                    || document.querySelector('select[name="download-report"]');
-            if (el) el.scrollIntoView({behavior: 'smooth', block: 'center'});
+            const el = document.querySelector('#aue-report-download')
+                    || document.querySelector('button#multi-select-simple-button')
+                    || document.querySelector('[id*="download"]');
+            if (el) el.scrollIntoView({behavior: 'instant', block: 'center'});
+            else window.scrollTo(0, document.body.scrollHeight);
         """)
-        self._page.wait_for_timeout(800)
+        self._page.wait_for_timeout(2000)
 
-        # ── Report type: ASIN wise revenue and unit sales ──────────────
-        dl_sel = self._page.locator('select#download-dropdown')
-        dl_sel.wait_for(state="visible", timeout=10_000)
-        dl_sel.select_option(label=REPORT_TYPE)
-        self._log.info("[AmazonPI]   Report type = %s", REPORT_TYPE)
+        # ── Select the correct report type from the dropdown ──────────
+        # The default may be "ASIN-wise Sales & Indexed GVs at a City Level" (41 ASINs).
+        # We need "ASIN wise revenue and unit sales" (118 ASINs — full data).
+        download_section = self._page.locator('#aue-report-download')
+        self._select_report_type(download_section)
         self._page.wait_for_timeout(400)
 
         # ── Generate Excel ─────────────────────────────────────────────
-        gen_btn = self._page.locator('a.a-button-text', has_text="Generate Excel")
-        gen_btn.wait_for(state="visible", timeout=10_000)
-        self._shot(f"before_gen_{category[:6].replace(' ', '_')}")
-        gen_btn.click()
+        # The button exists in #aue-report-download but Playwright's scroll_into_view
+        # can timeout (30s) if an overlay/modal blocks it. Use JS click as primary method.
+        gen_found = False
+
+        # Dismiss any success toast/banner from previous category's Generate Excel
+        try:
+            dismiss = self._page.locator('button:has-text("Dismiss"), button[aria-label="Close"], button:has-text("OK"), button:has-text("×")')
+            if dismiss.count() > 0:
+                dismiss.first.click(timeout=2_000)
+                self._page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        # Method 1 (most reliable): JS DOM click — bypasses Playwright overlay checks
+        try:
+            result = self._page.evaluate("""() => {
+                const section = document.querySelector('#aue-report-download');
+                if (!section) return {found: false, html: 'NO SECTION'};
+                const btns = section.querySelectorAll('button');
+                const btnTexts = [];
+                for (const btn of btns) {
+                    btnTexts.push(btn.innerText?.trim() || '(empty)');
+                    if (btn.innerText && btn.innerText.trim().includes('Generate Excel')) {
+                        btn.scrollIntoView({block: 'center'});
+                        btn.click();
+                        return {found: true, btnTexts: btnTexts};
+                    }
+                }
+                return {found: false, btnTexts: btnTexts, html: section.innerHTML.substring(0, 500)};
+            }""")
+            if result.get("found"):
+                gen_found = True
+                self._log.info("[AmazonPI]   Generate Excel clicked via JS for %s", category)
+            else:
+                self._log.info("[AmazonPI]   JS: buttons in section = %s", result.get("btnTexts"))
+                self._log.info("[AmazonPI]   JS: section HTML = %s", result.get("html", "")[:500])
+                # Maybe Generate Excel is a sibling, not inside #aue-report-download
+                try:
+                    sib = self._page.evaluate("""() => {
+                        const section = document.querySelector('#aue-report-download');
+                        if (!section) return {found: false};
+                        // Check next sibling
+                        let el = section.nextElementSibling;
+                        while (el) {
+                            const btns = el.querySelectorAll('button');
+                            for (const btn of btns) {
+                                if (btn.innerText && btn.innerText.trim().includes('Generate')) {
+                                    btn.scrollIntoView({block: 'center'});
+                                    btn.click();
+                                    return {found: true, text: btn.innerText.trim()};
+                                }
+                            }
+                            el = el.nextElementSibling;
+                        }
+                        // Check parent's children
+                        const parent = section.parentElement;
+                        if (parent) {
+                            const allBtns = parent.querySelectorAll('button');
+                            for (const btn of allBtns) {
+                                if (btn.innerText && btn.innerText.trim().includes('Generate')) {
+                                    btn.scrollIntoView({block: 'center'});
+                                    btn.click();
+                                    return {found: true, text: btn.innerText.trim(), loc: 'parent'};
+                                }
+                            }
+                        }
+                        return {found: false, parentHTML: parent ? parent.innerHTML.substring(0, 800) : 'no parent'};
+                    }""")
+                    if sib.get("found"):
+                        gen_found = True
+                        self._log.info("[AmazonPI]   Generate Excel clicked via sibling JS for %s (btn=%s)", category, sib.get("text"))
+                    else:
+                        self._log.info("[AmazonPI]   Sibling search: %s", str(sib.get("parentHTML", ""))[:400])
+                except Exception as e:
+                    self._log.info("[AmazonPI]   Sibling search failed: %s", str(e)[:80])
+        except Exception as e:
+            self._log.info("[AmazonPI]   JS click failed: %s", str(e)[:80])
+
+        # Method 2: Playwright locator with force click (skips actionability checks)
+        if not gen_found:
+            try:
+                dl_sec = self._page.locator('#aue-report-download')
+                gen_btn = dl_sec.locator('button:has-text("Generate Excel")')
+                gen_btn.first.click(force=True, timeout=10_000)
+                gen_found = True
+                self._log.info("[AmazonPI]   Generate Excel clicked (force) for %s", category)
+            except Exception as e:
+                self._log.info("[AmazonPI]   Force click failed: %s", str(e)[:80])
+
+        # Method 3: page-wide role search
+        if not gen_found:
+            try:
+                gen_btn2 = self._page.get_by_role("button", name="Generate Excel", exact=False)
+                gen_btn2.click(force=True, timeout=10_000)
+                gen_found = True
+                self._log.info("[AmazonPI]   Generate Excel clicked (role+force) for %s", category)
+            except Exception:
+                pass
+
+        if not gen_found:
+            self._log.error("[AmazonPI]   Generate Excel NOT found for %s", category)
+            self._shot(f"no_gen_{category[:6].replace(' ', '_')}")
+            raise RuntimeError(f"Generate Excel not found for {category}")
+
         self._log.info("[AmazonPI]   Generate Excel clicked for %s", category)
         self._page.wait_for_timeout(3000)
         self._shot(f"after_gen_{category[:6].replace(' ', '_')}")
 
     def _set_time_period(self, report_date: date) -> None:
         """
-        Open the Time Period modal and set From = To = report_date (single day, Daily tab).
+        Open the Time Period popper and set From = To = report_date (single day, Daily tab).
 
-        Confirmed selectors (live page inspection 2026-02-23):
-          Trigger:    section#aue-time-period-option
-          Daily tab:  input[name="daily-range-tab"]  (type="submit")
-          From input: input.a-cal-input nth(0)       (type="text", MM/DD/YYYY)
-          To input:   input.a-cal-input nth(1)       (type="text", MM/DD/YYYY)
-          Calendar:   [role="dialog"][id^="a-popover"] — opened by clicking the input
-                      Day cells:  a[data-action="a-cal-select-date"]
-                      Month nav:  a[data-action="a-cal-prev"] / a[data-action="a-cal-next"]
-                      Month name: .a-cal-current
-          Apply btn:  input#modal-save-button-time-period
+        Updated for Amazon PI UI redesign (2026-03-26):
+          Trigger:     button nth(1) inside #aue-time-period-option
+                       (nth(0) is the info tooltip — clicking it opens a tooltip, not the picker)
+          Popper:      id='time-period-popper' (role="dialog")
+          Daily tab:   [role="button"] text="Daily" in sidebar nav
+          Start/End:   calendar icon buttons (aria-label="Start date" / "End date")
+                       → opens id='start-date-popper' / id='end-date-popper'
+                       → day buttons: aria-label like "Wednesday March 25 2026"
+          Apply btn:   button text="Apply" inside time-period-popper
         """
-        date_str = report_date.strftime("%m/%d/%Y")
+        date_str = report_date.strftime("%d/%m/%Y")
         self._log.info("[AmazonPI]   Setting time period to %s", date_str)
 
-        # Open the Time Period modal by clicking the banner trigger.
-        # This is called once (brand only, no category yet) so the chart is in a
-        # stable state and the modal opens reliably.
-        tp_trigger = self._page.locator('#aue-time-period-option')
-        tp_trigger.scroll_into_view_if_needed()
-        tp_trigger.click()
-        apply_btn = self._page.locator('#modal-save-button-time-period')
-        apply_btn.wait_for(state="visible", timeout=15_000)
-        self._log.info("[AmazonPI]   Time Period modal opened")
+        # Open the Time Period popper — click the date-range button (index 1),
+        # NOT index 0 which is the info tooltip button.
+        tp_section = self._page.locator('#aue-time-period-option')
+        tp_section.scroll_into_view_if_needed()
+        date_range_btn = tp_section.locator('button').nth(1)
+        date_range_btn.wait_for(state="visible", timeout=15_000)
+        date_range_btn.click()
+
+        popper = self._page.locator('#time-period-popper')
+        popper.wait_for(state="visible", timeout=15_000)
+        self._log.info("[AmazonPI]   Time Period popper opened")
         self._shot("tp_opened")
 
-        # Confirm Daily tab — AUI radio button (always hidden by CSS).
-        # Use dispatch_event to bypass CSS hidden state.
-        daily_tab = self._page.locator('input[name="daily-range-tab"]')
-        daily_tab.wait_for(state="attached", timeout=10_000)
-        aria_checked = daily_tab.get_attribute('aria-checked')
-        self._log.info("[AmazonPI]   Daily tab aria-checked=%s — dispatching click", aria_checked)
-        daily_tab.dispatch_event('click')
+        # Ensure Daily granularity is selected (sidebar nav item).
+        daily_li = popper.locator('[role="button"]', has_text="Daily")
+        daily_li.wait_for(state="visible", timeout=5_000)
+        daily_li.click()
+        self._page.wait_for_timeout(300)
+
+        # Set Start and End dates via calendar icon buttons.
+        # The date inputs are readonly — must click the calendar icon to open
+        # a date-popper and click the day cell.
+        self._pick_date_calendar("Start", report_date)
         self._page.wait_for_timeout(500)
-
-        # Set From date — a-cal-input is always hidden by AUI CSS; use "attached"
-        from_inp = self._page.locator('input.a-cal-input').nth(0)
-        from_inp.wait_for(state="attached", timeout=8_000)
-        self._pick_date_in_cal_input(from_inp, report_date, "From")
-
-        # Set To date (same flow; From calendar is now closed)
-        to_inp = self._page.locator('input.a-cal-input').nth(1)
-        to_inp.wait_for(state="attached", timeout=8_000)
-        self._pick_date_in_cal_input(to_inp, report_date, "To")
+        self._pick_date_calendar("End", report_date)
+        self._page.wait_for_timeout(500)
 
         self._shot("tp_dates_filled")
 
-        # Dismiss any still-open calendar popover before clicking Apply.
-        # After picking the "To" date the calendar may stay visible and intercept pointer events.
-        try:
-            self._page.keyboard.press("Escape")
-            self._page.wait_for_timeout(300)
-        except Exception:
-            pass
-
-        # Click Apply — use JS .click() to bypass any lingering calendar overlay.
-        self._page.evaluate(
-            "() => { const btn = document.querySelector('#modal-save-button-time-period'); if (btn) btn.click(); }"
-        )
-        self._log.info("[AmazonPI]   Time Period applied: %s", date_str)
+        # Click Apply button inside the popper.
+        apply_btn = popper.get_by_role("button", name="Apply")
+        apply_btn.wait_for(state="visible", timeout=5_000)
+        apply_btn.click()
+        self._log.info("[AmazonPI]   Time Period applied: %s", report_date.strftime("%d/%m/%Y"))
         self._page.wait_for_timeout(2000)
         self._shot("tp_done")
+
+    def _select_all_subcategories(self) -> None:
+        """
+        Open the sub-category dropdown (#aue-subcategory-option) and select ALL options.
+
+        Amazon PI defaults to showing only the top N sub-categories (e.g. 3 of 6 for
+        Storage And Containers). This causes missing ASINs in the downloaded report.
+
+        The dropdown has checkboxes for each sub-category, a "Clear all" button,
+        and "Apply"/"Cancel" buttons. We click each unchecked checkbox, then Apply.
+        """
+        subcat_section = self._page.locator('#aue-subcategory-option')
+        try:
+            subcat_section.wait_for(state="visible", timeout=10_000)
+        except Exception:
+            self._log.info("[AmazonPI]   No sub-category section found — skipping")
+            return
+
+        # Check current selection text
+        current_text = subcat_section.inner_text().strip()
+        self._log.info("[AmazonPI]   Sub-category: %s", current_text[:100])
+
+        # Open the dropdown (button inside the section)
+        subcat_btn = subcat_section.locator('button[aria-haspopup]').first
+        try:
+            subcat_btn.wait_for(state="visible", timeout=5_000)
+        except Exception:
+            self._log.info("[AmazonPI]   No sub-category dropdown button — skipping")
+            return
+
+        subcat_btn.click(force=True)
+        self._page.wait_for_timeout(1000)
+
+        # Click all unchecked checkboxes via JS
+        result = self._page.evaluate("""() => {
+            // Find the portal/listbox that just opened
+            const portal = document.querySelector('#portal');
+            if (!portal) return {clicked: 0, error: 'no portal'};
+
+            const checkboxes = portal.querySelectorAll('input[type="checkbox"]');
+            let clicked = 0;
+            let total = checkboxes.length;
+
+            for (const cb of checkboxes) {
+                if (!cb.checked) {
+                    cb.click();
+                    clicked++;
+                }
+            }
+
+            // If no <input> checkboxes, try role="checkbox" buttons
+            if (total === 0) {
+                const roleCheckboxes = portal.querySelectorAll('[role="checkbox"]');
+                total = roleCheckboxes.length;
+                for (const cb of roleCheckboxes) {
+                    if (cb.getAttribute('aria-checked') !== 'true') {
+                        cb.click();
+                        clicked++;
+                    }
+                }
+            }
+
+            // If still no checkboxes found, look for list items that can be clicked
+            if (total === 0) {
+                const items = portal.querySelectorAll('[role="option"]');
+                total = items.length;
+                for (const item of items) {
+                    if (item.getAttribute('aria-selected') !== 'true') {
+                        item.click();
+                        clicked++;
+                    }
+                }
+            }
+
+            return {clicked, total};
+        }""")
+        self._log.info("[AmazonPI]   Sub-categories: checked %d more (total %d)",
+                       result.get("clicked", 0), result.get("total", 0))
+
+        self._page.wait_for_timeout(500)
+
+        # Click Apply button
+        apply_result = self._page.evaluate("""() => {
+            const portal = document.querySelector('#portal');
+            if (!portal) return {found: false};
+            const buttons = portal.querySelectorAll('button');
+            for (const btn of buttons) {
+                if (btn.innerText && btn.innerText.trim() === 'Apply') {
+                    btn.click();
+                    return {found: true};
+                }
+            }
+            return {found: false};
+        }""")
+
+        if apply_result.get("found"):
+            self._log.info("[AmazonPI]   Sub-category Apply clicked — all sub-categories selected")
+        else:
+            self._log.warning("[AmazonPI]   Apply button not found in sub-category dropdown")
+            # Try to dismiss
+            self._page.keyboard.press("Escape")
+
+        self._page.wait_for_timeout(2000)
+
+    def _select_report_type(self, download_section) -> None:
+        """
+        Verify the correct report type is selected in the download section.
+        The default is "ASIN-wise Sales & Indexed GVs at a City Level" which is what we want.
+        Only changes it if a different type is selected.
+        """
+        try:
+            current_text = download_section.evaluate("""(section) => {
+                const btn = section.querySelector('button[aria-haspopup="listbox"]');
+                return btn ? btn.innerText.trim() : '';
+            }""")
+            self._log.info("[AmazonPI]   Report type: %s", current_text)
+
+            if REPORT_TYPE.lower() in current_text.lower():
+                self._log.info("[AmazonPI]   Report type correct — no change needed")
+                return
+
+            # Need to switch — use JS click to avoid portal overlay
+            self._page.evaluate("""() => {
+                const section = document.querySelector('#aue-report-download');
+                if (section) {
+                    const btn = section.querySelector('button[aria-haspopup="listbox"]');
+                    if (btn) btn.click();
+                }
+            }""")
+            self._page.wait_for_timeout(1000)
+            opt_result = self._page.evaluate("""(targetType) => {
+                const options = document.querySelectorAll('[role="option"]');
+                for (const opt of options) {
+                    if (opt.innerText && opt.innerText.toLowerCase().includes(targetType.toLowerCase())) {
+                        opt.click();
+                        return {selected: true, text: opt.innerText.trim()};
+                    }
+                }
+                return {selected: false, available: Array.from(options).map(o => o.innerText?.trim())};
+            }""", REPORT_TYPE)
+            self._log.info("[AmazonPI]   Report type selection result: %s", opt_result)
+            self._page.wait_for_timeout(1000)
+        except Exception as exc:
+            self._log.warning("[AmazonPI]   Report type verification failed (non-critical): %s", exc)
+
+    def _set_time_period_range(self, start_date: date, end_date: date) -> None:
+        """
+        Re-open the Time Period popper and set a date range (start_date to end_date).
+        Used for categories like Storage And Containers that don't render Generate Excel
+        for single-day periods.
+        """
+        self._log.info("[AmazonPI]   Setting time period range: %s to %s",
+                       start_date.strftime("%d/%m/%Y"), end_date.strftime("%d/%m/%Y"))
+
+        tp_section = self._page.locator('#aue-time-period-option')
+        tp_section.scroll_into_view_if_needed()
+        date_range_btn = tp_section.locator('button').nth(1)
+        date_range_btn.wait_for(state="visible", timeout=15_000)
+        date_range_btn.click()
+
+        popper = self._page.locator('#time-period-popper')
+        popper.wait_for(state="visible", timeout=15_000)
+
+        # Keep Daily granularity
+        daily_li = popper.locator('[role="button"]', has_text="Daily")
+        daily_li.wait_for(state="visible", timeout=5_000)
+        daily_li.click()
+        self._page.wait_for_timeout(300)
+
+        # Set Start date to start_date, End date to end_date
+        self._pick_date_calendar("Start", start_date)
+        self._page.wait_for_timeout(500)
+        self._pick_date_calendar("End", end_date)
+        self._page.wait_for_timeout(500)
+
+        apply_btn = popper.get_by_role("button", name="Apply")
+        apply_btn.wait_for(state="visible", timeout=5_000)
+        apply_btn.click()
+        self._log.info("[AmazonPI]   Time Period range applied: %s to %s",
+                       start_date.strftime("%d/%m/%Y"), end_date.strftime("%d/%m/%Y"))
+        self._page.wait_for_timeout(2000)
+
+    def _pick_date_calendar(self, which: str, target: date) -> None:
+        """
+        Open the start/end date calendar popper and click the target date.
+
+        which: "Start" or "End"
+        Calendar button: button[aria-label="Start date"] or button[aria-label="End date"]
+        Calendar popper: id='start-date-popper' or id='end-date-popper'
+        Month nav: aria-label="go to previous month" / "go to next month"
+        Month btn: button text matching "Month YYYY" (e.g. "February 2026")
+        Day cells: button[aria-label*="Month Day Year"] (e.g. "March 25 2026")
+        """
+        MONTHS = ["January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"]
+        target_month_name = MONTHS[target.month - 1]
+
+        # Click the calendar icon button to open the date popper.
+        cal_btn = self._page.locator(f'button[aria-label="{which} date"]')
+        cal_btn.wait_for(state="visible", timeout=10_000)
+        cal_btn.click()
+        self._page.wait_for_timeout(500)
+
+        # Wait for the calendar popper.
+        cal_id = f"#{which.lower()}-date-popper"
+        cal_popper = self._page.locator(cal_id)
+        cal_popper.wait_for(state="visible", timeout=10_000)
+        self._log.info("[AmazonPI]   %s-date-popper opened", which.lower())
+
+        # Navigate to target month/year (max 24 steps).
+        for _ in range(24):
+            month_btn = cal_popper.locator('button').filter(
+                has_text=re.compile(r'^\w+ \d{4}$')
+            ).first
+            try:
+                month_text = month_btn.inner_text().strip()
+            except Exception:
+                break
+            parts = month_text.split()
+            if len(parts) == 2 and parts[0] in MONTHS:
+                cur_month = MONTHS.index(parts[0]) + 1
+                cur_year = int(parts[1])
+                if cur_month == target.month and cur_year == target.year:
+                    break
+                if (cur_year, cur_month) < (target.year, target.month):
+                    cal_popper.locator('button[aria-label="go to next month"]').click()
+                else:
+                    cal_popper.locator('button[aria-label="go to previous month"]').click()
+                self._page.wait_for_timeout(300)
+            else:
+                break
+
+        # Click the day button (aria-label contains "Month Day Year").
+        day_aria = f"{target_month_name} {target.day} {target.year}"
+        day_btn = cal_popper.locator(f'button[aria-label*="{day_aria}"]')
+        day_btn.wait_for(state="visible", timeout=5_000)
+        day_btn.click()
+        self._log.info("[AmazonPI]   %s date: clicked %s", which, day_aria)
+        self._page.wait_for_timeout(300)
 
     def _pick_date_in_cal_input(self, inp, target: date, label: str = "") -> None:
         """
@@ -470,8 +988,24 @@ class AmazonPIScraper:
         category in CATEGORIES, date matches report_date, status=Completed.
         """
         self._log.info("[AmazonPI] Navigating to Download Center")
-        self._page.goto("https://pi.amazon.in/download-center", wait_until="domcontentloaded")
-        self._page.wait_for_timeout(4000)
+        # Try direct URL first; if it times out, fall back to clicking the Download Center button
+        # on the SBG page (the new React UI is an SPA and may not accept direct navigation).
+        try:
+            self._page.goto("https://pi.amazon.in/download-center", wait_until="domcontentloaded",
+                            timeout=20_000)
+            self._page.wait_for_timeout(4000)
+        except Exception:
+            self._log.info("[AmazonPI] Direct URL timed out — clicking Download Center button on SBG page")
+            try:
+                self._page.goto("https://pi.amazon.in/reports/sbg", wait_until="domcontentloaded",
+                                timeout=30_000)
+                self._page.wait_for_timeout(3000)
+                dc_btn = self._page.get_by_role("button", name="Download Center", exact=False)
+                dc_btn.wait_for(state="visible", timeout=15_000)
+                dc_btn.click()
+                self._page.wait_for_timeout(4000)
+            except Exception as e2:
+                self._log.error("[AmazonPI] Could not navigate to Download Center: %s", e2)
 
         # Platform-safe date strings for matching Download Center table values
         # Download Center shows dates in D/M/YYYY (no leading zeros on some portals)
@@ -533,16 +1067,28 @@ class AmazonPIScraper:
                                r.get("start"), r.get("end"), r.get("status"),
                                "yes" if r.get("link") else "no")
 
-            # Keep only the first (most recent) ready row per category
-            seen_cats: set = set()
-            completed = []
+            # Keep only the FIRST (newest/top-of-table) row per category.
+            # We want the newest report (from the current run with all sub-categories selected),
+            # not an old one that's already ready.
+            first_per_cat: dict = {}  # category -> first row (ready or not)
             for r in our_rows:
-                if _is_ready(r) and r.get("category") not in seen_cats:
-                    completed.append(r)
-                    seen_cats.add(r.get("category"))
+                cat = r.get("category", "")
+                if cat not in first_per_cat:
+                    first_per_cat[cat] = r
 
+            # Build completed list: first row per category that is ready
+            completed = [r for r in first_per_cat.values() if _is_ready(r)]
+            self._log.info("[AmazonPI]   First-per-category: %d found, %d ready / %d target",
+                           len(first_per_cat), len(completed), len(CATEGORIES))
+
+            # Break when the first (newest) row for each category is ready
             if len(completed) >= len(CATEGORIES):
-                self._log.info("[AmazonPI] All %d reports ready — downloading", len(completed))
+                self._log.info("[AmazonPI] All %d newest reports ready — downloading",
+                               len(completed))
+                break
+            if len(completed) >= len(first_per_cat) and len(first_per_cat) > 0:
+                self._log.info("[AmazonPI] All %d found categories ready — downloading",
+                               len(completed))
                 break
 
             if poll < max_polls - 1:
@@ -551,12 +1097,23 @@ class AmazonPIScraper:
                 time.sleep(30)
         else:
             self._log.warning("[AmazonPI] Timed out waiting for all reports. Downloading what's ready.")
-            seen_cats2: set = set()
-            completed = []
+            # On timeout, download the first ready row per category (prefer newest)
+            first_per_cat_timeout: dict = {}
             for r in our_rows:
-                if _is_ready(r) and r.get("category") not in seen_cats2:
-                    completed.append(r)
-                    seen_cats2.add(r.get("category"))
+                cat = r.get("category", "")
+                if cat not in first_per_cat_timeout:
+                    first_per_cat_timeout[cat] = r
+            # If newest isn't ready, fall back to any ready row for that category
+            completed = []
+            for cat, first_row in first_per_cat_timeout.items():
+                if _is_ready(first_row):
+                    completed.append(first_row)
+                else:
+                    # Find any ready row for this category
+                    for r in our_rows:
+                        if r.get("category") == cat and _is_ready(r):
+                            completed.append(r)
+                            break
 
         # Download each completed report (.xlsx — "Generate Excel" output)
         for row in completed:
@@ -584,17 +1141,13 @@ class AmazonPIScraper:
                 except Exception as e:
                     self._log.warning("[AmazonPI] href-click failed for %s: %s", category_slug, e)
 
-            # Method 2: click the download button by row index via Playwright locator
-            # (JS evaluate click doesn't properly associate with expect_download)
+            # Method 2: click the download button by row index via Playwright .nth() locator
+            # NOTE: row_idx is from JS querySelectorAll('table tr').slice(1), so it's 0-based
+            # relative to data rows. Using Playwright .nth(row_idx + 1) to account for header row.
             if not downloaded:
                 try:
-                    # nth-child is 1-based; header is tr:nth-child(1), data rows start at 2
-                    # tds[9] is the 10th column → td:nth-child(10)
-                    nth_row = row_idx + 2
-                    btn_locator = self._page.locator(
-                        f"table tr:nth-child({nth_row}) td:nth-child(10) a, "
-                        f"table tr:nth-child({nth_row}) td:nth-child(10) button"
-                    ).first
+                    target_row = self._page.locator("table tr").nth(row_idx + 1)
+                    btn_locator = target_row.locator("td:nth-child(10) a, td:nth-child(10) button").first
                     with self._page.expect_download(timeout=60_000) as dl_info:
                         btn_locator.click()
                     dl = dl_info.value
@@ -716,7 +1269,10 @@ class AmazonPIScraper:
             self._close_browser()
             # Only upload profile if login succeeded — avoids overwriting Drive with a failed session
             if login_ok:
-                upload_profile("amazon_pi")
+                try:
+                    upload_profile("amazon_pi")
+                except Exception as exc:
+                    self._log.warning("[AmazonPI] Profile upload failed (non-critical): %s", exc)
 
         return result
 

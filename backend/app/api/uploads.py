@@ -1,14 +1,13 @@
 """
-File upload API — partial duplicate handling.
+File upload API — upsert behaviour.
 
 GET  /api/uploads/types       — list supported file types
 POST /api/uploads/file        — upload and ingest a portal CSV or master Excel
 POST /api/uploads/sku-mapping — upload SKU mapping file to sync product names & new SKUs
 
 Duplicate behaviour:
-  - Flipkart Kitchen / Appliances: latest file always wins — existing rows for
-    the same (portal_id, product_id, sale_date) are deleted and replaced.
-  - All other types: rows whose composite key already exists are silently skipped.
+  - All file types: latest upload always wins — existing rows for the same
+    composite key are overwritten (upserted).
   - Rows with unmapped SKUs or bad dates go into errors[].
   - HTTP 200 is always returned with counts; never 409.
 """
@@ -234,21 +233,18 @@ def _process_sales(
     # ── Deduplicate / overwrite against daily_sales ───────────────────────────
     keys = [(r["_portal_id"], r["_product_id"], r["_sale_date"]) for r in resolved]
 
-    if file_type in _UPSERT_SALES_TYPES:
-        # Delete existing rows so the latest uploaded file always wins
-        existing_daily = _fetch_existing_daily_keys(db, keys)
-        rows_to_delete = [k for k in keys if k in existing_daily]
-        if rows_to_delete:
+    # Always upsert — delete existing rows so the latest uploaded file wins
+    existing_daily = _fetch_existing_daily_keys(db, keys)
+    rows_to_delete = [k for k in keys if k in existing_daily]
+    if rows_to_delete:
+        for i in range(0, len(rows_to_delete), _FETCH_BATCH):
+            batch = rows_to_delete[i : i + _FETCH_BATCH]
             db.query(DailySales).filter(
                 tuple_(DailySales.portal_id, DailySales.product_id, DailySales.sale_date)
-                .in_(rows_to_delete)
+                .in_(batch)
             ).delete(synchronize_session=False)
-        to_insert = resolved
-        skipped = 0
-    else:
-        existing_daily = _fetch_existing_daily_keys(db, keys)
-        to_insert = [r for r in resolved if (r["_portal_id"], r["_product_id"], r["_sale_date"]) not in existing_daily]
-        skipped = len(resolved) - len(to_insert)
+    skipped = 0
+    to_insert = resolved
 
     inserted = 0
     import_log_id = None
@@ -260,32 +256,39 @@ def _process_sales(
 
         # ── Aggregate by (portal_id, product_id, date) → daily_sales ─────────
         aggregated = _aggregate_to_daily(to_insert)
-        # Re-check daily_sales for the aggregated keys (some may already exist from other city rows)
-        agg_keys = [(r["portal_id"], r["product_id"], r["sale_date"]) for r in aggregated]
-        existing_agg = _fetch_existing_daily_keys(db, agg_keys)
-        agg_to_insert = [r for r in aggregated if (r["portal_id"], r["product_id"], r["sale_date"]) not in existing_agg]
 
         try:
-            daily_rows = [
-                DailySales(
-                    portal_id=r["portal_id"],
-                    product_id=r["product_id"],
-                    sale_date=r["sale_date"],
-                    units_sold=r["units_sold"],
-                    revenue=r["revenue"],
-                    asp=r["asp"],
-                    data_source="portal_csv",
+            _BATCH = 500
+            inserted = 0
+            for i in range(0, len(aggregated), _BATCH):
+                batch = aggregated[i : i + _BATCH]
+                stmt = pg_insert(DailySales).values([
+                    {
+                        "portal_id": r["portal_id"],
+                        "product_id": r["product_id"],
+                        "sale_date": r["sale_date"],
+                        "units_sold": r["units_sold"],
+                        "revenue": r["revenue"],
+                        "asp": r["asp"],
+                        "data_source": "portal_csv",
+                    }
+                    for r in batch
+                ]).on_conflict_do_update(
+                    index_elements=["portal_id", "product_id", "sale_date"],
+                    set_={
+                        "units_sold": pg_insert(DailySales).excluded.units_sold,
+                        "revenue": pg_insert(DailySales).excluded.revenue,
+                        "asp": pg_insert(DailySales).excluded.asp,
+                    },
                 )
-                for r in agg_to_insert
-            ]
-            db.bulk_save_objects(daily_rows)
-            inserted = len(agg_to_insert)
+                db.execute(stmt)
+                inserted += len(batch)
 
             # Create one import log per portal so pipeline health tracks each
-            portal_ids = {r["portal_id"] for r in agg_to_insert}
+            portal_ids = {r["portal_id"] for r in aggregated}
             now = datetime.now(timezone.utc)
             for pid in portal_ids:
-                pid_rows = [r for r in agg_to_insert if r["portal_id"] == pid]
+                pid_rows = [r for r in aggregated if r["portal_id"] == pid]
                 log = ImportLog(
                     source_type="portal_csv",
                     portal_id=pid,
@@ -365,34 +368,39 @@ def _process_inventory(
             inserted=0, skipped=0, errors=errors, import_log_id=None,
         )
 
-    keys = [(r["_portal_id"], r["_product_id"], r["_snap_date"]) for r in resolved]
-    existing = _fetch_existing_inventory_keys(db, keys)
-    to_insert = [r for r in resolved if (r["_portal_id"], r["_product_id"], r["_snap_date"]) not in existing]
-    skipped = len(resolved) - len(to_insert)
-
+    skipped = 0
     inserted = 0
     import_log_id = None
 
-    if to_insert:
+    if resolved:
         try:
-            snap_rows = [
-                InventorySnapshot(
-                    portal_id=r["_portal_id"],
-                    product_id=r["_product_id"],
-                    snapshot_date=r["_snap_date"],
-                    backend_stock=r.get("backend_stock"),
-                    frontend_stock=r.get("frontend_stock"),
+            _BATCH = 500
+            for i in range(0, len(resolved), _BATCH):
+                batch = resolved[i : i + _BATCH]
+                stmt = pg_insert(InventorySnapshot).values([
+                    {
+                        "portal_id": r["_portal_id"],
+                        "product_id": r["_product_id"],
+                        "snapshot_date": r["_snap_date"],
+                        "backend_stock": r.get("backend_stock"),
+                        "frontend_stock": r.get("frontend_stock"),
+                    }
+                    for r in batch
+                ]).on_conflict_do_update(
+                    index_elements=["portal_id", "product_id", "snapshot_date"],
+                    set_={
+                        "backend_stock": pg_insert(InventorySnapshot).excluded.backend_stock,
+                        "frontend_stock": pg_insert(InventorySnapshot).excluded.frontend_stock,
+                    },
                 )
-                for r in to_insert
-            ]
-            db.bulk_save_objects(snap_rows)
-            inserted = len(snap_rows)
+                db.execute(stmt)
+            inserted = len(resolved)
 
             # Create one import log per portal so pipeline health tracks each
-            portal_ids = {r["_portal_id"] for r in to_insert}
+            portal_ids = {r["_portal_id"] for r in resolved}
             now = datetime.now(timezone.utc)
             for pid in portal_ids:
-                pid_rows = [r for r in to_insert if r["_portal_id"] == pid]
+                pid_rows = [r for r in resolved if r["_portal_id"] == pid]
                 log = ImportLog(
                     source_type="portal_csv",
                     portal_id=pid,
@@ -498,13 +506,18 @@ def _process_master_excel(
                     "data_source": "master_excel",
                 }
                 for r in batch
-            ]).on_conflict_do_nothing(
-                index_elements=["portal_id", "product_id", "sale_date"]
+            ]).on_conflict_do_update(
+                index_elements=["portal_id", "product_id", "sale_date"],
+                set_={
+                    "units_sold": pg_insert(DailySales).excluded.units_sold,
+                    "revenue": pg_insert(DailySales).excluded.revenue,
+                    "asp": pg_insert(DailySales).excluded.asp,
+                },
             )
-            result_proxy = db.execute(stmt)
-            inserted += result_proxy.rowcount
+            db.execute(stmt)
+            inserted += len(batch)
 
-        skipped = len(resolved) - inserted
+        skipped = 0
 
         if inserted > 0:
             # Create one import log per portal so pipeline health tracks each
@@ -792,7 +805,7 @@ def _fetch_existing_inventory_keys(db: Session, keys: list[tuple]) -> set[tuple]
 
 
 def _insert_city_sales(db: Session, rows: list[dict], resolver: PortalResolver) -> None:
-    """Insert city_daily_sales rows for portal CSV files. Skips unknown cities."""
+    """Upsert city_daily_sales rows for portal CSV files. Skips unknown cities."""
     # Deduplicate by composite key first
     keys = set()
     city_rows = []
@@ -807,28 +820,37 @@ def _insert_city_sales(db: Session, rows: list[dict], resolver: PortalResolver) 
         if key in keys:
             continue
         keys.add(key)
-        city_rows.append(
-            CityDailySales(
-                portal_id=row["_portal_id"],
-                product_id=row["_product_id"],
-                city_id=city_id,
-                sale_date=row["_sale_date"],
-                units_sold=row.get("quantity_sold", 0),
-                revenue=row.get("revenue", 0),
-                discount_amount=row.get("discount_amount", 0),
-                net_revenue=row.get("net_revenue", row.get("revenue", 0)),
-                order_count=row.get("order_count", 0),
-                data_source="portal_csv",
-            )
-        )
+        city_rows.append({
+            "portal_id": row["_portal_id"],
+            "product_id": row["_product_id"],
+            "city_id": city_id,
+            "sale_date": row["_sale_date"],
+            "units_sold": row.get("quantity_sold", 0),
+            "revenue": row.get("revenue", 0),
+            "discount_amount": row.get("discount_amount", 0),
+            "net_revenue": row.get("net_revenue", row.get("revenue", 0)),
+            "order_count": row.get("order_count", 0),
+            "data_source": "portal_csv",
+        })
     if city_rows:
-        sp = db.begin_nested()
+        _BATCH = 500
         try:
-            db.bulk_save_objects(city_rows)
-            sp.commit()
+            for i in range(0, len(city_rows), _BATCH):
+                batch = city_rows[i : i + _BATCH]
+                stmt = pg_insert(CityDailySales).values(batch).on_conflict_do_update(
+                    index_elements=["portal_id", "product_id", "sale_date", "city_id"],
+                    set_={
+                        "units_sold": pg_insert(CityDailySales).excluded.units_sold,
+                        "revenue": pg_insert(CityDailySales).excluded.revenue,
+                        "discount_amount": pg_insert(CityDailySales).excluded.discount_amount,
+                        "net_revenue": pg_insert(CityDailySales).excluded.net_revenue,
+                        "order_count": pg_insert(CityDailySales).excluded.order_count,
+                    },
+                )
+                db.execute(stmt)
         except IntegrityError:
-            sp.rollback()
-            logger.warning("IntegrityError inserting city_daily_sales — some rows skipped")
+            db.rollback()
+            logger.warning("IntegrityError upserting city_daily_sales")
 
 
 def _aggregate_to_daily(rows: list[dict]) -> list[dict]:
