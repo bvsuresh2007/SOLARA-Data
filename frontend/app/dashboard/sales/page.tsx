@@ -16,6 +16,7 @@ import { PortalBreakdown }        from "@/components/sales/portal-breakdown";
 import { CategoryBreakdown }      from "@/components/sales/category-breakdown";
 
 import { PortalDailyTable }       from "@/components/sales/portal-daily-table";
+import IndiaSalesMap              from "@/components/sales/india-sales-map";
 import { Skeleton }               from "@/components/ui/skeleton";
 import { NavTabs }                from "@/components/ui/nav-tabs";
 
@@ -51,6 +52,7 @@ function SalesContent() {
   const [latestDate,     setLatestDate]     = useState<string | null>(null);
 
   const [byCategory,     setByCategory]     = useState<SalesByCategory[]>([]);
+  const [byCity,         setByCity]         = useState<SalesByDimension[]>([]);
   const [dailyData,      setDailyData]      = useState<PortalDailyResponse | null>(null);
   const [dailyLoading,   setDailyLoading]   = useState(false);
   const [loading,        setLoading]        = useState(true);
@@ -99,13 +101,14 @@ function SalesContent() {
         api.salesByProduct({ ...fp, limit: 1, sort_by: "revenue" }),// 4
         api.salesByProduct({ ...fp, limit: 1, sort_by: "units" }), // 5
         api.salesByCategory(fp),                                    // 6
-        ...(prevFp ? [api.salesSummary(prevFp)] : []),              // 7 (optional)
+        api.salesByCity(fp),                                        // 7
+        ...(prevFp ? [api.salesSummary(prevFp)] : []),              // 8 (optional)
       ];
 
       const results = await Promise.allSettled(promises);
 
-      const [portalsRes, summaryRes, byPortalRes, trendRes, topRevRes, topUnitsRes, byCategoryRes] = results;
-      const prevSummaryRes = prevFp ? results[7] : undefined;
+      const [portalsRes, summaryRes, byPortalRes, trendRes, topRevRes, topUnitsRes, byCategoryRes, byCityRes] = results;
+      const prevSummaryRes = prevFp ? results[8] : undefined;
 
       if (portalsRes.status    === "fulfilled") setPortals(portalsRes.value as Portal[]);
       if (summaryRes.status    === "fulfilled") setSummary(summaryRes.value as SalesSummary);
@@ -125,6 +128,9 @@ function SalesContent() {
 
       if (byCategoryRes?.status === "fulfilled") {
         setByCategory(byCategoryRes.value as SalesByCategory[]);
+      }
+      if (byCityRes?.status === "fulfilled") {
+        setByCity(byCityRes.value as SalesByDimension[]);
       }
 
       // Previous-period summary for growth calculation
@@ -194,6 +200,7 @@ function SalesContent() {
         </div>
       )}
       <PortalDailyTable key={portalId ?? "all"} data={dailyData} loading={dailyLoading} portalSelected={!!portalId} />
+      {loading ? <ChartSkeleton h={480} /> : <IndiaSalesMap data={byCity} />}
     </main>
   );
 }

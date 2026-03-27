@@ -271,8 +271,36 @@ def sales_by_city(
     portal_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
-    # DailySales has no city-level breakdown — return empty list
-    return []
+    from ..models.sales import CityDailySales
+    from ..models.metadata import City
+
+    q = (
+        db.query(
+            City.id.label("dimension_id"),
+            City.name.label("dimension_name"),
+            func.coalesce(func.sum(CityDailySales.revenue), 0).label("total_revenue"),
+            func.coalesce(func.sum(CityDailySales.units_sold), 0).label("total_quantity"),
+        )
+        .join(City, City.id == CityDailySales.city_id)
+    )
+    if start_date:
+        q = q.filter(CityDailySales.sale_date >= start_date)
+    if end_date:
+        q = q.filter(CityDailySales.sale_date <= end_date)
+    if portal_id:
+        q = q.filter(CityDailySales.portal_id == portal_id)
+
+    rows = q.group_by(City.id, City.name).order_by(func.sum(CityDailySales.revenue).desc()).all()
+
+    return [
+        SalesByDimension(
+            dimension_id=r.dimension_id,
+            dimension_name=r.dimension_name,
+            total_revenue=float(r.total_revenue),
+            total_quantity=float(r.total_quantity),
+        )
+        for r in rows
+    ]
 
 
 @router.get("/by-product", response_model=List[SalesByDimension])
