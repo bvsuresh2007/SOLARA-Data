@@ -9,7 +9,7 @@ import type { SalesByDimension } from "@/lib/api";
 import { fmtRevenue } from "@/lib/format";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   India Sales Map — proper TopoJSON state boundaries + city bubbles
+   India Sales Map — city bubbles (left) + state bar chart (right)
    ═══════════════════════════════════════════════════════════════════════════ */
 
 interface Props {
@@ -18,9 +18,8 @@ interface Props {
 
 const INDIA_TOPO = "/india-topo.json";
 const INDIA_CENTER: [number, number] = [82, 22];
-const INDIA_ZOOM = 4.5;
 
-/* ── Known Indian state names (ALL CAPS in DB) — filter these out of city data ── */
+/* ── Known Indian state names (ALL CAPS in DB) ────────────────────────── */
 const STATE_NAMES = new Set([
   "ANDHRA PRADESH", "ARUNACHAL PRADESH", "ASSAM", "BIHAR", "CHHATTISGARH",
   "CHATTISGARH", "GOA", "GUJARAT", "HARYANA", "HIMACHAL PRADESH", "JHARKHAND",
@@ -32,13 +31,11 @@ const STATE_NAMES = new Set([
   "DAMAN AND DIU", "LAKSHADWEEP", "NEW DELHI",
 ]);
 
-/* ── City coordinates [lng, lat] for react-simple-maps (note: [lng, lat] not [lat, lng]) ── */
+/* ── City coordinates [lng, lat] ──────────────────────────────────────── */
 const CITY_COORDS: Record<string, [number, number]> = {
-  // Metros
   "mumbai": [72.878, 19.076], "delhi": [77.209, 28.614], "bengaluru": [77.594, 12.972],
   "bangalore": [77.594, 12.972], "hyderabad": [78.487, 17.385], "chennai": [80.270, 13.083],
   "kolkata": [88.364, 22.573], "pune": [73.856, 18.52], "ahmedabad": [72.571, 23.023],
-  // Tier 1
   "jaipur": [75.787, 26.912], "lucknow": [80.947, 26.847], "surat": [72.831, 21.170],
   "chandigarh": [76.779, 30.734], "indore": [75.858, 22.720], "bhopal": [77.413, 23.259],
   "nagpur": [79.089, 21.146], "patna": [85.145, 25.612], "vadodara": [73.181, 22.307],
@@ -46,12 +43,9 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "guwahati": [91.736, 26.145], "bhubaneswar": [85.825, 20.297], "dehradun": [78.032, 30.317],
   "thiruvananthapuram": [76.936, 8.524], "mysuru": [76.639, 12.296], "mysore": [76.639, 12.296],
   "mangalore": [74.856, 12.914], "mangaluru": [74.856, 12.914],
-  // NCR
   "noida": [77.391, 28.535], "gurugram": [77.027, 28.459], "gurgaon": [77.027, 28.459],
   "ghaziabad": [77.438, 28.669], "faridabad": [77.317, 28.408], "greater noida": [77.504, 28.475],
-  // Mumbai region
   "navi mumbai": [73.030, 19.037], "thane": [72.978, 19.218],
-  // Others
   "rajkot": [70.802, 22.304], "nashik": [73.789, 19.998], "aurangabad": [75.343, 19.876],
   "vijayawada": [80.648, 16.506], "warangal": [79.599, 17.978],
   "madurai": [78.120, 9.925], "tiruchirappalli": [78.688, 10.791], "trichy": [78.688, 10.791],
@@ -66,49 +60,52 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "hubli": [75.124, 15.364], "belgaum": [74.498, 15.849], "belagavi": [74.498, 15.849],
   "kozhikode": [75.780, 11.259], "calicut": [75.780, 11.259],
   "thrissur": [76.214, 10.527], "trivandrum": [76.936, 8.524],
-  "panaji": [73.876, 15.380], "goa": [73.876, 15.380],
-  "shimla": [77.172, 31.105],
-  // Duplicate city names in ALL CAPS that are actually cities (not states)
+  "panaji": [73.876, 15.380], "goa": [73.876, 15.380], "shimla": [77.172, 31.105],
   "BANGALORE": [77.594, 12.972], "MUMBAI": [72.878, 19.076],
   "PUNE": [73.856, 18.52], "HYDERABAD": [78.487, 17.385],
   "CHENNAI": [80.270, 13.083], "THANE": [72.978, 19.218],
   "KOLKATA": [88.364, 22.573],
 };
 
-/* ── Color interpolation — bright, visible gradient ───────────────────── */
+/* ── Color interpolation — cyan → amber → red ────────────────────────── */
 function interpolateColor(t: number): string {
-  // #22d3ee (cyan-400) → #f59e0b (amber-500) → #ef4444 (red-500)
   if (t < 0.5) {
-    const s = t * 2; // 0→1 within first half
-    const r = Math.round(34 + s * (245 - 34));
-    const g = Math.round(211 + s * (158 - 211));
-    const b = Math.round(238 + s * (11 - 238));
-    return `rgb(${r},${g},${b})`;
+    const s = t * 2;
+    return `rgb(${Math.round(34 + s * 211)},${Math.round(211 - s * 53)},${Math.round(238 - s * 227)})`;
   }
-  const s = (t - 0.5) * 2; // 0→1 within second half
-  const r = Math.round(245 + s * (239 - 245));
-  const g = Math.round(158 + s * (68 - 158));
-  const b = Math.round(11 + s * (68 - 11));
-  return `rgb(${r},${g},${b})`;
+  const s = (t - 0.5) * 2;
+  return `rgb(${Math.round(245 - s * 6)},${Math.round(158 - s * 90)},${Math.round(11 + s * 57)})`;
 }
 
-/* ── Component ─────────────────────────────────────────────────────────── */
+/* ── Title case helper ────────────────────────────────────────────────── */
+function titleCase(s: string): string {
+  return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Component
+   ══════════════════════════════════════════════════════════════════════════ */
 
 export default function IndiaSalesMap({ data }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const isAnyHovered = hovered !== null;
 
-  const { cities, maxRevenue, totalRevenue } = useMemo(() => {
-    if (!data?.length) return { cities: [], maxRevenue: 0, totalRevenue: 0 };
+  const { cities, states, maxRevenue, totalCityRevenue, totalStateRevenue, maxStateRevenue } = useMemo(() => {
+    if (!data?.length) return { cities: [], states: [], maxRevenue: 0, totalCityRevenue: 0, totalStateRevenue: 0, maxStateRevenue: 0 };
 
-    // Separate state vs city entries
-    const cityEntries = data.filter((d) => {
+    const stateEntries: { name: string; revenue: number; quantity: number }[] = [];
+    const cityEntries: typeof data = [];
+
+    for (const d of data) {
       const name = d.dimension_name.trim();
-      // Skip known state names (but allow city names that happen to be UPPER CASE like BANGALORE)
-      if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name]) return false;
-      return true;
-    });
+      if (STATE_NAMES.has(name.toUpperCase()) && !CITY_COORDS[name]) {
+        stateEntries.push({ name: titleCase(name), revenue: d.total_revenue, quantity: d.total_quantity });
+      } else {
+        cityEntries.push(d);
+      }
+    }
 
-    const totalRevenue = cityEntries.reduce((s, d) => s + d.total_revenue, 0);
+    const totalCityRevenue = cityEntries.reduce((s, d) => s + d.total_revenue, 0);
     let maxRev = 0;
 
     const cities = cityEntries
@@ -122,7 +119,7 @@ export default function IndiaSalesMap({ data }: Props) {
           coords: coords as [number, number],
           revenue: d.total_revenue,
           quantity: d.total_quantity,
-          share: totalRevenue > 0 ? d.total_revenue / totalRevenue : 0,
+          share: totalCityRevenue > 0 ? d.total_revenue / totalCityRevenue : 0,
         };
       })
       .filter(Boolean) as {
@@ -130,14 +127,29 @@ export default function IndiaSalesMap({ data }: Props) {
         quantity: number; share: number;
       }[];
 
-    return { cities, maxRevenue: maxRev, totalRevenue };
+    // Sort states by revenue descending
+    stateEntries.sort((a, b) => b.revenue - a.revenue);
+    const totalStateRevenue = stateEntries.reduce((s, d) => s + d.revenue, 0);
+    const maxStateRevenue = stateEntries.length > 0 ? stateEntries[0].revenue : 0;
+
+    return {
+      cities,
+      states: stateEntries.map((s) => ({
+        ...s,
+        share: totalStateRevenue > 0 ? s.revenue / totalStateRevenue : 0,
+      })),
+      maxRevenue: maxRev,
+      totalCityRevenue,
+      totalStateRevenue,
+      maxStateRevenue,
+    };
   }, [data]);
 
   if (!data?.length) {
     return (
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm text-zinc-100">Sales by City</CardTitle>
+          <CardTitle className="text-sm text-zinc-100">Sales by Geography</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-zinc-500 text-xs">No city-level data available</p>
@@ -146,27 +158,27 @@ export default function IndiaSalesMap({ data }: Props) {
     );
   }
 
-  const top10 = [...cities].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
-
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm text-zinc-100 flex items-center justify-between">
-          <span>City-wise Sales Distribution</span>
-          <span className="text-[10px] text-zinc-500 font-normal">
-            {cities.length} cities mapped
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col lg:flex-row gap-6 items-center justify-center">
-          {/* ── Map ─────────────────────────────────────────────────── */}
-          <div className="min-w-0" style={{ width: 400, maxHeight: 420 }}>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* ════════════════════════════════════════════════════════════════════
+         LEFT: City-wise India Map
+         ════════════════════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm text-zinc-100 flex items-center justify-between">
+            <span>City-wise Sales</span>
+            <span className="text-[10px] text-zinc-500 font-normal">
+              {cities.length} cities &middot; {fmtRevenue(totalCityRevenue)}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="relative" style={{ width: 420, maxWidth: "100%" }}>
             <ComposableMap
               projection="geoMercator"
-              projectionConfig={{ center: INDIA_CENTER, scale: 650 }}
-              width={400}
-              height={420}
+              projectionConfig={{ center: INDIA_CENTER, scale: 680 }}
+              width={420}
+              height={440}
               style={{ width: "100%", height: "auto" }}
             >
               <ZoomableGroup center={INDIA_CENTER} zoom={1} minZoom={1} maxZoom={4}>
@@ -177,12 +189,12 @@ export default function IndiaSalesMap({ data }: Props) {
                       <Geography
                         key={geo.rsmKey}
                         geography={geo}
-                        fill="#27272a"
+                        fill={isAnyHovered ? "#1a1a1d" : "#27272a"}
                         stroke="#ffffff"
                         strokeWidth={0.5}
                         style={{
-                          default: { outline: "none" },
-                          hover: { fill: "#3f3f46", outline: "none" },
+                          default: { outline: "none", transition: "fill 0.2s" },
+                          hover: { fill: isAnyHovered ? "#1a1a1d" : "#3f3f46", outline: "none" },
                           pressed: { outline: "none" },
                         }}
                       />
@@ -190,12 +202,19 @@ export default function IndiaSalesMap({ data }: Props) {
                   }
                 </Geographies>
 
+                {/* Dim overlay when a city is hovered */}
+                {isAnyHovered && (
+                  <rect x={-200} y={-200} width={2000} height={2000}
+                    fill="black" fillOpacity={0.35} style={{ pointerEvents: "none" }} />
+                )}
+
                 {/* City bubbles */}
                 {cities.map((c) => {
                   const t = maxRevenue > 0 ? c.revenue / maxRevenue : 0;
                   const radius = 2 + Math.sqrt(t) * 8;
                   const color = interpolateColor(t);
-                  const isHovered = hovered === c.name;
+                  const isThis = hovered === c.name;
+                  const dimmed = isAnyHovered && !isThis;
 
                   return (
                     <Marker
@@ -205,53 +224,34 @@ export default function IndiaSalesMap({ data }: Props) {
                       onMouseLeave={() => setHovered(null)}
                     >
                       <circle
-                        r={isHovered ? radius * 1.5 : radius}
+                        r={isThis ? radius * 1.6 : radius}
                         fill={color}
-                        fillOpacity={isHovered ? 1 : 0.85}
-                        stroke={isHovered ? "#fff" : "rgba(255,255,255,0.3)"}
-                        strokeWidth={isHovered ? 1.5 : 0.5}
+                        fillOpacity={dimmed ? 0.25 : isThis ? 1 : 0.85}
+                        stroke={isThis ? "#fff" : dimmed ? "transparent" : "rgba(255,255,255,0.3)"}
+                        strokeWidth={isThis ? 2 : 0.5}
                         className="cursor-pointer"
+                        style={{ transition: "all 0.15s" }}
                       />
 
-                      {isHovered && (
+                      {isThis && (
                         <g style={{ pointerEvents: "none" }}>
-                          {/* Background rect */}
+                          {/* Tooltip background */}
                           <rect
-                            x={-60}
-                            y={-radius - 38}
-                            width={120}
-                            height={30}
-                            rx={4}
-                            fill="#18181b"
-                            stroke="#52525b"
-                            strokeWidth={0.8}
+                            x={-70} y={-radius - 42}
+                            width={140} height={34}
+                            rx={5}
+                            fill="#09090b" stroke="#52525b" strokeWidth={0.8}
+                            fillOpacity={0.95}
                           />
-                          {/* City name */}
-                          <text
-                            textAnchor="middle"
-                            y={-radius - 24}
-                            style={{ fontSize: 10, fill: "#ffffff", fontWeight: 600 }}
-                          >
+                          <text textAnchor="middle" y={-radius - 26}
+                            style={{ fontSize: 11, fill: "#ffffff", fontWeight: 700 }}>
                             {c.name}
                           </text>
-                          {/* Revenue value */}
-                          <text
-                            textAnchor="middle"
-                            y={-radius - 12}
-                            style={{ fontSize: 9, fill: "#a1a1aa" }}
-                          >
+                          <text textAnchor="middle" y={-radius - 13}
+                            style={{ fontSize: 10, fill: "#d4d4d8" }}>
                             {fmtRevenue(c.revenue)} &middot; {Math.round(c.quantity).toLocaleString("en-IN")} units
                           </text>
                         </g>
-                      )}
-                      {!isHovered && c.share > 0.05 && (
-                        <text
-                          textAnchor="middle"
-                          y={-radius - 4}
-                          style={{ fontSize: 8, fill: "#e4e4e7", fontWeight: 400, pointerEvents: "none" }}
-                        >
-                          {c.name}
-                        </text>
                       )}
                     </Marker>
                   );
@@ -260,54 +260,58 @@ export default function IndiaSalesMap({ data }: Props) {
             </ComposableMap>
 
             {/* Gradient legend */}
-            <div className="flex items-center justify-center gap-2 -mt-4">
+            <div className="flex items-center justify-start gap-2 mt-1 ml-2">
               <span className="text-[10px] text-zinc-500">Low</span>
-              <div
-                className="h-2 rounded-full"
-                style={{
-                  width: 180,
-                  background: `linear-gradient(to right, ${interpolateColor(0)}, ${interpolateColor(0.5)}, ${interpolateColor(1)})`,
-                }}
-              />
+              <div className="h-2 rounded-full"
+                style={{ width: 160, background: `linear-gradient(to right, ${interpolateColor(0)}, ${interpolateColor(0.5)}, ${interpolateColor(1)})` }} />
               <span className="text-[10px] text-zinc-500">High</span>
+              <span className="text-[10px] text-zinc-600 ml-1">Revenue</span>
             </div>
-            <p className="text-center text-[10px] text-zinc-600 mt-0.5">Revenue Share</p>
           </div>
+        </CardContent>
+      </Card>
 
-          {/* ── Top 10 sidebar ──────────────────────────────────────── */}
-          <div className="w-48 flex-shrink-0">
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Top 10 Cities</p>
-            <div className="space-y-1.5">
-              {top10.map((c, i) => {
-                const t = maxRevenue > 0 ? c.revenue / maxRevenue : 0;
-                return (
-                  <div
-                    key={c.name}
-                    className={`flex items-center gap-2 text-xs cursor-pointer rounded px-1.5 py-1 transition-colors
-                      ${hovered === c.name ? "bg-zinc-800" : "hover:bg-zinc-800/50"}`}
-                    onMouseEnter={() => setHovered(c.name)}
-                    onMouseLeave={() => setHovered(null)}
-                  >
-                    <span className="text-zinc-600 w-4 text-right font-mono text-[10px]">{i + 1}</span>
-                    <div
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: interpolateColor(t) }}
-                    />
-                    <span className="text-zinc-300 truncate flex-1">{c.name}</span>
-                    <span className="text-zinc-500 tabular-nums text-[10px]">{fmtRevenue(c.revenue)}</span>
+      {/* ════════════════════════════════════════════════════════════════════
+         RIGHT: State-wise Distribution (horizontal bar chart)
+         ════════════════════════════════════════════════════════════════════ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm text-zinc-100 flex items-center justify-between">
+            <span>State-wise Sales</span>
+            <span className="text-[10px] text-zinc-500 font-normal">
+              {states.length} states &middot; {fmtRevenue(totalStateRevenue)}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-1.5 max-h-[460px] overflow-y-auto pr-1">
+            {states.map((s, i) => {
+              const barPct = maxStateRevenue > 0 ? (s.revenue / maxStateRevenue) * 100 : 0;
+              const t = maxStateRevenue > 0 ? s.revenue / maxStateRevenue : 0;
+              return (
+                <div key={s.name} className="group">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-zinc-600 w-5 text-right font-mono text-[10px]">{i + 1}</span>
+                    <span className="text-zinc-300 w-32 truncate text-[11px]">{s.name}</span>
+                    <div className="flex-1 h-4 bg-zinc-800/50 rounded overflow-hidden relative">
+                      <div
+                        className="h-full rounded transition-all duration-300"
+                        style={{
+                          width: `${barPct}%`,
+                          backgroundColor: interpolateColor(t),
+                          opacity: 0.85,
+                        }}
+                      />
+                    </div>
+                    <span className="text-zinc-400 tabular-nums text-[11px] w-16 text-right">{fmtRevenue(s.revenue)}</span>
+                    <span className="text-zinc-600 tabular-nums text-[10px] w-10 text-right">{(s.share * 100).toFixed(1)}%</span>
                   </div>
-                );
-              })}
-            </div>
-            <div className="mt-3 pt-2 border-t border-zinc-800">
-              <div className="flex justify-between text-[10px] text-zinc-500">
-                <span>Total (mapped cities)</span>
-              </div>
-              <p className="text-sm text-zinc-200 font-medium">{fmtRevenue(totalRevenue)}</p>
-            </div>
+                </div>
+              );
+            })}
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
