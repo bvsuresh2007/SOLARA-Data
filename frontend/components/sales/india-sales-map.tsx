@@ -281,9 +281,11 @@ export default function IndiaSalesMap({ data }: Props) {
       const isState = STATE_NAMES.has(upper);
       const hasCoords = !!(CITY_COORDS[name] ?? CITY_COORDS[lower]);
 
-      if (isState && !hasCoords) {
-        // Pure state entry (e.g. "MAHARASHTRA", "KARNATAKA") — state only
+      if (isState) {
+        // State-level entry — always add to state aggregation
         addToState(normalizeStateName(name), d.total_revenue, d.total_quantity);
+        // Also show as city bubble if coords exist (Delhi, Goa, Chandigarh)
+        if (hasCoords) cityEntries.push(d);
       } else {
         // City entry — add to city list
         cityEntries.push(d);
@@ -483,7 +485,7 @@ export default function IndiaSalesMap({ data }: Props) {
                     onMouseEnter={() => setHovered(c.name)}
                     onMouseLeave={() => setHovered(null)}
                   >
-                    <span className="text-zinc-300 w-3 text-right font-mono text-[10px]">{i + 1}</span>
+                    <span className="text-white w-3 text-right font-mono text-[10px] font-bold">{i + 1}</span>
                     <div className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{ backgroundColor: interpolateColor(t) }} />
                     <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
@@ -509,16 +511,16 @@ export default function IndiaSalesMap({ data }: Props) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-1.5">
+          <div className="space-y-0.5">
             {states.map((s, i) => {
               const barPct = maxStateRevenue > 0 ? (s.revenue / maxStateRevenue) * 100 : 0;
               const t = maxStateRevenue > 0 ? s.revenue / maxStateRevenue : 0;
               return (
                 <div key={s.name} className="group">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-zinc-300 w-5 text-right font-mono text-[10px]">{i + 1}</span>
-                    <span className="text-zinc-300 w-32 truncate text-[11px]">{s.name}</span>
-                    <div className="flex-1 h-4 bg-zinc-800/50 rounded overflow-hidden relative">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-white w-4 text-right font-mono text-[9px] font-bold">{i + 1}</span>
+                    <span className="text-zinc-300 w-28 truncate text-[10px]">{s.name}</span>
+                    <div className="flex-1 h-3 bg-zinc-800/50 rounded overflow-hidden relative">
                       <div
                         className="h-full rounded transition-all duration-300"
                         style={{
@@ -528,8 +530,8 @@ export default function IndiaSalesMap({ data }: Props) {
                         }}
                       />
                     </div>
-                    <span className="text-zinc-200 tabular-nums text-[11px] w-16 text-right font-medium">{fmtRevenue(s.revenue)}</span>
-                    <span className="text-zinc-200 tabular-nums text-[10px] w-10 text-right font-medium">{(s.share * 100).toFixed(1)}%</span>
+                    <span className="text-zinc-200 tabular-nums text-[10px] w-14 text-right font-medium">{fmtRevenue(s.revenue)}</span>
+                    <span className="text-zinc-200 tabular-nums text-[9px] w-10 text-right font-medium">{(s.share * 100).toFixed(1)}%</span>
                   </div>
                 </div>
               );
