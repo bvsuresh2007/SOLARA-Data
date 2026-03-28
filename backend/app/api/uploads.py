@@ -567,16 +567,16 @@ async def upload_sku_mapping(
 ):
     """
     Accepts an .xlsx or .csv with at minimum a SKU column.
-    Expected columns (case-insensitive, flexible naming):
-      - SKU / sku_code / sku code / SKU CODE
-      - Product / product_name / product name / Product Name / PRODUCT  (optional if products already exist)
-      - Category / category_name / l2_name  (optional)
 
-    For each row:
-      - If Product column present: upsert products (update name/category or insert new)
-      - If Product column absent: look up existing products by SKU (mapping-only mode)
-      - Portal mapping columns (ASIN, FSN, etc.) are synced to product_portal_mapping
-    Returns counts of updated / added / skipped rows.
+    Canonical template columns:
+      SKU | Product Sub-Category | Product Name | Category |
+      ASIN | FSN | Myntra (Style ID) | (Blinkit) Style ID | Swiggy Code | Zepto EAN
+
+    Column detection is case-insensitive and supports alternate naming.
+    Product Name is optional — if absent, runs in mapping-only mode
+    (looks up existing products by SKU and syncs portal mappings).
+
+    Returns counts of updated / added / skipped rows + mappings synced.
     """
     import pandas as pd
     from sqlalchemy.dialects.postgresql import insert as pg_insert

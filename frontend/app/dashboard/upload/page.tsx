@@ -217,8 +217,8 @@ export default function UploadPage() {
         <Card>
           <CardContent className="pt-5 space-y-4">
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Upload the SKU mapping file with columns <span className="font-mono text-zinc-300">SKU</span>, <span className="font-mono text-zinc-300">Product</span>, and portal ID columns (<span className="font-mono text-zinc-300">ASIN</span>, <span className="font-mono text-zinc-300">FSN</span>, <span className="font-mono text-zinc-300">Swiggy Code</span>, <span className="font-mono text-zinc-300">Zepto EAN</span>, etc.).
-              Products are added/updated and all portal mappings are synced in one step.
+              Upload the SKU mapping file with columns: <span className="font-mono text-zinc-300">SKU</span>, <span className="font-mono text-zinc-300">Product Sub-Category</span>, <span className="font-mono text-zinc-300">Product Name</span>, <span className="font-mono text-zinc-300">Category</span>, and portal ID columns (<span className="font-mono text-zinc-300">ASIN</span>, <span className="font-mono text-zinc-300">FSN</span>, <span className="font-mono text-zinc-300">Myntra (Style ID)</span>, <span className="font-mono text-zinc-300">(Blinkit) Style ID</span>, <span className="font-mono text-zinc-300">Swiggy Code</span>, <span className="font-mono text-zinc-300">Zepto EAN</span>).
+              Products, categories, sub-categories, and all portal mappings are synced in one step.
             </p>
 
             <FileDropZone
