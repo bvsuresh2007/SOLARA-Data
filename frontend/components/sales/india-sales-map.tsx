@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import {
   ComposableMap, Geographies, Geography, Marker, ZoomableGroup,
 } from "react-simple-maps";
@@ -9,7 +9,7 @@ import type { SalesByDimension } from "@/lib/api";
 import { fmtRevenue } from "@/lib/format";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   India Sales Map — city bubbles (left) + state bar chart (right)
+   India Sales Map — state choropleth (left) + state bar chart (right)
    ═══════════════════════════════════════════════════════════════════════════ */
 
 interface Props {
@@ -33,12 +33,10 @@ const STATE_NAMES = new Set([
 
 /* ── City coordinates [lng, lat] ──────────────────────────────────────── */
 const CITY_COORDS: Record<string, [number, number]> = {
-  // Metros
   "mumbai": [72.878, 19.076], "delhi": [77.209, 28.614], "new delhi": [77.209, 28.614],
   "bengaluru": [77.594, 12.972], "bangalore": [77.594, 12.972],
   "hyderabad": [78.487, 17.385], "chennai": [80.270, 13.083],
   "kolkata": [88.364, 22.573], "pune": [73.856, 18.52], "ahmedabad": [72.571, 23.023],
-  // North India
   "jaipur": [75.787, 26.912], "lucknow": [80.947, 26.847], "agra": [78.015, 27.177],
   "varanasi": [82.991, 25.318], "kanpur": [80.332, 26.449], "prayagraj": [81.846, 25.435],
   "allahabad": [81.846, 25.435], "meerut": [77.706, 28.984], "aligarh": [78.078, 27.883],
@@ -47,14 +45,13 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "firozabad": [78.395, 27.150], "shahjahanpur": [79.905, 27.883],
   "noida": [77.391, 28.535], "gurugram": [77.027, 28.459], "gurgaon": [77.027, 28.459],
   "ghaziabad": [77.438, 28.669], "faridabad": [77.317, 28.408], "greater noida": [77.504, 28.475],
-  "gautam buddha nagar": [77.504, 28.475], // Greater Noida district
+  "gautam buddha nagar": [77.504, 28.475],
   "chandigarh": [76.779, 30.734], "dehradun": [78.032, 30.317],
   "amritsar": [74.872, 31.634], "ludhiana": [75.857, 30.901], "jalandhar": [75.576, 31.326],
   "jammu": [74.857, 32.735], "patiala": [76.387, 30.340], "bathinda": [74.951, 30.211],
   "panipat": [76.968, 29.390], "karnal": [76.990, 29.686], "ambala": [76.777, 30.378],
   "rohtak": [76.606, 28.894], "hisar": [75.723, 29.154], "sonipat": [77.016, 28.994],
   "shimla": [77.172, 31.105], "haridwar": [78.169, 29.946],
-  // West India
   "surat": [72.831, 21.170], "vadodara": [73.181, 22.307], "rajkot": [70.802, 22.304],
   "nashik": [73.789, 19.998], "aurangabad": [75.343, 19.876],
   "navi mumbai": [73.030, 19.037], "thane": [72.978, 19.218],
@@ -65,7 +62,6 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "palghar": [72.770, 19.694], "kalyan": [73.130, 19.244], "vasai": [72.801, 19.365],
   "bhiwandi": [73.059, 19.301], "anand": [72.929, 22.560], "gandhinagar": [72.680, 23.215],
   "bhavnagar": [72.153, 21.764], "jamnagar": [70.066, 22.471],
-  // South India
   "coimbatore": [76.956, 11.017], "kochi": [76.267, 9.931], "ernakulam": [76.267, 9.931],
   "visakhapatnam": [83.218, 17.687], "vijayawada": [80.648, 16.506],
   "thiruvananthapuram": [76.936, 8.524], "trivandrum": [76.936, 8.524],
@@ -86,7 +82,6 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "chengalpattu": [79.978, 12.694], "davanagere": [75.923, 14.467], "bellary": [76.386, 15.143],
   "shimoga": [75.568, 13.930], "tumkur": [77.101, 13.340], "gulbarga": [76.838, 17.329],
   "udupi": [74.746, 13.341], "hassan": [76.100, 13.008],
-  // East India
   "patna": [85.145, 25.612], "ranchi": [85.310, 23.345], "jamshedpur": [86.203, 22.805],
   "bhubaneswar": [85.825, 20.297], "guwahati": [91.736, 26.145],
   "raipur": [81.630, 21.252], "siliguri": [88.395, 26.727], "durgapur": [87.322, 23.553],
@@ -99,7 +94,201 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "imphal": [93.937, 24.817], "shillong": [91.886, 25.578], "agartala": [91.276, 23.831],
 };
 
-/* ── Color interpolation — cyan → amber → red ────────────────────────── */
+/* ── Title case helper ────────────────────────────────────────────────── */
+function titleCase(s: string): string {
+  return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ── City name normalisation ─────────────────────────────────────────── */
+const CITY_ALIASES: Record<string, string> = {
+  "bangalore": "Bengaluru", "gurgaon": "Gurugram", "trivandrum": "Thiruvananthapuram",
+  "calicut": "Kozhikode", "mysore": "Mysuru", "mangalore": "Mangaluru",
+  "allahabad": "Prayagraj", "trichy": "Tiruchirappalli", "belgaum": "Belagavi",
+  "new delhi": "Delhi", "ernakulam": "Kochi", "gautam buddha nagar": "Greater Noida",
+  "kalyan": "Thane", "vasai": "Thane", "bhiwandi": "Thane",
+  "howrah": "Kolkata", "palghar": "Navi Mumbai",
+  "gulbarga": "Kalaburagi", "shimoga": "Shivamogga", "bellary": "Ballari", "tumkur": "Tumakuru",
+};
+
+function normalizeCityName(raw: string): string {
+  const alias = CITY_ALIASES[raw.trim().toLowerCase()];
+  return alias ?? titleCase(raw.trim());
+}
+
+/* ── State name normalisation ────────────────────────────────────────── */
+const STATE_ALIASES: Record<string, string> = {
+  "chattisgarh": "Chhattisgarh", "orissa": "Odisha", "pondicherry": "Puducherry",
+  "uttaranchal": "Uttarakhand", "new delhi": "Delhi", "nct of delhi": "Delhi", "ncr": "Delhi",
+  "jammu and kashmir": "Jammu & Kashmir", "jammu & kashmir": "Jammu & Kashmir", "j&k": "Jammu & Kashmir",
+  "dadra and nagar haveli and daman and diu": "Dadra & Nagar Haveli",
+  "dadra and nagar haveli": "Dadra & Nagar Haveli", "daman and diu": "Daman & Diu",
+  "andaman and nicobar": "Andaman & Nicobar", "andaman and nicobar islands": "Andaman & Nicobar",
+};
+
+function normalizeStateName(raw: string): string {
+  const alias = STATE_ALIASES[raw.trim().toLowerCase()];
+  return alias ?? titleCase(raw.trim());
+}
+
+/* ── City → State mapping ────────────────────────────────────────────── */
+const CITY_TO_STATE: Record<string, string> = {
+  "mumbai": "Maharashtra", "pune": "Maharashtra", "nashik": "Maharashtra", "nagpur": "Maharashtra",
+  "aurangabad": "Maharashtra", "navi mumbai": "Maharashtra", "thane": "Maharashtra",
+  "kolhapur": "Maharashtra", "solapur": "Maharashtra", "sangli": "Maharashtra",
+  "palghar": "Maharashtra", "kalyan": "Maharashtra", "vasai": "Maharashtra", "bhiwandi": "Maharashtra",
+  "bengaluru": "Karnataka", "bangalore": "Karnataka", "mysuru": "Karnataka", "mysore": "Karnataka",
+  "mangalore": "Karnataka", "mangaluru": "Karnataka", "hubli": "Karnataka",
+  "belgaum": "Karnataka", "belagavi": "Karnataka", "davanagere": "Karnataka",
+  "bellary": "Karnataka", "shimoga": "Karnataka", "tumkur": "Karnataka",
+  "gulbarga": "Karnataka", "udupi": "Karnataka", "hassan": "Karnataka",
+  "chennai": "Tamil Nadu", "coimbatore": "Tamil Nadu", "madurai": "Tamil Nadu",
+  "tiruchirappalli": "Tamil Nadu", "trichy": "Tamil Nadu", "salem": "Tamil Nadu",
+  "tiruppur": "Tamil Nadu", "vellore": "Tamil Nadu", "erode": "Tamil Nadu",
+  "thanjavur": "Tamil Nadu", "dindigul": "Tamil Nadu", "thoothukudi": "Tamil Nadu",
+  "tirunelveli": "Tamil Nadu", "chengalpattu": "Tamil Nadu",
+  "hyderabad": "Telangana", "warangal": "Telangana", "karimnagar": "Telangana", "nizamabad": "Telangana",
+  "visakhapatnam": "Andhra Pradesh", "vijayawada": "Andhra Pradesh", "guntur": "Andhra Pradesh",
+  "nellore": "Andhra Pradesh", "rajahmundry": "Andhra Pradesh", "kakinada": "Andhra Pradesh",
+  "tirupati": "Andhra Pradesh", "kadapa": "Andhra Pradesh", "anantapur": "Andhra Pradesh", "kurnool": "Andhra Pradesh",
+  "kochi": "Kerala", "ernakulam": "Kerala", "thiruvananthapuram": "Kerala",
+  "trivandrum": "Kerala", "kozhikode": "Kerala", "calicut": "Kerala",
+  "thrissur": "Kerala", "kollam": "Kerala", "palakkad": "Kerala",
+  "kottayam": "Kerala", "kannur": "Kerala", "malappuram": "Kerala",
+  "ahmedabad": "Gujarat", "surat": "Gujarat", "vadodara": "Gujarat", "rajkot": "Gujarat",
+  "anand": "Gujarat", "gandhinagar": "Gujarat", "bhavnagar": "Gujarat", "jamnagar": "Gujarat",
+  "jaipur": "Rajasthan", "jodhpur": "Rajasthan", "udaipur": "Rajasthan", "kota": "Rajasthan",
+  "lucknow": "Uttar Pradesh", "agra": "Uttar Pradesh", "varanasi": "Uttar Pradesh",
+  "kanpur": "Uttar Pradesh", "prayagraj": "Uttar Pradesh", "allahabad": "Uttar Pradesh",
+  "meerut": "Uttar Pradesh", "noida": "Uttar Pradesh", "ghaziabad": "Uttar Pradesh",
+  "greater noida": "Uttar Pradesh", "gautam buddha nagar": "Uttar Pradesh",
+  "aligarh": "Uttar Pradesh", "bareilly": "Uttar Pradesh", "moradabad": "Uttar Pradesh",
+  "gorakhpur": "Uttar Pradesh", "mathura": "Uttar Pradesh", "saharanpur": "Uttar Pradesh",
+  "muzaffarnagar": "Uttar Pradesh", "firozabad": "Uttar Pradesh", "shahjahanpur": "Uttar Pradesh",
+  "delhi": "Delhi", "new delhi": "Delhi",
+  "gurugram": "Haryana", "gurgaon": "Haryana", "faridabad": "Haryana",
+  "panipat": "Haryana", "karnal": "Haryana", "ambala": "Haryana",
+  "rohtak": "Haryana", "hisar": "Haryana", "sonipat": "Haryana",
+  "amritsar": "Punjab", "ludhiana": "Punjab", "jalandhar": "Punjab",
+  "patiala": "Punjab", "bathinda": "Punjab",
+  "kolkata": "West Bengal", "siliguri": "West Bengal", "durgapur": "West Bengal",
+  "howrah": "West Bengal", "asansol": "West Bengal", "kharagpur": "West Bengal",
+  "patna": "Bihar", "muzaffarpur": "Bihar", "gaya": "Bihar", "bhagalpur": "Bihar",
+  "ranchi": "Jharkhand", "jamshedpur": "Jharkhand", "bokaro": "Jharkhand", "dhanbad": "Jharkhand",
+  "bhubaneswar": "Odisha", "cuttack": "Odisha", "sambalpur": "Odisha", "berhampur": "Odisha",
+  "raipur": "Chhattisgarh", "bilaspur": "Chhattisgarh", "durg": "Chhattisgarh", "bhilai": "Chhattisgarh",
+  "indore": "Madhya Pradesh", "bhopal": "Madhya Pradesh",
+  "guwahati": "Assam", "jorhat": "Assam", "dibrugarh": "Assam", "tezpur": "Assam",
+  "imphal": "Manipur", "shillong": "Meghalaya", "agartala": "Tripura",
+  "chandigarh": "Chandigarh", "jammu": "Jammu & Kashmir",
+  "dehradun": "Uttarakhand", "haridwar": "Uttarakhand",
+  "shimla": "Himachal Pradesh", "panaji": "Goa", "goa": "Goa",
+};
+
+/* ── TopoJSON NAME_1 → our normalized state name ─────────────────────── */
+const TOPO_TO_STATE: Record<string, string> = {
+  "Andaman and Nicobar": "Andaman & Nicobar",
+  "Andhra Pradesh": "Andhra Pradesh",
+  "Arunachal Pradesh": "Arunachal Pradesh",
+  "Assam": "Assam",
+  "Bihar": "Bihar",
+  "Chandigarh": "Chandigarh",
+  "Chhattisgarh": "Chhattisgarh",
+  "Dadra and Nagar Haveli": "Dadra & Nagar Haveli",
+  "Daman and Diu": "Daman & Diu",
+  "Delhi": "Delhi",
+  "Goa": "Goa",
+  "Gujarat": "Gujarat",
+  "Haryana": "Haryana",
+  "Himachal Pradesh": "Himachal Pradesh",
+  "Jammu and Kashmir": "Jammu & Kashmir",
+  "Jharkhand": "Jharkhand",
+  "Karnataka": "Karnataka",
+  "Kerala": "Kerala",
+  "Lakshadweep": "Lakshadweep",
+  "Madhya Pradesh": "Madhya Pradesh",
+  "Maharashtra": "Maharashtra",
+  "Manipur": "Manipur",
+  "Meghalaya": "Meghalaya",
+  "Mizoram": "Mizoram",
+  "Nagaland": "Nagaland",
+  "Orissa": "Odisha",
+  "Puducherry": "Puducherry",
+  "Punjab": "Punjab",
+  "Rajasthan": "Rajasthan",
+  "Sikkim": "Sikkim",
+  "Tamil Nadu": "Tamil Nadu",
+  "Tripura": "Tripura",
+  "Uttar Pradesh": "Uttar Pradesh",
+  "Uttaranchal": "Uttarakhand",
+  "West Bengal": "West Bengal",
+};
+
+/* ── State abbreviations (2-letter codes) ─────────────────────────────── */
+const STATE_ABBREV: Record<string, string> = {
+  "Andaman & Nicobar": "AN", "Andhra Pradesh": "AP", "Arunachal Pradesh": "AR",
+  "Assam": "AS", "Bihar": "BR", "Chandigarh": "CH", "Chhattisgarh": "CG",
+  "Dadra & Nagar Haveli": "DN", "Daman & Diu": "DD", "Delhi": "DL",
+  "Goa": "GA", "Gujarat": "GJ", "Haryana": "HR", "Himachal Pradesh": "HP",
+  "Jammu & Kashmir": "JK", "Jharkhand": "JH", "Karnataka": "KA", "Kerala": "KL",
+  "Lakshadweep": "LD", "Madhya Pradesh": "MP", "Maharashtra": "MH", "Manipur": "MN",
+  "Meghalaya": "ML", "Mizoram": "MZ", "Nagaland": "NL", "Odisha": "OR",
+  "Puducherry": "PY", "Punjab": "PB", "Rajasthan": "RJ", "Sikkim": "SK",
+  "Tamil Nadu": "TN", "Telangana": "TS", "Tripura": "TR", "Uttar Pradesh": "UP",
+  "Uttarakhand": "UK", "West Bengal": "WB",
+};
+
+/* ── State centroids [lng, lat] for label placement ───────────────────── */
+const STATE_CENTROIDS: Record<string, [number, number]> = {
+  "Andaman & Nicobar": [92.7, 11.7],
+  "Andhra Pradesh": [79.7, 15.9],
+  "Arunachal Pradesh": [94.7, 28.2],
+  "Assam": [92.9, 26.2],
+  "Bihar": [85.3, 25.6],
+  "Chandigarh": [76.8, 30.7],
+  "Chhattisgarh": [81.9, 21.3],
+  "Dadra & Nagar Haveli": [73.0, 20.2],
+  "Daman & Diu": [72.8, 20.4],
+  "Delhi": [77.1, 28.7],
+  "Goa": [74.0, 15.4],
+  "Gujarat": [71.6, 22.3],
+  "Haryana": [76.1, 29.1],
+  "Himachal Pradesh": [77.2, 31.8],
+  "Jammu & Kashmir": [75.3, 33.8],
+  "Jharkhand": [85.3, 23.6],
+  "Karnataka": [75.7, 15.3],
+  "Kerala": [76.3, 10.5],
+  "Lakshadweep": [72.6, 10.6],
+  "Madhya Pradesh": [78.7, 23.5],
+  "Maharashtra": [75.7, 19.7],
+  "Manipur": [93.9, 24.8],
+  "Meghalaya": [91.4, 25.5],
+  "Mizoram": [92.9, 23.2],
+  "Nagaland": [94.6, 26.2],
+  "Odisha": [84.0, 20.5],
+  "Puducherry": [79.8, 11.9],
+  "Punjab": [75.3, 31.1],
+  "Rajasthan": [73.8, 26.6],
+  "Sikkim": [88.5, 27.5],
+  "Tamil Nadu": [78.7, 11.1],
+  "Telangana": [79.0, 18.1],
+  "Tripura": [91.7, 23.7],
+  "Uttar Pradesh": [80.9, 27.2],
+  "Uttarakhand": [79.1, 30.1],
+  "West Bengal": [87.9, 23.0],
+};
+
+/* ── Choropleth color: light-to-dark blue (like the reference) ────────── */
+function choroplethColor(share: number, maxShare: number): string {
+  if (share <= 0 || maxShare <= 0) return "#2a2a3d"; // dark bg for 0%
+  const t = Math.min(share / maxShare, 1);
+  // Interpolate from light lavender (#c4c4e8) to deep indigo (#3b30a6)
+  const r = Math.round(196 - t * 137);
+  const g = Math.round(196 - t * 148);
+  const b = Math.round(232 - t * 66);
+  return `rgb(${r},${g},${b})`;
+}
+
+/* ── Color interpolation — cyan → amber → red (for bar chart) ────────── */
 function interpolateColor(t: number): string {
   if (t < 0.5) {
     const s = t * 2;
@@ -109,161 +298,19 @@ function interpolateColor(t: number): string {
   return `rgb(${Math.round(245 - s * 6)},${Math.round(158 - s * 90)},${Math.round(11 + s * 57)})`;
 }
 
-/* ── Title case helper ────────────────────────────────────────────────── */
-function titleCase(s: string): string {
-  return s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/* ── City name normalisation — merge duplicates & aliases ─────────────── */
-const CITY_ALIASES: Record<string, string> = {
-  "bangalore": "Bengaluru",
-  "gurgaon": "Gurugram",
-  "trivandrum": "Thiruvananthapuram",
-  "calicut": "Kozhikode",
-  "mysore": "Mysuru",
-  "mangalore": "Mangaluru",
-  "allahabad": "Prayagraj",
-  "trichy": "Tiruchirappalli",
-  "belgaum": "Belagavi",
-  "new delhi": "Delhi",
-  "ernakulam": "Kochi",
-  "gautam buddha nagar": "Greater Noida",
-  "kalyan": "Thane",          // Kalyan-Dombivli = Thane metro
-  "vasai": "Thane",            // Vasai-Virar = Thane metro
-  "bhiwandi": "Thane",         // Bhiwandi = Thane district
-  "howrah": "Kolkata",         // Howrah = Kolkata metro
-  "palghar": "Navi Mumbai",    // Palghar = Mumbai metro
-  "gulbarga": "Kalaburagi",
-  "shimoga": "Shivamogga",
-  "bellary": "Ballari",
-  "tumkur": "Tumakuru",
-};
-
-function normalizeCityName(raw: string): string {
-  const trimmed = raw.trim();
-  const titled = titleCase(trimmed);
-  const alias = CITY_ALIASES[trimmed.toLowerCase()];
-  return alias ?? titled;
-}
-
-/* ── State name normalisation — merge duplicates & aliases ────────────── */
-const STATE_ALIASES: Record<string, string> = {
-  "chattisgarh": "Chhattisgarh",
-  "orissa": "Odisha",
-  "pondicherry": "Puducherry",
-  "uttaranchal": "Uttarakhand",
-  "new delhi": "Delhi",
-  "nct of delhi": "Delhi",
-  "ncr": "Delhi",
-  "jammu and kashmir": "Jammu & Kashmir",
-  "jammu & kashmir": "Jammu & Kashmir",
-  "j&k": "Jammu & Kashmir",
-  "dadra and nagar haveli and daman and diu": "Dadra & Nagar Haveli",
-  "dadra and nagar haveli": "Dadra & Nagar Haveli",
-  "daman and diu": "Daman & Diu",
-  "andaman and nicobar": "Andaman & Nicobar",
-  "andaman and nicobar islands": "Andaman & Nicobar",
-};
-
-function normalizeStateName(raw: string): string {
-  const trimmed = raw.trim();
-  const titled = titleCase(trimmed);
-  const alias = STATE_ALIASES[trimmed.toLowerCase()];
-  return alias ?? titled;
-}
-
-/* ── City → State mapping (for deriving state totals from city data) ── */
-const CITY_TO_STATE: Record<string, string> = {
-  // Maharashtra
-  "mumbai": "Maharashtra", "pune": "Maharashtra", "nashik": "Maharashtra", "nagpur": "Maharashtra",
-  "aurangabad": "Maharashtra", "navi mumbai": "Maharashtra", "thane": "Maharashtra",
-  "kolhapur": "Maharashtra", "solapur": "Maharashtra", "sangli": "Maharashtra",
-  "palghar": "Maharashtra", "kalyan": "Maharashtra", "vasai": "Maharashtra", "bhiwandi": "Maharashtra",
-  // Karnataka
-  "bengaluru": "Karnataka", "bangalore": "Karnataka", "mysuru": "Karnataka", "mysore": "Karnataka",
-  "mangalore": "Karnataka", "mangaluru": "Karnataka", "hubli": "Karnataka",
-  "belgaum": "Karnataka", "belagavi": "Karnataka", "davanagere": "Karnataka",
-  "bellary": "Karnataka", "shimoga": "Karnataka", "tumkur": "Karnataka",
-  "gulbarga": "Karnataka", "udupi": "Karnataka", "hassan": "Karnataka",
-  // Tamil Nadu
-  "chennai": "Tamil Nadu", "coimbatore": "Tamil Nadu", "madurai": "Tamil Nadu",
-  "tiruchirappalli": "Tamil Nadu", "trichy": "Tamil Nadu", "salem": "Tamil Nadu",
-  "tiruppur": "Tamil Nadu", "vellore": "Tamil Nadu", "erode": "Tamil Nadu",
-  "thanjavur": "Tamil Nadu", "dindigul": "Tamil Nadu", "thoothukudi": "Tamil Nadu",
-  "tirunelveli": "Tamil Nadu", "chengalpattu": "Tamil Nadu",
-  // Telangana
-  "hyderabad": "Telangana", "warangal": "Telangana", "karimnagar": "Telangana",
-  "nizamabad": "Telangana",
-  // Andhra Pradesh
-  "visakhapatnam": "Andhra Pradesh", "vijayawada": "Andhra Pradesh", "guntur": "Andhra Pradesh",
-  "nellore": "Andhra Pradesh", "rajahmundry": "Andhra Pradesh", "kakinada": "Andhra Pradesh",
-  "tirupati": "Andhra Pradesh", "kadapa": "Andhra Pradesh", "anantapur": "Andhra Pradesh",
-  "kurnool": "Andhra Pradesh",
-  // Kerala
-  "kochi": "Kerala", "ernakulam": "Kerala", "thiruvananthapuram": "Kerala",
-  "trivandrum": "Kerala", "kozhikode": "Kerala", "calicut": "Kerala",
-  "thrissur": "Kerala", "kollam": "Kerala", "palakkad": "Kerala",
-  "kottayam": "Kerala", "kannur": "Kerala", "malappuram": "Kerala",
-  // Gujarat
-  "ahmedabad": "Gujarat", "surat": "Gujarat", "vadodara": "Gujarat", "rajkot": "Gujarat",
-  "anand": "Gujarat", "gandhinagar": "Gujarat", "bhavnagar": "Gujarat", "jamnagar": "Gujarat",
-  // Rajasthan
-  "jaipur": "Rajasthan", "jodhpur": "Rajasthan", "udaipur": "Rajasthan", "kota": "Rajasthan",
-  // Uttar Pradesh
-  "lucknow": "Uttar Pradesh", "agra": "Uttar Pradesh", "varanasi": "Uttar Pradesh",
-  "kanpur": "Uttar Pradesh", "prayagraj": "Uttar Pradesh", "allahabad": "Uttar Pradesh",
-  "meerut": "Uttar Pradesh", "noida": "Uttar Pradesh", "ghaziabad": "Uttar Pradesh",
-  "greater noida": "Uttar Pradesh", "gautam buddha nagar": "Uttar Pradesh",
-  "aligarh": "Uttar Pradesh", "bareilly": "Uttar Pradesh", "moradabad": "Uttar Pradesh",
-  "gorakhpur": "Uttar Pradesh", "mathura": "Uttar Pradesh", "saharanpur": "Uttar Pradesh",
-  "muzaffarnagar": "Uttar Pradesh", "firozabad": "Uttar Pradesh", "shahjahanpur": "Uttar Pradesh",
-  // Delhi / NCR
-  "delhi": "Delhi", "new delhi": "Delhi",
-  // Haryana
-  "gurugram": "Haryana", "gurgaon": "Haryana", "faridabad": "Haryana",
-  "panipat": "Haryana", "karnal": "Haryana", "ambala": "Haryana",
-  "rohtak": "Haryana", "hisar": "Haryana", "sonipat": "Haryana",
-  // Punjab
-  "amritsar": "Punjab", "ludhiana": "Punjab", "jalandhar": "Punjab",
-  "patiala": "Punjab", "bathinda": "Punjab",
-  // West Bengal
-  "kolkata": "West Bengal", "siliguri": "West Bengal", "durgapur": "West Bengal",
-  "howrah": "West Bengal", "asansol": "West Bengal", "kharagpur": "West Bengal",
-  // Bihar
-  "patna": "Bihar", "muzaffarpur": "Bihar", "gaya": "Bihar", "bhagalpur": "Bihar",
-  // Jharkhand
-  "ranchi": "Jharkhand", "jamshedpur": "Jharkhand", "bokaro": "Jharkhand", "dhanbad": "Jharkhand",
-  // Odisha
-  "bhubaneswar": "Odisha", "cuttack": "Odisha", "sambalpur": "Odisha", "berhampur": "Odisha",
-  // Chhattisgarh
-  "raipur": "Chhattisgarh", "bilaspur": "Chhattisgarh", "durg": "Chhattisgarh", "bhilai": "Chhattisgarh",
-  // Madhya Pradesh
-  "indore": "Madhya Pradesh", "bhopal": "Madhya Pradesh",
-  // Assam
-  "guwahati": "Assam", "jorhat": "Assam", "dibrugarh": "Assam", "tezpur": "Assam",
-  // Other NE & UTs
-  "imphal": "Manipur", "shillong": "Meghalaya", "agartala": "Tripura",
-  "chandigarh": "Chandigarh", "jammu": "Jammu & Kashmir",
-  "dehradun": "Uttarakhand", "haridwar": "Uttarakhand",
-  "shimla": "Himachal Pradesh",
-  "panaji": "Goa", "goa": "Goa",
-};
-
 /* ══════════════════════════════════════════════════════════════════════════
    Component
    ══════════════════════════════════════════════════════════════════════════ */
 
 export default function IndiaSalesMap({ data }: Props) {
-  const [hovered, setHovered] = useState<string | null>(null);
-  const isAnyHovered = hovered !== null;
+  const [hoveredState, setHoveredState] = useState<string | null>(null);
 
-  const { cities, states, maxRevenue, totalCityRevenue, totalStateRevenue, maxStateRevenue } = useMemo(() => {
-    if (!data?.length) return { cities: [], states: [], maxRevenue: 0, totalCityRevenue: 0, totalStateRevenue: 0, maxStateRevenue: 0 };
+  const { cities, states, stateMap, maxRevenue, totalCityRevenue, totalStateRevenue, maxStateRevenue, maxStateShare } = useMemo(() => {
+    if (!data?.length) return { cities: [], states: [], stateMap: new Map(), maxRevenue: 0, totalCityRevenue: 0, totalStateRevenue: 0, maxStateRevenue: 0, maxStateShare: 0 };
 
     const stateAgg = new Map<string, { revenue: number; quantity: number }>();
     const cityEntries: typeof data = [];
 
-    // Helper to add revenue to state aggregation
     const addToState = (stateName: string, revenue: number, quantity: number) => {
       const existing = stateAgg.get(stateName);
       if (existing) {
@@ -282,14 +329,10 @@ export default function IndiaSalesMap({ data }: Props) {
       const hasCoords = !!(CITY_COORDS[name] ?? CITY_COORDS[lower]);
 
       if (isState) {
-        // State-level entry — always add to state aggregation
         addToState(normalizeStateName(name), d.total_revenue, d.total_quantity);
-        // Also show as city bubble if coords exist (Delhi, Goa, Chandigarh)
         if (hasCoords) cityEntries.push(d);
       } else {
-        // City entry — add to city list
         cityEntries.push(d);
-        // Also derive state from city→state mapping and add to state agg
         const parentState = CITY_TO_STATE[lower];
         if (parentState) {
           addToState(parentState, d.total_revenue, d.total_quantity);
@@ -299,7 +342,7 @@ export default function IndiaSalesMap({ data }: Props) {
 
     const totalCityRevenue = cityEntries.reduce((s, d) => s + d.total_revenue, 0);
 
-    // Merge duplicates: normalise names then aggregate revenue/quantity
+    // City dedup
     const cityAgg = new Map<string, { revenue: number; quantity: number; coords: [number, number] }>();
     for (const d of cityEntries) {
       const raw = d.dimension_name.trim();
@@ -318,34 +361,42 @@ export default function IndiaSalesMap({ data }: Props) {
     let maxRev = 0;
     const cities = Array.from(cityAgg.entries()).map(([name, v]) => {
       if (v.revenue > maxRev) maxRev = v.revenue;
-      return {
-        name,
-        coords: v.coords,
-        revenue: v.revenue,
-        quantity: v.quantity,
-        share: totalCityRevenue > 0 ? v.revenue / totalCityRevenue : 0,
-      };
+      return { name, coords: v.coords, revenue: v.revenue, quantity: v.quantity, share: totalCityRevenue > 0 ? v.revenue / totalCityRevenue : 0 };
     });
 
-    // Convert state map to sorted array
     const stateList = Array.from(stateAgg.entries())
       .map(([name, v]) => ({ name, revenue: v.revenue, quantity: v.quantity }))
       .sort((a, b) => b.revenue - a.revenue);
     const totalStateRevenue = stateList.reduce((s, d) => s + d.revenue, 0);
     const maxStateRevenue = stateList.length > 0 ? stateList[0].revenue : 0;
+    const statesWithShare = stateList.map((s) => ({
+      ...s,
+      share: totalStateRevenue > 0 ? s.revenue / totalStateRevenue : 0,
+    }));
+    const maxStateShare = statesWithShare.length > 0 ? statesWithShare[0].share : 0;
+
+    // Build map for quick lookup from state name → data
+    const stateMap = new Map<string, { revenue: number; quantity: number; share: number }>();
+    for (const s of statesWithShare) {
+      stateMap.set(s.name, { revenue: s.revenue, quantity: s.quantity, share: s.share });
+    }
 
     return {
       cities,
-      states: stateList.map((s) => ({
-        ...s,
-        share: totalStateRevenue > 0 ? s.revenue / totalStateRevenue : 0,
-      })),
+      states: statesWithShare,
+      stateMap,
       maxRevenue: maxRev,
       totalCityRevenue,
       totalStateRevenue,
       maxStateRevenue,
+      maxStateShare,
     };
   }, [data]);
+
+  const getStateData = useCallback((topoName: string) => {
+    const normalized = TOPO_TO_STATE[topoName] ?? titleCase(topoName);
+    return { name: normalized, ...(stateMap.get(normalized) ?? { revenue: 0, quantity: 0, share: 0 }) };
+  }, [stateMap]);
 
   if (!data?.length) {
     return (
@@ -363,111 +414,122 @@ export default function IndiaSalesMap({ data }: Props) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* ════════════════════════════════════════════════════════════════════
-         LEFT: City-wise India Map
+         LEFT: State Choropleth Map
          ════════════════════════════════════════════════════════════════════ */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm text-zinc-100 flex items-center justify-between">
-            <span>City-wise Sales</span>
+            <span>State-wise Sales Map</span>
             <span className="text-[10px] text-zinc-500 font-normal">
-              {cities.length} cities &middot; {fmtRevenue(totalCityRevenue)}
+              {states.length} states &middot; {fmtRevenue(totalStateRevenue)}
             </span>
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="relative" style={{ width: 420, maxWidth: "100%" }}>
-            <ComposableMap
-              projection="geoMercator"
-              projectionConfig={{ center: INDIA_CENTER, scale: 680 }}
-              width={420}
-              height={440}
-              style={{ width: "100%", height: "auto" }}
-            >
-              <ZoomableGroup center={INDIA_CENTER} zoom={1} minZoom={1} maxZoom={4}>
-                {/* State boundaries */}
-                <Geographies geography={INDIA_TOPO}>
-                  {({ geographies }) =>
-                    geographies.map((geo) => (
-                      <Geography
-                        key={geo.rsmKey}
-                        geography={geo}
-                        fill={isAnyHovered ? "#1a1a1d" : "#27272a"}
-                        stroke="#ffffff"
-                        strokeWidth={0.5}
-                        style={{
-                          default: { outline: "none", transition: "fill 0.2s" },
-                          hover: { fill: isAnyHovered ? "#1a1a1d" : "#3f3f46", outline: "none" },
-                          pressed: { outline: "none" },
-                        }}
-                      />
-                    ))
-                  }
-                </Geographies>
+          <div className="flex gap-3">
+            {/* Map */}
+            <div className="relative flex-1" style={{ minWidth: 0 }}>
+              <ComposableMap
+                projection="geoMercator"
+                projectionConfig={{ center: INDIA_CENTER, scale: 700 }}
+                width={440}
+                height={480}
+                style={{ width: "100%", height: "auto" }}
+              >
+                <ZoomableGroup center={INDIA_CENTER} zoom={1} minZoom={1} maxZoom={4}>
+                  <Geographies geography={INDIA_TOPO}>
+                    {({ geographies }) =>
+                      geographies.map((geo) => {
+                        const topoName = geo.properties.NAME_1 as string;
+                        const sd = getStateData(topoName);
+                        const abbrev = STATE_ABBREV[sd.name] ?? "";
+                        const pct = (sd.share * 100).toFixed(1);
+                        const isHovered = hoveredState === sd.name;
+                        const centroid = STATE_CENTROIDS[sd.name];
 
-                {/* Dim overlay when a city is hovered */}
-                {isAnyHovered && (
-                  <rect x={-200} y={-200} width={2000} height={2000}
-                    fill="black" fillOpacity={0.35} style={{ pointerEvents: "none" }} />
-                )}
+                        return (
+                          <g key={geo.rsmKey}>
+                            <Geography
+                              geography={geo}
+                              fill={isHovered
+                                ? (sd.share > 0 ? "#f97316" : "#3f3f46")
+                                : choroplethColor(sd.share, maxStateShare)
+                              }
+                              stroke="#ffffff"
+                              strokeWidth={isHovered ? 1.5 : 0.5}
+                              style={{
+                                default: { outline: "none", transition: "fill 0.2s, stroke-width 0.2s" },
+                                hover: { outline: "none" },
+                                pressed: { outline: "none" },
+                              }}
+                              onMouseEnter={() => setHoveredState(sd.name)}
+                              onMouseLeave={() => setHoveredState(null)}
+                            />
+                            {/* State abbreviation + % label */}
+                            {centroid && (
+                              <Marker coordinates={centroid}>
+                                <text
+                                  textAnchor="middle"
+                                  style={{
+                                    fontSize: 8,
+                                    fill: isHovered ? "#ffffff" : "#c4c4e8",
+                                    fontWeight: 700,
+                                    pointerEvents: "none",
+                                    textShadow: "0 0 3px rgba(0,0,0,0.8)",
+                                  }}
+                                >
+                                  {abbrev}
+                                </text>
+                                <text
+                                  textAnchor="middle"
+                                  y={10}
+                                  style={{
+                                    fontSize: 7,
+                                    fill: isHovered ? "#fbbf24" : (sd.share > 0 ? "#e4e4f7" : "#71717a"),
+                                    fontWeight: 600,
+                                    pointerEvents: "none",
+                                    textShadow: "0 0 3px rgba(0,0,0,0.8)",
+                                  }}
+                                >
+                                  {pct}%
+                                </text>
+                              </Marker>
+                            )}
+                          </g>
+                        );
+                      })
+                    }
+                  </Geographies>
+                </ZoomableGroup>
+              </ComposableMap>
 
-                {/* City bubbles */}
-                {cities.map((c) => {
-                  const t = maxRevenue > 0 ? c.revenue / maxRevenue : 0;
-                  const radius = 2 + Math.sqrt(t) * 8;
-                  const color = interpolateColor(t);
-                  const isThis = hovered === c.name;
-                  const dimmed = isAnyHovered && !isThis;
+              {/* Hover tooltip */}
+              {hoveredState && (() => {
+                const sd = stateMap.get(hoveredState);
+                return (
+                  <div className="absolute top-2 left-2 bg-zinc-900/95 border border-zinc-700 rounded-lg px-3 py-2 pointer-events-none z-10">
+                    <p className="text-white font-bold text-xs">{hoveredState}</p>
+                    <p className="text-zinc-300 text-[10px]">
+                      Sales: {fmtRevenue(sd?.revenue ?? 0)} &middot; {(((sd?.share ?? 0)) * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
 
-                  return (
-                    <Marker
-                      key={c.name}
-                      coordinates={c.coords}
-                      onMouseEnter={() => setHovered(c.name)}
-                      onMouseLeave={() => setHovered(null)}
-                    >
-                      <circle
-                        r={isThis ? radius * 1.6 : radius}
-                        fill={color}
-                        fillOpacity={dimmed ? 0.25 : isThis ? 1 : 0.85}
-                        stroke={isThis ? "#fff" : dimmed ? "transparent" : "rgba(255,255,255,0.3)"}
-                        strokeWidth={isThis ? 2 : 0.5}
-                        className="cursor-pointer"
-                        style={{ transition: "all 0.15s" }}
-                      />
-
-                      {isThis && (
-                        <g style={{ pointerEvents: "none" }}>
-                          {/* Tooltip background */}
-                          <rect
-                            x={-70} y={-radius - 42}
-                            width={140} height={34}
-                            rx={5}
-                            fill="#09090b" stroke="#52525b" strokeWidth={0.8}
-                            fillOpacity={0.95}
-                          />
-                          <text textAnchor="middle" y={-radius - 26}
-                            style={{ fontSize: 11, fill: "#ffffff", fontWeight: 700 }}>
-                            {c.name}
-                          </text>
-                          <text textAnchor="middle" y={-radius - 13}
-                            style={{ fontSize: 10, fill: "#d4d4d8" }}>
-                            {fmtRevenue(c.revenue)} &middot; {Math.round(c.quantity).toLocaleString("en-IN")} units
-                          </text>
-                        </g>
-                      )}
-                    </Marker>
-                  );
-                })}
-              </ZoomableGroup>
-            </ComposableMap>
-
-            {/* Gradient legend */}
-            <div className="flex items-center justify-start gap-2 mt-1 ml-2">
-              <span className="text-[10px] text-zinc-500">Low</span>
-              <div className="h-2 rounded-full"
-                style={{ width: 160, background: `linear-gradient(to right, ${interpolateColor(0)}, ${interpolateColor(0.5)}, ${interpolateColor(1)})` }} />
-              <span className="text-[10px] text-zinc-500">High</span>
-              <span className="text-[10px] text-zinc-600 ml-1">Revenue</span>
+            {/* Vertical gradient legend */}
+            <div className="flex flex-col items-center justify-center gap-1 w-16 flex-shrink-0">
+              <span className="text-[9px] text-zinc-400 font-medium">High Sales</span>
+              <span className="text-[9px] text-zinc-500">100%</span>
+              <div
+                className="w-4 rounded"
+                style={{
+                  height: 120,
+                  background: `linear-gradient(to bottom, ${choroplethColor(maxStateShare, maxStateShare)}, ${choroplethColor(maxStateShare * 0.5, maxStateShare)}, ${choroplethColor(0.001, maxStateShare)}, #2a2a3d)`,
+                }}
+              />
+              <span className="text-[9px] text-zinc-500">0%</span>
+              <span className="text-[9px] text-zinc-400 font-medium">Low Sales</span>
             </div>
           </div>
 
@@ -475,24 +537,13 @@ export default function IndiaSalesMap({ data }: Props) {
           <div className="mt-3 pt-3 border-t border-zinc-800">
             <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Top 10 Cities</p>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              {[...cities].sort((a, b) => b.revenue - a.revenue).slice(0, 10).map((c, i) => {
-                const t = maxRevenue > 0 ? c.revenue / maxRevenue : 0;
-                return (
-                  <div
-                    key={c.name}
-                    className={`flex items-center gap-1.5 text-xs cursor-pointer rounded px-1 py-0.5 transition-colors
-                      ${hovered === c.name ? "bg-zinc-800" : "hover:bg-zinc-800/50"}`}
-                    onMouseEnter={() => setHovered(c.name)}
-                    onMouseLeave={() => setHovered(null)}
-                  >
-                    <span className="text-white w-3 text-right font-mono text-[10px] font-bold">{i + 1}</span>
-                    <div className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: interpolateColor(t) }} />
-                    <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
-                    <span className="text-zinc-200 tabular-nums text-[10px] font-medium">{fmtRevenue(c.revenue)}</span>
-                  </div>
-                );
-              })}
+              {[...cities].sort((a, b) => b.revenue - a.revenue).slice(0, 10).map((c, i) => (
+                <div key={c.name} className="flex items-center gap-1.5 text-xs">
+                  <span className="text-white w-3 text-right font-mono text-[10px] font-bold">{i + 1}</span>
+                  <span className="text-zinc-300 truncate flex-1 text-[11px]">{c.name}</span>
+                  <span className="text-zinc-200 tabular-nums text-[10px] font-medium">{fmtRevenue(c.revenue)}</span>
+                </div>
+              ))}
             </div>
           </div>
         </CardContent>
@@ -515,8 +566,14 @@ export default function IndiaSalesMap({ data }: Props) {
             {states.map((s, i) => {
               const barPct = maxStateRevenue > 0 ? (s.revenue / maxStateRevenue) * 100 : 0;
               const t = maxStateRevenue > 0 ? s.revenue / maxStateRevenue : 0;
+              const isHovered = hoveredState === s.name;
               return (
-                <div key={s.name} className="group">
+                <div
+                  key={s.name}
+                  className={`group rounded px-0.5 transition-colors ${isHovered ? "bg-zinc-800" : ""}`}
+                  onMouseEnter={() => setHoveredState(s.name)}
+                  onMouseLeave={() => setHoveredState(null)}
+                >
                   <div className="flex items-center gap-1.5 text-xs">
                     <span className="text-white w-4 text-right font-mono text-[9px] font-bold">{i + 1}</span>
                     <span className="text-zinc-300 w-28 truncate text-[10px]">{s.name}</span>
@@ -526,7 +583,7 @@ export default function IndiaSalesMap({ data }: Props) {
                         style={{
                           width: `${barPct}%`,
                           backgroundColor: interpolateColor(t),
-                          opacity: 0.85,
+                          opacity: isHovered ? 1 : 0.85,
                         }}
                       />
                     </div>
