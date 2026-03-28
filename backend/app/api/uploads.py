@@ -566,15 +566,16 @@ async def upload_sku_mapping(
     db: Session = Depends(get_db),
 ):
     """
-    Accepts an .xlsx or .csv with at minimum a SKU column and a Product name column.
+    Accepts an .xlsx or .csv with at minimum a SKU column.
     Expected columns (case-insensitive, flexible naming):
       - SKU / sku_code / sku code / SKU CODE
-      - Product / product_name / product name / Product Name / PRODUCT
+      - Product / product_name / product name / Product Name / PRODUCT  (optional if products already exist)
       - Category / category_name / l2_name  (optional)
 
     For each row:
-      - If the SKU already exists in products → UPDATE product_name (and category if provided)
-      - If the SKU does not exist → INSERT new product
+      - If Product column present: upsert products (update name/category or insert new)
+      - If Product column absent: look up existing products by SKU (mapping-only mode)
+      - Portal mapping columns (ASIN, FSN, etc.) are synced to product_portal_mapping
     Returns counts of updated / added / skipped rows.
     """
     import pandas as pd
@@ -618,17 +619,15 @@ async def upload_sku_mapping(
 
     if not sku_col:
         raise HTTPException(status_code=422, detail={"message": f"Could not find SKU column. Columns found: {list(df.columns)}"})
-    if not product_col:
-        raise HTTPException(status_code=422, detail={"message": f"Could not find Product name column. Columns found: {list(df.columns)}"})
 
     # Portal columns: (search keywords, portal name in DB)
     _PORTAL_COLS = [
-        (["ASIN"],                                     "amazon"),
-        (["FSN"],                                      "flipkart"),
-        (["Myntra (Style ID)", "Myntra"],              "myntra"),
-        (["(Blinkit) Style ID", "Blinkit Style ID"],   "blinkit"),
-        (["Swiggy Code"],                              "swiggy"),
-        (["Zepto EAN"],                                "zepto"),
+        (["ASIN"],                                                              "amazon"),
+        (["FSN"],                                                               "flipkart"),
+        (["Myntra (Style ID)", "STYLE ID(Myntra)", "Myntra Style ID", "Myntra"],"myntra"),
+        (["(Blinkit) Style ID", "Blinkit Style ID", "STYLE ID(Blinkit)"],       "blinkit"),
+        (["Swiggy Code", "SWIGGY CODE"],                                        "swiggy"),
+        (["Zepto EAN", "EAN CODE", "EAN"],                                      "zepto"),
     ]
     portal_col_map: list[tuple[str, int]] = []  # (col_name, portal_id)
     portal_id_rows = db.execute(
@@ -661,47 +660,57 @@ async def upload_sku_mapping(
     try:
         for _, row in df.iterrows():
             sku = str(row.get(sku_col, "")).strip()
-            product_name = str(row.get(product_col, "")).strip()
-
             if not sku or sku.lower() in ("nan", ""):
                 skipped += 1
                 continue
-            if not product_name or product_name.lower() in ("nan", ""):
-                skipped += 1
-                continue
 
-            sub_category: Optional[str] = None
-            if sub_cat_col:
-                raw = str(row.get(sub_cat_col, "")).strip()
-                if raw and raw.lower() not in ("nan", ""):
-                    sub_category = raw
+            if product_col:
+                # Full mode: upsert product name + category
+                product_name = str(row.get(product_col, "")).strip()
+                if not product_name or product_name.lower() in ("nan", ""):
+                    skipped += 1
+                    continue
 
-            category_id: Optional[int] = None
-            if category_col:
-                cat_raw = str(row.get(category_col, "")).strip().lower()
-                category_id = cat_name_to_id.get(cat_raw)
+                sub_category: Optional[str] = None
+                if sub_cat_col:
+                    raw = str(row.get(sub_cat_col, "")).strip()
+                    if raw and raw.lower() not in ("nan", ""):
+                        sub_category = raw
 
-            existing = db.query(Product).filter(Product.sku_code == sku).first()
-            if existing:
-                existing.product_name = product_name
-                if sub_category is not None:
-                    existing.sub_category = sub_category
-                if category_id is not None:
-                    existing.category_id = category_id
-                sku_to_product_id[sku] = existing.id
-                updated += 1
+                category_id: Optional[int] = None
+                if category_col:
+                    cat_raw = str(row.get(category_col, "")).strip().lower()
+                    category_id = cat_name_to_id.get(cat_raw)
+
+                existing = db.query(Product).filter(Product.sku_code == sku).first()
+                if existing:
+                    existing.product_name = product_name
+                    if sub_category is not None:
+                        existing.sub_category = sub_category
+                    if category_id is not None:
+                        existing.category_id = category_id
+                    sku_to_product_id[sku] = existing.id
+                    updated += 1
+                else:
+                    new_product = Product(
+                        sku_code=sku,
+                        product_name=product_name,
+                        sub_category=sub_category,
+                        category_id=category_id,
+                        unit_type="pieces",
+                    )
+                    db.add(new_product)
+                    db.flush()  # get the new id
+                    sku_to_product_id[sku] = new_product.id
+                    added += 1
             else:
-                new_product = Product(
-                    sku_code=sku,
-                    product_name=product_name,
-                    sub_category=sub_category,
-                    category_id=category_id,
-                    unit_type="pieces",
-                )
-                db.add(new_product)
-                db.flush()  # get the new id
-                sku_to_product_id[sku] = new_product.id
-                added += 1
+                # Mapping-only mode: look up existing product by SKU
+                existing = db.query(Product).filter(Product.sku_code == sku).first()
+                if existing:
+                    sku_to_product_id[sku] = existing.id
+                    updated += 1
+                else:
+                    skipped += 1
 
         db.commit()
     except Exception as exc:
@@ -711,7 +720,7 @@ async def upload_sku_mapping(
 
     # ── Pass 2: upsert portal mappings ────────────────────────────────────────
     if portal_col_map and sku_to_product_id:
-        mapping_rows: list[dict] = []
+        mapping_rows: dict[tuple, dict] = {}  # keyed by (portal_id, portal_sku) to deduplicate
         for _, row in df.iterrows():
             sku = str(row.get(sku_col, "")).strip()
             product_id = sku_to_product_id.get(sku)
@@ -721,17 +730,18 @@ async def upload_sku_mapping(
                 val = str(row.get(col_name, "")).strip()
                 if not val or val.lower() in ("nan", "0", ""):
                     continue
-                mapping_rows.append({
+                mapping_rows[(portal_id, val)] = {
                     "product_id": product_id,
                     "portal_id": portal_id,
                     "portal_sku": val,
-                })
+                }
 
-        if mapping_rows:
+        deduped_rows = list(mapping_rows.values())
+        if deduped_rows:
             try:
                 _BATCH = 500
-                for i in range(0, len(mapping_rows), _BATCH):
-                    batch = mapping_rows[i: i + _BATCH]
+                for i in range(0, len(deduped_rows), _BATCH):
+                    batch = deduped_rows[i: i + _BATCH]
                     stmt = pg_insert(ProductPortalMapping).values(batch).on_conflict_do_update(
                         index_elements=["portal_id", "portal_sku"],
                         set_={
@@ -741,7 +751,7 @@ async def upload_sku_mapping(
                     )
                     db.execute(stmt)
                 db.commit()
-                mappings_synced = len(mapping_rows)
+                mappings_synced = len(deduped_rows)
             except Exception as exc:
                 db.rollback()
                 logger.exception("Error upserting portal mappings from SKU file %s", filename)
