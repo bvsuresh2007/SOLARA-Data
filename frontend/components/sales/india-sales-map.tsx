@@ -462,8 +462,7 @@ export default function IndiaSalesMap({ data }: Props) {
                                 hover: { outline: "none" },
                                 pressed: { outline: "none" },
                               }}
-                              onMouseEnter={() => setHoveredState(sd.name)}
-                              onMouseLeave={() => setHoveredState(null)}
+                              {...{ onMouseEnter: () => setHoveredState(sd.name), onMouseLeave: () => setHoveredState(null) } as any}
                             />
                             {/* State abbreviation + % label */}
                             {centroid && (
