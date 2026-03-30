@@ -748,6 +748,38 @@ def portal_daily_sales(
             for r in inv_rows
         }
 
+    # 5a2. Latest Amazon FC stock from inventory snapshots (amazon_fc_stock).
+    amazon_stock_map: dict[int, float | None] = {}
+    amazon_portal = db.query(Portal).filter(func.lower(Portal.name) == "amazon").first()
+    if amazon_portal and product_ids:
+        amz_latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == amazon_portal.id,
+                InventorySnapshot.product_id.in_(product_ids),
+                InventorySnapshot.amazon_fc_stock.isnot(None),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
+        )
+        amz_inv_rows = (
+            db.query(InventorySnapshot.product_id, InventorySnapshot.amazon_fc_stock)
+            .join(
+                amz_latest_sq,
+                (InventorySnapshot.product_id == amz_latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == amz_latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == amazon_portal.id)
+            .all()
+        )
+        for r in amz_inv_rows:
+            amazon_stock_map[r.product_id] = (
+                float(r.amazon_fc_stock) if r.amazon_fc_stock is not None else None
+            )
+
     # 5b. Latest Swiggy portal_stock from inventory snapshots.
     swiggy_stock_map: dict[int, float | None] = {}
     swiggy_portal = db.query(Portal).filter(func.lower(Portal.name) == "swiggy").first()
@@ -897,6 +929,7 @@ def portal_daily_sales(
                 portal_sku=p.portal_sku or "—",
                 bau_asp=bau_asp,
                 wh_stock=inv_map.get(pid),
+                amazon_stock=amazon_stock_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
                 zepto_stock=zepto_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),
@@ -924,6 +957,7 @@ def portal_daily_sales(
                 portal_sku=p.portal_sku or "—",
                 bau_asp=bau_asp,
                 wh_stock=inv_map.get(pid),
+                amazon_stock=amazon_stock_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
                 zepto_stock=zepto_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),

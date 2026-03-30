@@ -129,7 +129,7 @@ function frozenStyle(col: { w: number; left: number }) {
 // ─── Sort key type ────────────────────────────────────────────────────────────
 
 type SortKey =
-  | "sku" | "product" | "portal_sku" | "bau_asp" | "wh_stock"
+  | "sku" | "product" | "portal_sku" | "bau_asp" | "wh_stock" | "amazon_stock"
   | "swiggy_stock" | "zepto_stock" | "backend_qty" | "frontend_qty"
   | "mtd_units" | "drr" | "doc" | "mtd_value"
   | { date: string };
@@ -206,6 +206,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       case "portal_sku":   return row.portal_sku ?? "";
       case "bau_asp":      return row.bau_asp ?? -Infinity;
       case "wh_stock":     return row.wh_stock ?? -Infinity;
+      case "amazon_stock": return row.amazon_stock ?? -Infinity;
       case "swiggy_stock": return row.swiggy_stock ?? -Infinity;
       case "zepto_stock":  return row.zepto_stock ?? -Infinity;
       case "backend_qty":  return row.backend_qty ?? -Infinity;
@@ -261,6 +262,7 @@ export function PortalDailyTable({ data, loading }: Props) {
         case "mtd_units":    return catRows.reduce((s, r) => s + r.mtd_units, 0);
         case "mtd_value":    return catRows.reduce((s, r) => s + r.mtd_value, 0);
         case "wh_stock":     return catRows.reduce((s, r) => s + (r.wh_stock ?? 0), 0);
+        case "amazon_stock": return catRows.reduce((s, r) => s + (r.amazon_stock ?? 0), 0);
         case "swiggy_stock": return catRows.reduce((s, r) => s + (r.swiggy_stock ?? 0), 0);
         case "zepto_stock":  return catRows.reduce((s, r) => s + (r.zepto_stock ?? 0), 0);
         case "backend_qty":  return catRows.reduce((s, r) => s + (r.backend_qty ?? 0), 0);
@@ -293,7 +295,7 @@ export function PortalDailyTable({ data, loading }: Props) {
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
     const headers = [
-      "#", "SKU", "Product Name", "Portal SKU", "BAU ASP", "WH Stock",
+      "#", "SKU", "Product Name", "Portal SKU", "BAU ASP", "WH Stock", "Amazon Stock",
       ...(showSwiggyStock  ? ["Swiggy Stock"] : []),
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
@@ -305,6 +307,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       i + 1, row.sku_code, row.product_name, row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
+      row.amazon_stock != null ? row.amazon_stock : "—",
       ...(showSwiggyStock  ? [row.swiggy_stock  != null ? row.swiggy_stock  : "—"] : []),
       ...(showZeptoStock   ? [row.zepto_stock   != null ? row.zepto_stock   : "—"] : []),
       ...(showBlinkitStock ? [row.backend_qty   != null ? row.backend_qty   : "—",
@@ -425,6 +428,10 @@ export function PortalDailyTable({ data, loading }: Props) {
                 style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("wh_stock")}>
                 WH Stock<SortIcon active={isActive("wh_stock")} dir={sortDir} />
               </th>
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900 ${thCls}`}
+                style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("amazon_stock")}>
+                Amazon Stock<SortIcon active={isActive("amazon_stock")} dir={sortDir} />
+              </th>
               {showSwiggyStock && (
                 <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900 ${thCls}`}
                   style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("swiggy_stock")}>
@@ -484,6 +491,7 @@ export function PortalDailyTable({ data, loading }: Props) {
 
               // Group aggregates
               const totalWh      = catRows.reduce((s, r) => s + (r.wh_stock      ?? 0), 0);
+              const totalAmazon  = catRows.reduce((s, r) => s + (r.amazon_stock  ?? 0), 0);
               const totalSwiggy  = catRows.reduce((s, r) => s + (r.swiggy_stock  ?? 0), 0);
               const totalZepto   = catRows.reduce((s, r) => s + (r.zepto_stock   ?? 0), 0);
               const totalBackend = catRows.reduce((s, r) => s + (r.backend_qty   ?? 0), 0);
@@ -527,8 +535,12 @@ export function PortalDailyTable({ data, loading }: Props) {
                     {/* BAU ASP — blank */}
                     <td className={`py-2 ${groupBg}`} />
                     {/* WH Stock */}
-                    <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
+                    <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}`}>
                       <StockBadge v={totalWh} />
+                    </td>
+                    {/* Amazon Stock */}
+                    <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
+                      <StockBadge v={totalAmazon} />
                     </td>
                     {showSwiggyStock && (
                       <td className={`py-2 px-3 text-right font-semibold border-r border-zinc-700/60 ${groupBg}`}><StockBadge v={totalSwiggy} /></td>
@@ -579,8 +591,11 @@ export function PortalDailyTable({ data, loading }: Props) {
                       </td>
                       <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
                       <td className="py-1.5 px-3 text-right text-zinc-300 font-mono">{fmtAsp(row.bau_asp)}</td>
-                      <td className={`py-1.5 px-3 text-right${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
+                      <td className="py-1.5 px-3 text-right">
                         <StockBadge v={row.wh_stock} />
+                      </td>
+                      <td className={`py-1.5 px-3 text-right${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
+                        <StockBadge v={row.amazon_stock} />
                       </td>
                       {showSwiggyStock && (
                         <td className="py-1.5 px-3 text-right border-r border-zinc-700/60"><StockBadge v={row.swiggy_stock} /></td>
@@ -627,9 +642,13 @@ export function PortalDailyTable({ data, loading }: Props) {
               </td>
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
-              <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}
+              <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800"
                 style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {visibleRows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
+              </td>
+              <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}
+                style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                {visibleRows.reduce((s, r) => s + (r.amazon_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
               {showSwiggyStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>

@@ -19,7 +19,7 @@ from backend.app.models.sales import Product
 from backend.app.models.metadata import Portal
 
 BATCH = 500
-REPORT_DATE = date(2026, 3, 13)
+REPORT_DATE = date(2026, 3, 27)
 
 
 def ingest(portal_name, file_path):
@@ -84,6 +84,101 @@ def ingest(portal_name, file_path):
         print(f"  [{portal_name}] city={len(city_rows)}, daily={len(daily_rows)}")
     except Exception as e:
         import traceback; traceback.print_exc(); db.rollback()
+    finally:
+        db.close()
+
+
+def ingest_amazon_sp_api(report_date):
+    """Ingest Amazon SP-API Vendor Central sales CSV into daily_sales."""
+    import pandas as pd
+    from backend.app.models.sales import ProductPortalMapping
+
+    csv_path = Path(f"data/raw/amazon_sp_api/amazon_sp_api_sales_{report_date}.csv")
+    if not csv_path.exists():
+        print(f"  [amazon_sp_api] File not found: {csv_path}")
+        return
+
+    df = pd.read_csv(csv_path, dtype=str).fillna("")
+    db = SessionLocal()
+
+    try:
+        # Get amazon portal id
+        amazon_portal = db.query(Portal).filter(Portal.name.ilike("%amazon%")).filter(~Portal.name.ilike("%pi%")).first()
+        if not amazon_portal:
+            print("  [amazon_sp_api] Amazon portal not found in DB")
+            return
+
+        # Build ASIN -> product_id lookup
+        mappings = db.query(ProductPortalMapping).filter(
+            ProductPortalMapping.portal_id == amazon_portal.id
+        ).all()
+        asin_to_product = {str(m.portal_sku).strip(): m.product_id for m in mappings if m.portal_sku}
+
+        daily_rows = []
+        skipped = 0
+        for _, row in df.iterrows():
+            asin = str(row.get("asin", "")).strip()
+            ordered_units = int(float(row.get("ordered_units", 0) or 0))
+            ordered_revenue = float(row.get("ordered_revenue", 0) or 0)
+
+            if ordered_units == 0 and ordered_revenue == 0:
+                continue
+
+            product_id = asin_to_product.get(asin)
+            if not product_id:
+                skipped += 1
+                continue
+
+            asp = round(ordered_revenue / ordered_units, 2) if ordered_units > 0 else None
+            daily_rows.append({
+                "portal_id": amazon_portal.id,
+                "product_id": product_id,
+                "sale_date": report_date,
+                "units_sold": ordered_units,
+                "revenue": ordered_revenue,
+                "asp": asp,
+                "data_source": "sp_api",
+            })
+
+        for i in range(0, len(daily_rows), BATCH):
+            db.execute(insert(DailySales).values(daily_rows[i:i + BATCH]).on_conflict_do_update(
+                index_elements=["portal_id", "product_id", "sale_date"],
+                set_={
+                    "units_sold": insert(DailySales).excluded.units_sold,
+                    "revenue": insert(DailySales).excluded.revenue,
+                    "asp": insert(DailySales).excluded.asp,
+                }))
+        db.commit()
+        print(f"  [amazon_sp_api] daily={len(daily_rows)} skipped={skipped} (no ASIN mapping)")
+
+        # Write Amazon FC inventory (sellable_on_hand) to inventory_snapshots
+        inv_rows_upserted = 0
+        for _, row in df.iterrows():
+            asin = str(row.get("asin", "")).strip()
+            soh = int(float(row.get("sellable_on_hand", 0) or 0))
+            if soh <= 0:
+                continue
+            product_id = asin_to_product.get(asin)
+            if not product_id:
+                continue
+            stmt = insert(InventorySnapshot).values(
+                portal_id=amazon_portal.id,
+                product_id=product_id,
+                snapshot_date=report_date,
+                amazon_fc_stock=soh,
+            ).on_conflict_do_update(
+                index_elements=["portal_id", "product_id", "snapshot_date"],
+                set_={"amazon_fc_stock": insert(InventorySnapshot).excluded.amazon_fc_stock},
+            )
+            db.execute(stmt)
+            inv_rows_upserted += 1
+        db.commit()
+        print(f"  [amazon_sp_api] inventory={inv_rows_upserted} ASINs with FC stock")
+
+    except Exception as e:
+        db.rollback()
+        print(f"  [amazon_sp_api] ERROR: {e}")
+        import traceback; traceback.print_exc()
     finally:
         db.close()
 
@@ -204,7 +299,9 @@ def ingest_blinkit_soh(file_path: str, snapshot_date: date) -> None:
     # Aggregate backend + frontend across all warehouse rows per item_id
     item_agg: dict[str, dict] = {}
     for _, row in df.iterrows():
-        item_id = str(row.get(item_id_col, "")).strip().rstrip(".0")
+        item_id = str(row.get(item_id_col, "")).strip()
+        if item_id.endswith(".0"):
+            item_id = item_id[:-2]
         if not item_id or item_id.lower() in ("nan", ""):
             continue
         if item_id not in item_agg:
@@ -307,7 +404,9 @@ def ingest_swiggy_soh(file_path: str, snapshot_date) -> None:
     # Aggregate WarehouseQtyAvailable across all facility rows per SKU
     sku_agg: dict[str, float] = {}
     for _, row in df.iterrows():
-        sku = str(row.get(sku_col, "")).strip().rstrip(".0")
+        sku = str(row.get(sku_col, "")).strip()
+        if sku.endswith(".0"):
+            sku = sku[:-2]
         if not sku or sku.lower() in ("nan", ""):
             continue
         sku_agg[sku] = sku_agg.get(sku, 0.0) + safe_float(row[stock_col])
@@ -414,7 +513,9 @@ def ingest_zepto_soh(file_path: str, snapshot_date: date) -> None:
     # Aggregate stock per SKU (sum across any multi-row per SKU)
     sku_agg: dict[str, float] = {}
     for _, row in df.iterrows():
-        sku = str(row.get(sku_col, "")).strip().rstrip(".0")
+        sku = str(row.get(sku_col, "")).strip()
+        if sku.endswith(".0"):
+            sku = sku[:-2]
         if not sku or sku.lower() in ("nan", ""):
             continue
         sku_agg[sku] = sku_agg.get(sku, 0.0) + safe_float(row[stock_col])
