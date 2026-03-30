@@ -155,7 +155,8 @@ export function PortalDailyTable({ data, loading }: Props) {
   const showSwiggyStock  = portal_name.toLowerCase() === "swiggy";
   const showZeptoStock   = portal_name.toLowerCase() === "zepto";
   const showBlinkitStock = portal_name.toLowerCase() === "blinkit";
-  const showDoc = showSwiggyStock || showZeptoStock || showBlinkitStock;
+  const showAmazonStock  = portal_name.toLowerCase() === "amazon";
+  const showDoc = showSwiggyStock || showZeptoStock || showBlinkitStock || showAmazonStock;
 
   function calcDoc(row: PortalDailyRow, drr: number): number | null {
     if (drr <= 0) return null;
@@ -165,6 +166,7 @@ export function PortalDailyTable({ data, loading }: Props) {
     }
     if (showSwiggyStock) return row.swiggy_stock != null ? row.swiggy_stock / drr : null;
     if (showZeptoStock)  return row.zepto_stock  != null ? row.zepto_stock  / drr : null;
+    if (showAmazonStock) return row.amazon_stock != null ? row.amazon_stock / drr : null;
     return null;
   }
 
@@ -504,6 +506,7 @@ export function PortalDailyTable({ data, loading }: Props) {
                 if (showBlinkitStock) return (totalBackend + totalFront) / groupDrr;
                 if (showSwiggyStock)  return totalSwiggy / groupDrr;
                 if (showZeptoStock)   return totalZepto  / groupDrr;
+                if (showAmazonStock)  return totalAmazon / groupDrr;
                 return null;
               })();
 
