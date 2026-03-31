@@ -298,7 +298,7 @@ export function PortalDailyTable({ data, loading }: Props) {
   // ─── CSV Download ──────────────────────────────────────────────────────────
   function downloadCsv() {
     const headers = [
-      "#", "SKU", "Product Name", "Portal SKU", "BAU ASP", "WH Stock", "Amazon Stock",
+      "#", "SKU", "Product Name", "Portal SKU", "BAU ASP", "WH Stock", ...(showAmazonStock ? ["Amazon Stock"] : []),
       ...(showSwiggyStock  ? ["Swiggy Stock"] : []),
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
@@ -310,7 +310,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       i + 1, row.sku_code, row.product_name, row.portal_sku,
       row.bau_asp != null ? `₹${row.bau_asp.toFixed(0)}` : "—",
       row.wh_stock != null ? row.wh_stock : "—",
-      row.amazon_stock != null ? row.amazon_stock : "—",
+      ...(showAmazonStock ? [row.amazon_stock != null ? row.amazon_stock : "—"] : []),
       ...(showSwiggyStock  ? [row.swiggy_stock  != null ? row.swiggy_stock  : "—"] : []),
       ...(showZeptoStock   ? [row.zepto_stock   != null ? row.zepto_stock   : "—"] : []),
       ...(showBlinkitStock ? [row.backend_qty   != null ? row.backend_qty   : "—",
@@ -429,14 +429,16 @@ export function PortalDailyTable({ data, loading }: Props) {
                 style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("bau_asp")}>
                 BAU ASP<SortIcon active={isActive("bau_asp")} dir={sortDir} />
               </th>
-              <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900 ${thCls}`}
+              <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[72px] bg-zinc-900${!showAmazonStock && !showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""} ${thCls}`}
                 style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("wh_stock")}>
                 WH Stock<SortIcon active={isActive("wh_stock")} dir={sortDir} />
               </th>
+              {showAmazonStock && (
               <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] bg-zinc-900 ${thCls}`}
                 style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("amazon_stock")}>
                 Amazon Stock<SortIcon active={isActive("amazon_stock")} dir={sortDir} />
               </th>
+              )}
               {showSwiggyStock && (
                 <th className={`py-2 px-3 text-right text-zinc-400 font-medium min-w-[80px] border-r border-zinc-700/60 bg-zinc-900 ${thCls}`}
                   style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("swiggy_stock")}>
@@ -548,13 +550,15 @@ export function PortalDailyTable({ data, loading }: Props) {
                     {/* BAU ASP — blank */}
                     <td className={`py-2 ${groupBg}`} />
                     {/* WH Stock */}
-                    <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}`}>
+                    <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}${!showAmazonStock && !showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
                       <StockBadge v={totalWh} />
                     </td>
                     {/* Amazon Stock */}
+                    {showAmazonStock && (
                     <td className={`py-2 px-3 text-right font-semibold tabular-nums ${groupBg}${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
                       <StockBadge v={totalAmazon} />
                     </td>
+                    )}
                     {showSwiggyStock && (
                       <td className={`py-2 px-3 text-right font-semibold border-r border-zinc-700/60 ${groupBg}`}><StockBadge v={totalSwiggy} /></td>
                     )}
@@ -609,12 +613,14 @@ export function PortalDailyTable({ data, loading }: Props) {
                       </td>
                       <td className="py-1.5 px-3 font-mono text-zinc-600 text-[11px]">{row.portal_sku}</td>
                       <td className="py-1.5 px-3 text-right text-zinc-300 font-mono">{fmtAsp(row.bau_asp)}</td>
-                      <td className="py-1.5 px-3 text-right">
+                      <td className={`py-1.5 px-3 text-right${!showAmazonStock && !showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
                         <StockBadge v={row.wh_stock} />
                       </td>
+                      {showAmazonStock && (
                       <td className={`py-1.5 px-3 text-right${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}>
                         <StockBadge v={row.amazon_stock} />
                       </td>
+                      )}
                       {showSwiggyStock && (
                         <td className="py-1.5 px-3 text-right border-r border-zinc-700/60"><StockBadge v={row.swiggy_stock} /></td>
                       )}
@@ -665,14 +671,16 @@ export function PortalDailyTable({ data, loading }: Props) {
               </td>
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
-              <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800"
+              <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showAmazonStock && !showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}
                 style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {visibleRows.reduce((s, r) => s + (r.wh_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
+              {showAmazonStock && (
               <td className={`py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800${!showSwiggyStock && !showZeptoStock && !showBlinkitStock ? " border-r border-zinc-700/60" : ""}`}
                 style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {visibleRows.reduce((s, r) => s + (r.amazon_stock ?? 0), 0).toLocaleString("en-IN")}
               </td>
+              )}
               {showSwiggyStock && (
                 <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 border-r border-zinc-700/60 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                   {visibleRows.reduce((s, r) => s + (r.swiggy_stock ?? 0), 0).toLocaleString("en-IN")}

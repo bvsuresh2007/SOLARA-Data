@@ -1,10 +1,16 @@
 """
 Amazon SP-API Vendor Central Sales Scraper
-Uses the Data Kiosk API (GraphQL) to pull ASIN-level daily sales data.
+
+Two data sources:
+  1. Reports API — GET_VENDOR_REAL_TIME_SALES_REPORT (hourly, near real-time)
+     Used for ordered units & revenue. Available ~5 min after each hour closes.
+  2. Data Kiosk API — manufacturingView (daily, ~34h lag)
+     Used for inventory (sellableOnHandInventory), open POs, shipped data.
+     Falls back to this if real-time report is unavailable.
 
 Usage:
-    python -m scrapers.amazon_sp_api_scraper              # defaults to 2 days ago
-    python -m scrapers.amazon_sp_api_scraper 2026-03-27   # specific date
+    python -m scrapers.amazon_sp_api_scraper              # defaults to yesterday
+    python -m scrapers.amazon_sp_api_scraper 2026-03-30   # specific date
 """
 
 import os
@@ -14,7 +20,7 @@ import time
 import logging
 import requests
 import gzip
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -32,7 +38,7 @@ RAW_DIR = Path("data/raw/amazon_sp_api")
 
 
 class AmazonSPAPIScraper:
-    """Pull Vendor Central sales data via SP-API Data Kiosk."""
+    """Pull Vendor Central sales data via SP-API."""
 
     def __init__(self):
         self._client_id = os.environ["SP_API_LWA_CLIENT_ID"]
@@ -67,7 +73,122 @@ class AmazonSPAPIScraper:
             "Content-Type": "application/json",
         }
 
-    # ── Data Kiosk API ────────────────────────────────────────────────────────
+    # ── Reports API (Real-Time Sales) ────────────────────────────────────────
+
+    def _create_report(self, report_type: str, start_time: str, end_time: str) -> str:
+        """Create a report request. Returns report ID."""
+        url = f"{SP_API_ENDPOINT}/reports/2021-06-30/reports"
+        body = {
+            "reportType": report_type,
+            "dataStartTime": start_time,
+            "dataEndTime": end_time,
+            "marketplaceIds": [MARKETPLACE_ID],
+        }
+        resp = requests.post(url, headers=self._headers(), json=body)
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 60))
+            logger.warning("Rate limited on createReport, waiting %ds", retry_after)
+            time.sleep(retry_after)
+            resp = requests.post(url, headers=self._headers(), json=body)
+        if not resp.ok:
+            logger.error("createReport failed %d: %s", resp.status_code, resp.text)
+        resp.raise_for_status()
+        report_id = resp.json()["reportId"]
+        logger.info("Report requested: %s (type=%s)", report_id, report_type)
+        return report_id
+
+    def _poll_report(self, report_id: str, max_polls: int = 40, interval: int = 15) -> dict:
+        """Poll until report is done. Returns report response."""
+        url = f"{SP_API_ENDPOINT}/reports/2021-06-30/reports/{report_id}"
+        for i in range(1, max_polls + 1):
+            resp = requests.get(url, headers=self._headers())
+            resp.raise_for_status()
+            data = resp.json()
+            status = data.get("processingStatus", "UNKNOWN")
+            logger.info("Report poll %d/%d: %s", i, max_polls, status)
+
+            if status == "DONE":
+                return data
+            elif status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Report {report_id} failed: {status} — {data}")
+
+            time.sleep(interval)
+
+        raise TimeoutError(f"Report {report_id} did not complete in {max_polls * interval}s")
+
+    def _download_report_document(self, report_document_id: str) -> str:
+        """Download a report document. Returns content as string."""
+        url = f"{SP_API_ENDPOINT}/reports/2021-06-30/documents/{report_document_id}"
+        resp = requests.get(url, headers=self._headers())
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 60))
+            logger.warning("Rate limited on report document download, waiting %ds", retry_after)
+            time.sleep(retry_after)
+            resp = requests.get(url, headers=self._headers())
+        resp.raise_for_status()
+        doc_info = resp.json()
+
+        doc_url = doc_info["url"]
+        compression = doc_info.get("compressionAlgorithm")
+
+        logger.info("Downloading report document: %s (compression=%s)", report_document_id, compression)
+        doc_resp = requests.get(doc_url)
+        doc_resp.raise_for_status()
+
+        if compression == "GZIP":
+            content = gzip.decompress(doc_resp.content).decode("utf-8")
+        else:
+            content = doc_resp.text
+
+        return content
+
+    def _parse_realtime_sales(self, content: str, report_date: date) -> list[dict]:
+        """
+        Parse GET_VENDOR_REAL_TIME_SALES_REPORT JSON.
+        Format: {"reportSpecification": {...}, "reportData": [
+            {"startTime": "...", "endTime": "...", "asin": "B0...",
+             "orderedUnits": N, "orderedRevenue": N.NN}, ...
+        ]}
+        Hourly rows per ASIN — aggregate to daily totals.
+        """
+        data = json.loads(content)
+        report_data = data.get("reportData", [])
+
+        # Aggregate hourly rows to daily per ASIN
+        asin_totals: dict[str, dict] = {}
+
+        for item in report_data:
+            asin = item.get("asin", "")
+            if not asin:
+                continue
+
+            units = item.get("orderedUnits", 0) or 0
+            rev_amount = float(item.get("orderedRevenue", 0) or 0)
+
+            if asin in asin_totals:
+                asin_totals[asin]["ordered_units"] += units
+                asin_totals[asin]["ordered_revenue"] += rev_amount
+            else:
+                asin_totals[asin] = {
+                    "date": report_date.isoformat(),
+                    "asin": asin,
+                    "product_title": "",
+                    "ordered_units": units,
+                    "ordered_revenue": rev_amount,
+                    "shipped_units": 0,
+                    "shipped_revenue": 0,
+                    "unfilled_units": 0,
+                    "avg_selling_price": 0,
+                    "sellable_on_hand": 0,
+                    "soh_value": 0,
+                    "open_po_qty": 0,
+                }
+
+        rows = list(asin_totals.values())
+        logger.info("Parsed real-time sales: %d ASINs from %d hourly rows", len(rows), len(report_data))
+        return rows
+
+    # ── Data Kiosk API (Fallback / Inventory+PO) ─────────────────────────────
 
     def _create_query(self, graphql_query: str) -> str:
         """Submit a Data Kiosk query. Returns query ID."""
@@ -99,7 +220,8 @@ class AmazonSPAPIScraper:
             if status == "DONE":
                 return data
             elif status in ("FATAL", "CANCELLED"):
-                raise RuntimeError(f"Query {query_id} failed: {status} — {data}")
+                error_doc_id = data.get("errorDocumentId")
+                raise RuntimeError(f"Query {query_id} failed: {status} — error_doc={error_doc_id} — {data}")
 
             time.sleep(interval)
 
@@ -125,8 +247,6 @@ class AmazonSPAPIScraper:
             content = doc_resp.text
 
         return content
-
-    # ── Query Builder ─────────────────────────────────────────────────────────
 
     def _build_sales_query(self, start_date: date, end_date: date) -> str:
         """Build GraphQL query for Vendor Analytics ASIN-level daily sales."""
@@ -190,13 +310,8 @@ class AmazonSPAPIScraper:
             "}"
         )
 
-    # ── Parse + Save ──────────────────────────────────────────────────────────
-
-    def _parse_response(self, content: str) -> list[dict]:
-        """
-        Parse the Data Kiosk response into flat rows.
-        Response is a single JSON object with nested metrics array.
-        """
+    def _parse_datakiosk_response(self, content: str) -> list[dict]:
+        """Parse the Data Kiosk manufacturingView response into flat rows."""
         data = json.loads(content)
         metrics = data.get("metrics", [])
         sale_date = data.get("startDate", "")
@@ -246,6 +361,7 @@ class AmazonSPAPIScraper:
 
         return rows
 
+    # ── Save ─────────────────────────────────────────────────────────────────
 
     def _save_csv(self, rows: list[dict], report_date: date) -> Path:
         """Save parsed results to CSV."""
@@ -271,7 +387,12 @@ class AmazonSPAPIScraper:
     def run(self, report_date) -> dict:
         """
         Pull Vendor Central sales data for a given date.
-        Data Kiosk has a 2-day lag — data for date D is available on D+2 at 10 AM local.
+
+        Strategy:
+          1. Try GET_VENDOR_REAL_TIME_SALES_REPORT (Reports API) — hourly,
+             near real-time. Aggregates hourly rows to daily per ASIN.
+          2. If real-time fails, fall back to Data Kiosk manufacturingView
+             (DAY granularity, ~34h lag).
         """
         logging.basicConfig(
             level=logging.INFO,
@@ -284,70 +405,185 @@ class AmazonSPAPIScraper:
         logger.info("Starting SP-API sales pull for %s", report_date)
 
         try:
-            query = self._build_sales_query(report_date, report_date)
-            query_id = self._create_query(query)
-            # Query with sourcing data takes ~15-20 min (vs ~35s without)
-            result = self._poll_query(query_id, max_polls=100, interval=15)
-
-            doc_id = result.get("dataDocumentId")
-            if not doc_id:
-                logger.warning("No dataDocumentId — possibly no data for %s", report_date)
-                out_path = self._save_csv([], report_date)
+            rows = self._pull_realtime_sales(report_date)
+            source = "realtime_report"
+        except Exception as rt_err:
+            logger.warning("Real-time sales report failed: %s — falling back to Data Kiosk", rt_err)
+            try:
+                rows = self._pull_datakiosk_sales(report_date)
+                source = "datakiosk"
+            except Exception as dk_err:
+                logger.exception("Both real-time and Data Kiosk failed for %s", report_date)
                 return {
                     "portal": "amazon_sp_api",
                     "date": report_date,
-                    "file": out_path,
-                    "status": "success",
+                    "file": None,
+                    "status": "error",
                     "rows": 0,
-                    "error": "No data returned (possibly too recent — 2-day lag applies)",
+                    "error": f"Real-time: {rt_err} | DataKiosk: {dk_err}",
                 }
 
-            content = self._download_document(doc_id)
-            rows = self._parse_response(content)
+        out_path = self._save_csv(rows, report_date)
 
-            # Open PO quantities come from the manufacturing view query itself
-            # (sourcing { openPurchaseOrderQuantity }) — same source as Vendor Central dashboard.
-            total_open_po = sum(r["open_po_qty"] for r in rows)
-            total_soh = sum(r["sellable_on_hand"] for r in rows)
-            logger.info("Manufacturing view: %d total open PO units, %d total SOH units", total_open_po, total_soh)
+        with_orders = sum(1 for r in rows if r["ordered_units"] > 0)
+        total_units = sum(r["ordered_units"] for r in rows)
+        total_rev = sum(r["ordered_revenue"] for r in rows)
+        total_soh = sum(r["sellable_on_hand"] for r in rows)
+        total_open_po = sum(r["open_po_qty"] for r in rows)
 
-            out_path = self._save_csv(rows, report_date)
+        logger.info(
+            "Done (%s): %d ASINs (%d with orders), %d units, INR %.1fL revenue, "
+            "%d SOH units, %d open PO units",
+            source, len(rows), with_orders, total_units, total_rev / 100_000,
+            total_soh, total_open_po,
+        )
 
-            with_orders = sum(1 for r in rows if r["ordered_units"] > 0)
-            total_units = sum(r["ordered_units"] for r in rows)
-            total_rev = sum(r["ordered_revenue"] for r in rows)
-            logger.info(
-                "Done: %d ASINs (%d with orders), %d units, INR %.1fL revenue",
-                len(rows), with_orders, total_units, total_rev / 100_000,
-            )
+        return {
+            "portal": "amazon_sp_api",
+            "date": report_date,
+            "file": out_path,
+            "status": "success",
+            "source": source,
+            "rows": len(rows),
+            "asins_with_orders": with_orders,
+            "total_units": total_units,
+            "total_revenue": round(total_rev, 2),
+            "error": None,
+        }
 
+    def _pull_realtime_sales(self, report_date: date) -> list[dict]:
+        """Pull via GET_VENDOR_REAL_TIME_SALES_REPORT (Reports API).
+
+        Aligns to IST day: IST 00:00 = UTC previous day 18:30,
+        IST 23:59:59 = UTC current day 18:29:59.
+        """
+        # IST = UTC + 5:30 → IST midnight = previous day 18:30 UTC
+        ist_start_utc = datetime(report_date.year, report_date.month, report_date.day,
+                                 tzinfo=timezone.utc) - timedelta(hours=5, minutes=30)
+        ist_end_utc = ist_start_utc + timedelta(hours=24) - timedelta(seconds=1)
+
+        now_utc = datetime.now(timezone.utc)
+        if now_utc < ist_end_utc:
+            # Day not yet complete — use last completed hour
+            end_dt = now_utc.replace(minute=0, second=0, microsecond=0)
+            if end_dt <= ist_start_utc:
+                raise RuntimeError(f"No completed IST hours yet for {report_date}")
+            ist_end_utc = end_dt
+
+        start_time = ist_start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_time = ist_end_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        logger.info("Requesting real-time sales report: %s to %s", start_time, end_time)
+        report_id = self._create_report(
+            "GET_VENDOR_REAL_TIME_SALES_REPORT",
+            start_time,
+            end_time,
+        )
+
+        result = self._poll_report(report_id, max_polls=40, interval=15)
+        doc_id = result.get("reportDocumentId")
+        if not doc_id:
+            raise RuntimeError("No reportDocumentId in completed report")
+
+        content = self._download_report_document(doc_id)
+
+        # Save raw JSON for debugging
+        raw_path = RAW_DIR / f"amazon_realtime_raw_{report_date}.json"
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        with open(raw_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info("Saved raw real-time report to %s", raw_path)
+
+        rows = self._parse_realtime_sales(content, report_date)
+        if not rows:
+            raise RuntimeError("Real-time report returned 0 ASINs")
+
+        return rows
+
+    def _pull_datakiosk_sales(self, report_date: date) -> list[dict]:
+        """Pull via Data Kiosk manufacturingView (fallback)."""
+        query = self._build_sales_query(report_date, report_date)
+        query_id = self._create_query(query)
+        result = self._poll_query(query_id, max_polls=100, interval=15)
+
+        doc_id = result.get("dataDocumentId")
+        if not doc_id:
+            logger.warning("No dataDocumentId — no data for %s via Data Kiosk", report_date)
+            return []
+
+        content = self._download_document(doc_id)
+        rows = self._parse_datakiosk_response(content)
+
+        total_open_po = sum(r["open_po_qty"] for r in rows)
+        total_soh = sum(r["sellable_on_hand"] for r in rows)
+        logger.info("Data Kiosk: %d ASINs, %d open PO units, %d SOH units",
+                     len(rows), total_open_po, total_soh)
+
+        return rows
+
+    def pull_inventory(self, report_date: date | str | None = None) -> dict:
+        """
+        Pull inventory (FC stock) and Open PO data via Data Kiosk.
+        ~34h lag — query date should be 2 days ago for reliable data.
+
+        Returns dict with status, file path, and counts.
+        """
+        if report_date is None:
+            report_date = date.today() - timedelta(days=2)
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
+
+        logger.info("Pulling inventory/open PO for %s via Data Kiosk", report_date)
+
+        rows = self._pull_datakiosk_sales(report_date)
+        if not rows:
             return {
                 "portal": "amazon_sp_api",
                 "date": report_date,
-                "file": out_path,
-                "status": "success",
-                "rows": len(rows),
-                "asins_with_orders": with_orders,
-                "total_units": total_units,
-                "total_revenue": round(total_rev, 2),
-                "error": None,
-            }
-
-        except Exception as e:
-            logger.exception("SP-API scraper failed for %s", report_date)
-            return {
-                "portal": "amazon_sp_api",
-                "date": report_date,
+                "type": "inventory",
                 "file": None,
-                "status": "error",
-                "rows": 0,
-                "error": str(e),
+                "status": "no_data",
+                "asins": 0,
             }
+
+        # Save inventory-specific CSV
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = RAW_DIR / f"amazon_inventory_{report_date}.csv"
+        headers = ["date", "asin", "product_title", "sellable_on_hand",
+                    "soh_value", "open_po_qty"]
+
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for r in rows:
+                writer.writerow({h: r.get(h, 0) for h in headers})
+
+        total_soh = sum(r["sellable_on_hand"] for r in rows)
+        total_po = sum(r["open_po_qty"] for r in rows)
+        with_stock = sum(1 for r in rows if r["sellable_on_hand"] > 0)
+        with_po = sum(1 for r in rows if r["open_po_qty"] > 0)
+
+        logger.info("Inventory saved: %d ASINs (%d with stock, %d with open PO), "
+                     "%d SOH units, %d open PO units → %s",
+                     len(rows), with_stock, with_po, total_soh, total_po, out_path)
+
+        return {
+            "portal": "amazon_sp_api",
+            "date": report_date,
+            "type": "inventory",
+            "file": str(out_path),
+            "status": "success",
+            "asins": len(rows),
+            "with_stock": with_stock,
+            "with_open_po": with_po,
+            "total_soh": total_soh,
+            "total_open_po": total_po,
+        }
 
 
 if __name__ == "__main__":
     import sys
-    d = date.today() - timedelta(days=2)  # 2-day lag
+    d = date.today() - timedelta(days=1)
     if len(sys.argv) > 1:
         d = date.fromisoformat(sys.argv[1])
     scraper = AmazonSPAPIScraper()
