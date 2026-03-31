@@ -180,76 +180,15 @@ class AmazonSPAPIScraper:
             "              }"
             "            }"
             "          }"
+            "          sourcing {"
+            "            openPurchaseOrderQuantity"
+            "          }"
             "        }"
             "      }"
             "    }"
             "  }"
             "}"
         )
-
-    def _fetch_open_po_quantities(self) -> dict[str, int]:
-        """
-        Fetch open PO quantities per ASIN via Vendor Orders REST API.
-        Pulls all Acknowledged POs from the last 7 days and aggregates by ASIN.
-        """
-        from collections import defaultdict
-        from datetime import timezone
-
-        url = f"{SP_API_ENDPOINT}/vendor/orders/v1/purchaseOrders"
-        created_after = (
-            date.today() - timedelta(days=30)
-        ).strftime("%Y-%m-%dT00:00:00Z")
-
-        # List all acknowledged (open) POs with pagination
-        all_orders = []
-        next_token = None
-        while True:
-            params = {
-                "createdAfter": created_after,
-                "purchaseOrderState": "Acknowledged",
-                "limit": 100,
-            }
-            if next_token:
-                params["nextToken"] = next_token
-            resp = requests.get(
-                url, headers={"x-amz-access-token": self._access_token}, params=params
-            )
-            resp.raise_for_status()
-            payload = resp.json().get("payload", {})
-            all_orders.extend(payload.get("orders", []))
-            next_token = payload.get("pagination", {}).get("nextToken")
-            if not next_token:
-                break
-        logger.info("Found %d acknowledged POs in last 30 days", len(all_orders))
-
-        # Get details for each PO and aggregate by ASIN
-        asin_qty: dict[str, int] = defaultdict(int)
-        for o in all_orders:
-            po_num = o["purchaseOrderNumber"]
-            detail_url = f"{url}/{po_num}"
-            r = requests.get(
-                detail_url,
-                headers={"x-amz-access-token": self._access_token},
-            )
-            if r.status_code != 200:
-                logger.warning("Failed to get PO %s: %d", po_num, r.status_code)
-                continue
-            items = (
-                r.json()
-                .get("payload", {})
-                .get("orderDetails", {})
-                .get("items", [])
-            )
-            for item in items:
-                asin = item.get("amazonProductIdentifier", "")
-                qty = item.get("orderedQuantity", {}).get("amount", 0)
-                if asin and qty > 0:
-                    asin_qty[asin] += qty
-
-        with_po = sum(1 for v in asin_qty.values() if v > 0)
-        total = sum(asin_qty.values())
-        logger.info("Open POs: %d ASINs, %d total units", with_po, total)
-        return dict(asin_qty)
 
     # ── Parse + Save ──────────────────────────────────────────────────────────
 
@@ -287,6 +226,9 @@ class AmazonSPAPIScraper:
             soh_units = soh_data.get("units") or 0
             soh_value = (soh_data.get("value") or {}).get("amount") or 0
 
+            sourcing = m["metrics"].get("sourcing", {}) or {}
+            open_po = sourcing.get("openPurchaseOrderQuantity") or 0
+
             rows.append({
                 "date": sale_date,
                 "asin": asin,
@@ -299,7 +241,7 @@ class AmazonSPAPIScraper:
                 "avg_selling_price": asp,
                 "sellable_on_hand": soh_units,
                 "soh_value": soh_value,
-                "open_po_qty": 0,
+                "open_po_qty": open_po,
             })
 
         return rows
@@ -326,7 +268,7 @@ class AmazonSPAPIScraper:
 
     # ── Main Entry Point ──────────────────────────────────────────────────────
 
-    def run(self, report_date: date) -> dict:
+    def run(self, report_date) -> dict:
         """
         Pull Vendor Central sales data for a given date.
         Data Kiosk has a 2-day lag — data for date D is available on D+2 at 10 AM local.
@@ -336,12 +278,16 @@ class AmazonSPAPIScraper:
             format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
         )
 
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
+
         logger.info("Starting SP-API sales pull for %s", report_date)
 
         try:
             query = self._build_sales_query(report_date, report_date)
             query_id = self._create_query(query)
-            result = self._poll_query(query_id, max_polls=40, interval=15)
+            # Query with sourcing data takes ~15-20 min (vs ~35s without)
+            result = self._poll_query(query_id, max_polls=100, interval=15)
 
             doc_id = result.get("dataDocumentId")
             if not doc_id:
@@ -359,14 +305,11 @@ class AmazonSPAPIScraper:
             content = self._download_document(doc_id)
             rows = self._parse_response(content)
 
-            # Pull open PO quantities via Vendor Orders REST API
-            try:
-                logger.info("Pulling open PO data via Vendor Orders API")
-                po_map = self._fetch_open_po_quantities()
-                for row in rows:
-                    row["open_po_qty"] = po_map.get(row["asin"], 0)
-            except Exception as e:
-                logger.warning("Open PO fetch failed (non-fatal): %s", e)
+            # Open PO quantities come from the manufacturing view query itself
+            # (sourcing { openPurchaseOrderQuantity }) — same source as Vendor Central dashboard.
+            total_open_po = sum(r["open_po_qty"] for r in rows)
+            total_soh = sum(r["sellable_on_hand"] for r in rows)
+            logger.info("Manufacturing view: %d total open PO units, %d total SOH units", total_open_po, total_soh)
 
             out_path = self._save_csv(rows, report_date)
 
