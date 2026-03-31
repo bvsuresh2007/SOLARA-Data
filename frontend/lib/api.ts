@@ -126,6 +126,7 @@ export interface PortalDailyRow {
   bau_asp: number | null;
   wh_stock: number | null;
   amazon_stock: number | null;
+  open_po: number | null;
   swiggy_stock: number | null;
   zepto_stock: number | null;
   backend_qty: number | null;

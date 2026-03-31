@@ -144,6 +144,7 @@ export const MOCK_PORTAL_DAILY: PortalDailyResponse = {
     bau_asp: 800 + i * 120,
     wh_stock: 500 + Math.round(Math.random() * 300),
     amazon_stock: null,
+    open_po: null,
     swiggy_stock: null,
     zepto_stock: null,
     backend_qty: null,

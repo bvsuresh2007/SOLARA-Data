@@ -130,7 +130,7 @@ function frozenStyle(col: { w: number; left: number }) {
 
 type SortKey =
   | "sku" | "product" | "portal_sku" | "bau_asp" | "wh_stock" | "amazon_stock"
-  | "swiggy_stock" | "zepto_stock" | "backend_qty" | "frontend_qty"
+  | "open_po" | "swiggy_stock" | "zepto_stock" | "backend_qty" | "frontend_qty"
   | "mtd_units" | "drr" | "doc" | "mtd_value"
   | { date: string };
 
@@ -209,6 +209,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       case "bau_asp":      return row.bau_asp ?? -Infinity;
       case "wh_stock":     return row.wh_stock ?? -Infinity;
       case "amazon_stock": return row.amazon_stock ?? -Infinity;
+      case "open_po":      return row.open_po ?? -Infinity;
       case "swiggy_stock": return row.swiggy_stock ?? -Infinity;
       case "zepto_stock":  return row.zepto_stock ?? -Infinity;
       case "backend_qty":  return row.backend_qty ?? -Infinity;
@@ -302,7 +303,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...(showZeptoStock   ? ["Zepto Stock"]  : []),
       ...(showBlinkitStock ? ["Backend Qty", "Frontend Qty"] : []),
       ...dates.map(fmtDate),
-      "MTD Units", "DRR", ...(showDoc ? ["DOC"] : []), "MTD Value",
+      "MTD Units", "DRR", ...(showAmazonStock ? ["Open POs"] : []), ...(showDoc ? ["DOC"] : []), "MTD Value",
     ];
 
     const csvRows = visibleRows.map((row, i) => [
@@ -317,6 +318,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...dates.map(d => row.daily_units[d] ?? "—"),
       row.mtd_units,
       dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—",
+      ...(showAmazonStock ? [row.open_po != null ? row.open_po : "—"] : []),
       ...(showDoc ? (() => {
         const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
         const doc = calcDoc(row, drr);
@@ -333,6 +335,7 @@ export function PortalDailyTable({ data, loading }: Props) {
       ...dates.map(d => visibleRows.reduce((s, r) => s + (r.daily_units[d] ?? 0), 0)),
       visibleRows.reduce((s, r) => s + r.mtd_units, 0),
       dates.length > 0 ? (visibleRows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—",
+      ...(showAmazonStock ? [visibleRows.reduce((s, r) => s + (r.open_po ?? 0), 0)] : []),
       ...(showDoc ? [""] : []),
       fmtRevenue(visibleRows.reduce((s, r) => s + r.mtd_value, 0)),
     ];
@@ -472,6 +475,12 @@ export function PortalDailyTable({ data, loading }: Props) {
                 style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("drr")}>
                 DRR<SortIcon active={isActive("drr")} dir={sortDir} />
               </th>
+              {showAmazonStock && (
+                <th className={`py-2 px-3 text-right text-purple-400 font-medium min-w-[70px] bg-zinc-900 ${thCls}`}
+                  style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("open_po")}>
+                  Open POs<SortIcon active={isActive("open_po")} dir={sortDir} />
+                </th>
+              )}
               {showDoc && (
                 <th className={`py-2 px-3 text-right text-amber-500 font-medium min-w-[60px] bg-zinc-900 ${thCls}`}
                   style={{ position: "sticky", top: 0, zIndex: Z.header }} onClick={() => toggleSort("doc")}>
@@ -494,6 +503,7 @@ export function PortalDailyTable({ data, loading }: Props) {
               // Group aggregates
               const totalWh      = catRows.reduce((s, r) => s + (r.wh_stock      ?? 0), 0);
               const totalAmazon  = catRows.reduce((s, r) => s + (r.amazon_stock  ?? 0), 0);
+              const totalOpenPo  = catRows.reduce((s, r) => s + (r.open_po      ?? 0), 0);
               const totalSwiggy  = catRows.reduce((s, r) => s + (r.swiggy_stock  ?? 0), 0);
               const totalZepto   = catRows.reduce((s, r) => s + (r.zepto_stock   ?? 0), 0);
               const totalBackend = catRows.reduce((s, r) => s + (r.backend_qty   ?? 0), 0);
@@ -572,6 +582,11 @@ export function PortalDailyTable({ data, loading }: Props) {
                     <td className={`py-2 px-3 text-right text-sky-400 font-semibold tabular-nums ${groupBg}`}>
                       {dates.length > 0 ? groupDrr.toFixed(1) : "—"}
                     </td>
+                    {showAmazonStock && (
+                      <td className={`py-2 px-3 text-right tabular-nums ${groupBg}`}>
+                        <StockBadge v={totalOpenPo > 0 ? totalOpenPo : null} />
+                      </td>
+                    )}
                     {showDoc && (
                       <td className={`py-2 px-3 text-right tabular-nums ${groupBg}`}><DocBadge v={groupDoc} /></td>
                     )}
@@ -622,6 +637,11 @@ export function PortalDailyTable({ data, loading }: Props) {
                       <td className="py-1.5 px-3 text-right text-sky-400 font-medium tabular-nums">
                         {dates.length > 0 ? (row.mtd_units / dates.length).toFixed(1) : "—"}
                       </td>
+                      {showAmazonStock && (
+                        <td className="py-1.5 px-3 text-right tabular-nums">
+                          <StockBadge v={row.open_po} />
+                        </td>
+                      )}
                       {showDoc && (() => {
                         const drr = dates.length > 0 ? row.mtd_units / dates.length : 0;
                         return <td className="py-1.5 px-3 text-right tabular-nums"><DocBadge v={calcDoc(row, drr)} /></td>;
@@ -688,6 +708,11 @@ export function PortalDailyTable({ data, loading }: Props) {
               <td className="py-2.5 px-3 text-right font-bold text-sky-400 tabular-nums bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
                 {dates.length > 0 ? (visibleRows.reduce((s, r) => s + r.mtd_units, 0) / dates.length).toFixed(1) : "—"}
               </td>
+              {showAmazonStock && (
+                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-zinc-200 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }}>
+                  {visibleRows.reduce((s, r) => s + (r.open_po ?? 0), 0).toLocaleString("en-IN")}
+                </td>
+              )}
               {showDoc && (
                 <td className="py-2.5 bg-zinc-800" style={{ position: "sticky", bottom: 0, zIndex: Z.footer }} />
               )}

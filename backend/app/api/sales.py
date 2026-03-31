@@ -748,8 +748,9 @@ def portal_daily_sales(
             for r in inv_rows
         }
 
-    # 5a2. Latest Amazon FC stock from inventory snapshots (amazon_fc_stock).
+    # 5a2. Latest Amazon FC stock + open PO from inventory snapshots.
     amazon_stock_map: dict[int, float | None] = {}
+    open_po_map: dict[int, float | None] = {}
     amazon_portal = db.query(Portal).filter(func.lower(Portal.name) == "amazon").first()
     if amazon_portal and product_ids:
         amz_latest_sq = (
@@ -760,13 +761,16 @@ def portal_daily_sales(
             .filter(
                 InventorySnapshot.portal_id == amazon_portal.id,
                 InventorySnapshot.product_id.in_(product_ids),
-                InventorySnapshot.amazon_fc_stock.isnot(None),
             )
             .group_by(InventorySnapshot.product_id)
             .subquery()
         )
         amz_inv_rows = (
-            db.query(InventorySnapshot.product_id, InventorySnapshot.amazon_fc_stock)
+            db.query(
+                InventorySnapshot.product_id,
+                InventorySnapshot.amazon_fc_stock,
+                InventorySnapshot.open_po,
+            )
             .join(
                 amz_latest_sq,
                 (InventorySnapshot.product_id == amz_latest_sq.c.product_id)
@@ -778,6 +782,9 @@ def portal_daily_sales(
         for r in amz_inv_rows:
             amazon_stock_map[r.product_id] = (
                 float(r.amazon_fc_stock) if r.amazon_fc_stock is not None else None
+            )
+            open_po_map[r.product_id] = (
+                float(r.open_po) if r.open_po is not None else None
             )
 
     # 5b. Latest Swiggy portal_stock from inventory snapshots.
@@ -930,6 +937,7 @@ def portal_daily_sales(
                 bau_asp=bau_asp,
                 wh_stock=inv_map.get(pid),
                 amazon_stock=amazon_stock_map.get(pid),
+                open_po=open_po_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
                 zepto_stock=zepto_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),

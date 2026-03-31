@@ -151,29 +151,37 @@ def ingest_amazon_sp_api(report_date):
         db.commit()
         print(f"  [amazon_sp_api] daily={len(daily_rows)} skipped={skipped} (no ASIN mapping)")
 
-        # Write Amazon FC inventory (sellable_on_hand) to inventory_snapshots
+        # Write Amazon FC inventory + open PO to inventory_snapshots
         inv_rows_upserted = 0
         for _, row in df.iterrows():
             asin = str(row.get("asin", "")).strip()
             soh = int(float(row.get("sellable_on_hand", 0) or 0))
-            if soh <= 0:
+            open_po = int(float(row.get("open_po_qty", 0) or 0))
+            if soh <= 0 and open_po <= 0:
                 continue
             product_id = asin_to_product.get(asin)
             if not product_id:
                 continue
-            stmt = insert(InventorySnapshot).values(
-                portal_id=amazon_portal.id,
-                product_id=product_id,
-                snapshot_date=report_date,
-                amazon_fc_stock=soh,
-            ).on_conflict_do_update(
+            values = {
+                "portal_id": amazon_portal.id,
+                "product_id": product_id,
+                "snapshot_date": report_date,
+            }
+            set_clause = {}
+            if soh > 0:
+                values["amazon_fc_stock"] = soh
+                set_clause["amazon_fc_stock"] = insert(InventorySnapshot).excluded.amazon_fc_stock
+            if open_po > 0:
+                values["open_po"] = open_po
+                set_clause["open_po"] = insert(InventorySnapshot).excluded.open_po
+            stmt = insert(InventorySnapshot).values(**values).on_conflict_do_update(
                 index_elements=["portal_id", "product_id", "snapshot_date"],
-                set_={"amazon_fc_stock": insert(InventorySnapshot).excluded.amazon_fc_stock},
+                set_=set_clause,
             )
             db.execute(stmt)
             inv_rows_upserted += 1
         db.commit()
-        print(f"  [amazon_sp_api] inventory={inv_rows_upserted} ASINs with FC stock")
+        print(f"  [amazon_sp_api] inventory={inv_rows_upserted} ASINs with FC stock/open PO")
 
     except Exception as e:
         db.rollback()

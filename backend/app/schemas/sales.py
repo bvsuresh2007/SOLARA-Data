@@ -85,6 +85,7 @@ class PortalDailyRow(BaseModel):
     bau_asp: Optional[float]
     wh_stock: Optional[float]
     amazon_stock: Optional[float] = None   # Amazon FC sellable on-hand (from SP-API)
+    open_po: Optional[float] = None        # Amazon open PO quantity (from SP-API sourcingView)
     swiggy_stock: Optional[float] = None   # Swiggy portal_stock (from SOH report)
     zepto_stock: Optional[float] = None    # Zepto portal_stock (from Vendor Inventory_F)
     backend_qty: Optional[float] = None    # Blinkit backend inventory (from SOH report)

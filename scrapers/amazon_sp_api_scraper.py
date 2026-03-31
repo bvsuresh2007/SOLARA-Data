@@ -187,6 +187,61 @@ class AmazonSPAPIScraper:
             "}"
         )
 
+    def _fetch_open_po_quantities(self) -> dict[str, int]:
+        """
+        Fetch open PO quantities per ASIN via Vendor Orders REST API.
+        Pulls all Acknowledged POs from the last 7 days and aggregates by ASIN.
+        """
+        from collections import defaultdict
+        from datetime import timezone
+
+        url = f"{SP_API_ENDPOINT}/vendor/orders/v1/purchaseOrders"
+        created_after = (
+            date.today() - timedelta(days=7)
+        ).strftime("%Y-%m-%dT00:00:00Z")
+
+        # List all acknowledged POs
+        params = {
+            "createdAfter": created_after,
+            "purchaseOrderState": "Acknowledged",
+            "limit": 100,
+        }
+        resp = requests.get(
+            url, headers={"x-amz-access-token": self._access_token}, params=params
+        )
+        resp.raise_for_status()
+        orders = resp.json().get("payload", {}).get("orders", [])
+        logger.info("Found %d acknowledged POs in last 7 days", len(orders))
+
+        # Get details for each PO and aggregate by ASIN
+        asin_qty: dict[str, int] = defaultdict(int)
+        for o in orders:
+            po_num = o["purchaseOrderNumber"]
+            detail_url = f"{url}/{po_num}"
+            r = requests.get(
+                detail_url,
+                headers={"x-amz-access-token": self._access_token},
+            )
+            if r.status_code != 200:
+                logger.warning("Failed to get PO %s: %d", po_num, r.status_code)
+                continue
+            items = (
+                r.json()
+                .get("payload", {})
+                .get("orderDetails", {})
+                .get("items", [])
+            )
+            for item in items:
+                asin = item.get("amazonProductIdentifier", "")
+                qty = item.get("orderedQuantity", {}).get("amount", 0)
+                if asin and qty > 0:
+                    asin_qty[asin] += qty
+
+        with_po = sum(1 for v in asin_qty.values() if v > 0)
+        total = sum(asin_qty.values())
+        logger.info("Open POs: %d ASINs, %d total units", with_po, total)
+        return dict(asin_qty)
+
     # ── Parse + Save ──────────────────────────────────────────────────────────
 
     def _parse_response(self, content: str) -> list[dict]:
@@ -235,9 +290,11 @@ class AmazonSPAPIScraper:
                 "avg_selling_price": asp,
                 "sellable_on_hand": soh_units,
                 "soh_value": soh_value,
+                "open_po_qty": 0,
             })
 
         return rows
+
 
     def _save_csv(self, rows: list[dict], report_date: date) -> Path:
         """Save parsed results to CSV."""
@@ -247,7 +304,7 @@ class AmazonSPAPIScraper:
         headers = [
             "date", "asin", "product_title", "ordered_units", "ordered_revenue",
             "shipped_units", "shipped_revenue", "unfilled_units", "avg_selling_price",
-            "sellable_on_hand", "soh_value",
+            "sellable_on_hand", "soh_value", "open_po_qty",
         ]
 
         with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -292,6 +349,16 @@ class AmazonSPAPIScraper:
 
             content = self._download_document(doc_id)
             rows = self._parse_response(content)
+
+            # Pull open PO quantities via Vendor Orders REST API
+            try:
+                logger.info("Pulling open PO data via Vendor Orders API")
+                po_map = self._fetch_open_po_quantities()
+                for row in rows:
+                    row["open_po_qty"] = po_map.get(row["asin"], 0)
+            except Exception as e:
+                logger.warning("Open PO fetch failed (non-fatal): %s", e)
+
             out_path = self._save_csv(rows, report_date)
 
             with_orders = sum(1 for r in rows if r["ordered_units"] > 0)
