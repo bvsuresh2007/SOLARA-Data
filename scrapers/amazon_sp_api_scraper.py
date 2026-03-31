@@ -197,25 +197,34 @@ class AmazonSPAPIScraper:
 
         url = f"{SP_API_ENDPOINT}/vendor/orders/v1/purchaseOrders"
         created_after = (
-            date.today() - timedelta(days=7)
+            date.today() - timedelta(days=30)
         ).strftime("%Y-%m-%dT00:00:00Z")
 
-        # List all acknowledged POs
-        params = {
-            "createdAfter": created_after,
-            "purchaseOrderState": "Acknowledged",
-            "limit": 100,
-        }
-        resp = requests.get(
-            url, headers={"x-amz-access-token": self._access_token}, params=params
-        )
-        resp.raise_for_status()
-        orders = resp.json().get("payload", {}).get("orders", [])
-        logger.info("Found %d acknowledged POs in last 7 days", len(orders))
+        # List all acknowledged (open) POs with pagination
+        all_orders = []
+        next_token = None
+        while True:
+            params = {
+                "createdAfter": created_after,
+                "purchaseOrderState": "Acknowledged",
+                "limit": 100,
+            }
+            if next_token:
+                params["nextToken"] = next_token
+            resp = requests.get(
+                url, headers={"x-amz-access-token": self._access_token}, params=params
+            )
+            resp.raise_for_status()
+            payload = resp.json().get("payload", {})
+            all_orders.extend(payload.get("orders", []))
+            next_token = payload.get("pagination", {}).get("nextToken")
+            if not next_token:
+                break
+        logger.info("Found %d acknowledged POs in last 30 days", len(all_orders))
 
         # Get details for each PO and aggregate by ASIN
         asin_qty: dict[str, int] = defaultdict(int)
-        for o in orders:
+        for o in all_orders:
             po_num = o["purchaseOrderNumber"]
             detail_url = f"{url}/{po_num}"
             r = requests.get(
