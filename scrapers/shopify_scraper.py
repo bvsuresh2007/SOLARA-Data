@@ -1,6 +1,9 @@
 """
-Shopify scraper — uses Shopify Admin API (no Playwright needed).
+Shopify scraper — uses Shopify Admin REST API with OAuth client credentials.
+
 Fetches orders for a given date and saves them as CSV.
+Auth: client_credentials grant → short-lived shpat_ token (24h).
+No browser / Playwright needed.
 """
 import csv
 import os
@@ -14,8 +17,8 @@ from .base_scraper import logger
 
 class ShopifyScraper:
     """
-    Shopify uses REST API instead of browser automation.
-    No BaseScraper inheritance needed.
+    Fetches Shopify orders via REST API using OAuth client credentials.
+    Replaces the EasyEcom path for Shopify sales data.
     """
     portal_name = "shopify"
 
@@ -24,56 +27,109 @@ class ShopifyScraper:
         self.portal_data_path = self.raw_data_path / self.portal_name
         self.portal_data_path.mkdir(parents=True, exist_ok=True)
 
-        self.api_key     = os.environ["SHOPIFY_API_KEY"]
-        self.api_secret  = os.environ["SHOPIFY_API_SECRET"]
-        self.store_url   = os.environ["SHOPIFY_STORE_URL"].rstrip("/")
-        self.api_version = "2024-04"
+        self.client_id = os.environ.get("SHOPIFY_CLIENT_ID") or os.environ.get("SHOPIFY_API_KEY")
+        self.client_secret = os.environ.get("SHOPIFY_CLIENT_SECRET") or os.environ.get("SHOPIFY_API_SECRET")
+        self.store_url = os.getenv("SHOPIFY_STORE_URL", "dev-solara.myshopify.com").rstrip("/")
+        self.api_version = "2024-01"
+        self._token: str | None = os.environ.get("SHOPIFY_ACCESS_TOKEN")
 
-    @property
-    def _base_url(self) -> str:
-        return f"https://{self.api_key}:{self.api_secret}@{self.store_url}/admin/api/{self.api_version}"
+    def _get_token(self) -> str:
+        """Get access token — use env var if set, otherwise client_credentials grant."""
+        if self._token:
+            return self._token
+
+        if not self.client_id or not self.client_secret:
+            raise RuntimeError(
+                "No SHOPIFY_ACCESS_TOKEN and no client credentials "
+                "(SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET) configured"
+            )
+
+        url = f"https://{self.store_url}/admin/oauth/access_token"
+        resp = requests.post(url, data={
+            "grant_type": "client_credentials",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }, timeout=30)
+        resp.raise_for_status()
+        self._token = resp.json()["access_token"]
+        logger.info("[Shopify] Token acquired (expires in %ss)", resp.json().get("expires_in", "?"))
+        return self._token
+
+    def _api_get(self, endpoint: str, params: dict = None) -> requests.Response:
+        """Make authenticated GET request to Shopify Admin API."""
+        url = f"https://{self.store_url}/admin/api/{self.api_version}/{endpoint}"
+        headers = {"X-Shopify-Access-Token": self._get_token()}
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp
 
     def _get_orders(self, created_at_min: str, created_at_max: str) -> list[dict]:
+        """Fetch all orders in the time range with pagination."""
         orders = []
-        url = f"{self._base_url}/orders.json"
         params = {
             "status": "any",
             "created_at_min": created_at_min,
             "created_at_max": created_at_max,
             "limit": 250,
-            "fields": "id,created_at,line_items,subtotal_price,total_price,total_discounts,total_tax,shipping_lines,billing_address,shipping_address,financial_status",
+            "fields": "id,created_at,line_items,subtotal_price,total_price,"
+                      "total_discounts,total_tax,shipping_lines,"
+                      "billing_address,shipping_address,financial_status",
         }
+        url = f"https://{self.store_url}/admin/api/{self.api_version}/orders.json"
+        headers = {"X-Shopify-Access-Token": self._get_token()}
+
         while url:
-            resp = requests.get(url, params=params, timeout=30)
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             orders.extend(data.get("orders", []))
             # Pagination via Link header
-            link = resp.headers.get("Link", "")
             url = None
-            params = None
+            params = None  # params already baked into the next URL
+            link = resp.headers.get("Link", "")
             for part in link.split(","):
                 if 'rel="next"' in part:
                     url = part.split(";")[0].strip().strip("<>")
         return orders
 
     def _flatten_orders(self, orders: list[dict]) -> list[dict]:
+        """Flatten orders into one row per line item."""
         rows = []
         for order in orders:
+            # Skip cancelled/voided orders
+            financial_status = order.get("financial_status", "")
+            if financial_status in ("voided", "refunded"):
+                continue
+
             shipping = sum(float(s.get("price", 0)) for s in order.get("shipping_lines", []))
-            city = (order.get("billing_address") or order.get("shipping_address") or {}).get("city", "")
+            city = (
+                order.get("shipping_address") or order.get("billing_address") or {}
+            ).get("city", "")
+
             for item in order.get("line_items", []):
+                sku = item.get("sku", "")
+                if not sku:
+                    continue  # skip items without SKU
+
+                quantity = int(item.get("quantity", 0))
+                price = float(item.get("price", 0))
+                line_discount = sum(
+                    float(d.get("amount", 0))
+                    for d in item.get("discount_allocations", [])
+                )
+                subtotal = price * quantity
+
                 rows.append({
                     "Created at": order["created_at"],
-                    "Lineitem sku": item.get("sku", ""),
-                    "Lineitem quantity": item.get("quantity", 0),
-                    "Subtotal": order.get("subtotal_price", 0),
-                    "Total": order.get("total_price", 0),
-                    "Discount Amount": order.get("total_discounts", 0),
-                    "Taxes": order.get("total_tax", 0),
+                    "Lineitem sku": sku,
+                    "Lineitem quantity": quantity,
+                    "Subtotal": subtotal,
+                    "Total": float(order.get("total_price", 0)),
+                    "Discount Amount": line_discount,
+                    "Taxes": float(order.get("total_tax", 0)),
                     "Shipping": shipping,
                     "Billing City": city,
-                    "Financial Status": order.get("financial_status", ""),
+                    "Financial Status": financial_status,
                 })
         return rows
 
@@ -81,13 +137,22 @@ class ShopifyScraper:
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 
-        result = {"portal": self.portal_name, "date": report_date, "file": None, "status": "failed", "error": None}
+        result = {
+            "portal": self.portal_name,
+            "date": report_date,
+            "file": None,
+            "status": "failed",
+            "error": None,
+        }
         try:
             start = f"{report_date}T00:00:00+05:30"
-            end   = f"{report_date}T23:59:59+05:30"
+            end = f"{report_date}T23:59:59+05:30"
             logger.info("[Shopify] Fetching orders for %s", report_date)
+
             orders = self._get_orders(start, end)
-            rows   = self._flatten_orders(orders)
+            logger.info("[Shopify] Got %d orders", len(orders))
+
+            rows = self._flatten_orders(orders)
 
             output_path = self.portal_data_path / f"shopify_sales_{report_date}.csv"
             if rows:
@@ -96,8 +161,14 @@ class ShopifyScraper:
                     writer.writeheader()
                     writer.writerows(rows)
 
-            result.update({"file": output_path, "status": "success", "records": len(rows)})
-            logger.info("[Shopify] Saved %d rows to %s", len(rows), output_path)
+            result.update({
+                "file": str(output_path),
+                "status": "success",
+                "records": len(rows),
+                "orders": len(orders),
+            })
+            logger.info("[Shopify] Saved %d line items from %d orders to %s",
+                        len(rows), len(orders), output_path)
         except Exception as exc:
             logger.error("[Shopify] Failed: %s", exc)
             result["error"] = str(exc)
