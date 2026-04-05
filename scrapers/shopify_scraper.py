@@ -33,15 +33,53 @@ class ShopifyScraper:
         self.api_version = "2024-01"
         self._token: str | None = os.environ.get("SHOPIFY_ACCESS_TOKEN")
 
+    def _fetch_token_from_atlas(self) -> str | None:
+        """Fetch the latest Shopify access token from Atlas (ERPNext)."""
+        erpnext_url = os.environ.get("ERPNEXT_URL", "").rstrip("/")
+        api_key = os.environ.get("ERPNEXT_API_KEY", "")
+        api_secret = os.environ.get("ERPNEXT_API_SECRET", "")
+        if not all([erpnext_url, api_key, api_secret]):
+            return None
+
+        try:
+            resp = requests.post(
+                f"{erpnext_url}/api/method/frappe.client.get_password",
+                headers={
+                    "Authorization": f"token {api_key}:{api_secret}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "doctype": "Shopify Setting",
+                    "name": "Shopify Setting",
+                    "fieldname": "password",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            token = resp.json().get("message", "")
+            if token and token.startswith("shpat_"):
+                logger.info("[Shopify] Fresh token fetched from Atlas")
+                return token
+        except Exception as exc:
+            logger.warning("[Shopify] Failed to fetch token from Atlas: %s", exc)
+        return None
+
     def _get_token(self) -> str:
-        """Get access token — use env var if set, otherwise client_credentials grant."""
+        """Get access token. Priority: env var → Atlas → client_credentials grant."""
         if self._token:
             return self._token
 
+        # Try Atlas (ERPNext) — always has the latest auto-refreshed token
+        atlas_token = self._fetch_token_from_atlas()
+        if atlas_token:
+            self._token = atlas_token
+            return self._token
+
+        # Fall back to client credentials grant
         if not self.client_id or not self.client_secret:
             raise RuntimeError(
-                "No SHOPIFY_ACCESS_TOKEN and no client credentials "
-                "(SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET) configured"
+                "No SHOPIFY_ACCESS_TOKEN, no Atlas credentials (ERPNEXT_URL/KEY/SECRET), "
+                "and no client credentials (SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET) configured"
             )
 
         url = f"https://{self.store_url}/admin/oauth/access_token"
@@ -52,7 +90,8 @@ class ShopifyScraper:
         }, timeout=30)
         resp.raise_for_status()
         self._token = resp.json()["access_token"]
-        logger.info("[Shopify] Token acquired (expires in %ss)", resp.json().get("expires_in", "?"))
+        logger.info("[Shopify] Token acquired via client credentials (expires in %ss)",
+                    resp.json().get("expires_in", "?"))
         return self._token
 
     def _api_get(self, endpoint: str, params: dict = None) -> requests.Response:
