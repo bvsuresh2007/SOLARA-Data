@@ -299,7 +299,7 @@ EASYECOM_MP_MAP: dict[str, str | None] = {
     "vendor central dropship": None,          # Skip
     "flipkart":                None,          # Skip — handled separately
     "myntra ppmp":             "myntra",      # Myntra PPMP via EasyEcom
-    "shopify":                 "shopify",
+    "shopify":                 None,          # Skip — handled by ShopifyScraper (direct API)
     "meesho-api":              "meesho",
     "nykaa fashion":           "nykaa_fashion",
     "cred-api":                "cred",

@@ -28,7 +28,7 @@ def ingest(portal_name, file_path):
     transformer = DataTransformer(db)
     try:
         rows = parser.parse_sales(Path(file_path))
-        if portal_name == "easyecom":
+        if portal_name in ("easyecom", "shopify"):
             transformed = transformer.transform_sales_rows_by_sku(rows)
         else:
             transformed = transformer.transform_sales_rows(rows)
@@ -577,6 +577,7 @@ if __name__ == "__main__":
     ingest("blinkit",  f"data/raw/blinkit/blinkit_sales_{d}.xlsx")
     ingest("zepto",    f"data/raw/zepto/zepto_sales_{d}.xlsx")
     ingest("easyecom", f"data/raw/easyecom/easyecom_sales_{d}.csv")
+    ingest("shopify",  f"data/raw/shopify/shopify_sales_{d}.csv")
     print("  [amazon_pi] parsing all category files...")
     ingest_amazon_pi(d)
     print("  [blinkit_soh] ingesting SOH inventory...")
