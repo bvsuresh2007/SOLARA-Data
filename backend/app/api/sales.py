@@ -125,6 +125,7 @@ def sales_summary(
             func.coalesce(func.sum(DailySales.units_sold), Decimal("0")).label("total_quantity"),
             func.count(DailySales.id).label("record_count"),
             func.count(func.distinct(DailySales.product_id)).label("active_skus"),
+            func.max(DailySales.imported_at).label("data_as_of"),
         )
         .join(Product, DailySales.product_id == Product.id)
         .outerjoin(ppm, and_(
@@ -145,11 +146,13 @@ def sales_summary(
     if product_id:
         q = q.filter(DailySales.product_id == product_id)
     row = q.one()
+    data_as_of = row.data_as_of.isoformat() if row.data_as_of else None
     return SalesSummary(
         total_revenue=float(row.total_revenue),
         total_quantity=float(row.total_quantity),
         record_count=row.record_count,
         active_skus=row.active_skus,
+        data_as_of=data_as_of,
     )
 
 
@@ -620,9 +623,10 @@ def portal_daily_sales(
     product_ids = set(r[0] for r in sales_product_ids)
 
     # Also include products that have inventory for this portal (even with no sales).
-    # Applies to Blinkit (backend_stock/frontend_stock), Swiggy, Zepto (portal_stock).
+    # Applies to Blinkit (backend_stock/frontend_stock), Swiggy, Zepto (portal_stock),
+    # and Amazon (amazon_fc_stock/open_po).
     if portal_obj_id is not None and not is_all_portals:
-        _inv_portals = {"blinkit", "swiggy", "zepto"}
+        _inv_portals = {"blinkit", "swiggy", "zepto", "amazon"}
         if portal.lower() in _inv_portals:
             inv_q = db.query(func.distinct(InventorySnapshot.product_id)).filter(
                 InventorySnapshot.portal_id == portal_obj_id,
@@ -633,6 +637,14 @@ def portal_daily_sales(
                     or_(
                         InventorySnapshot.backend_stock.isnot(None),
                         InventorySnapshot.frontend_stock.isnot(None),
+                    )
+                )
+            elif portal.lower() == "amazon":
+                from sqlalchemy import or_
+                inv_q = inv_q.filter(
+                    or_(
+                        InventorySnapshot.amazon_fc_stock.isnot(None),
+                        InventorySnapshot.open_po.isnot(None),
                     )
                 )
             else:
