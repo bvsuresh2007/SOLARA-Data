@@ -61,6 +61,24 @@ function TopSkuCard({ label, sku, formatter }: { label: string; sku: TopSku | nu
   );
 }
 
+function DataAsOf({ iso }: { iso: string | null }) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+  const h = ist.getUTCHours();
+  const m = ist.getUTCMinutes();
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  const mm = m.toString().padStart(2, "0");
+  const day = ist.getUTCDate();
+  const mon = ist.toLocaleString("en-IN", { month: "short", timeZone: "UTC" });
+  return (
+    <span className="text-[11px] text-zinc-500 font-normal">
+      Data as of {h12}:{mm} {ampm} IST, {day} {mon}
+    </span>
+  );
+}
+
 export function KpiStrip({ summary, prevSummary, topByRevenue, topByUnits }: Props) {
   const asp =
     summary.total_quantity > 0
@@ -94,7 +112,13 @@ export function KpiStrip({ summary, prevSummary, topByRevenue, topByUnits }: Pro
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    <div className="space-y-1">
+      {summary.data_as_of && (
+        <div className="flex justify-end">
+          <DataAsOf iso={summary.data_as_of} />
+        </div>
+      )}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
       {kpis.map((kpi) => (
         <Card key={kpi.label}>
           <CardContent className="pt-6">
@@ -117,6 +141,7 @@ export function KpiStrip({ summary, prevSummary, topByRevenue, topByUnits }: Pro
 
       <TopSkuCard label="Top SKU by Revenue" sku={topByRevenue} formatter={fmtRevenue} />
       <TopSkuCard label="Top SKU by Units" sku={topByUnits} formatter={fmtNum} />
+    </div>
     </div>
   );
 }

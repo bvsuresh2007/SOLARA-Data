@@ -57,6 +57,7 @@ export interface SalesSummary {
   total_discount: number | null;
   record_count: number;
   active_skus: number;
+  data_as_of: string | null;
 }
 
 export interface SalesByDimension {
@@ -129,6 +130,7 @@ export interface PortalDailyRow {
   open_po: number | null;
   swiggy_stock: number | null;
   zepto_stock: number | null;
+  flipkart_stock: number | null;
   backend_qty: number | null;
   frontend_qty: number | null;
   daily_units: Record<string, number | null>;

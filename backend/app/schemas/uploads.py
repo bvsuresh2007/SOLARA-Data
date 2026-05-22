@@ -19,6 +19,7 @@ class UploadFileType(str, Enum):
     AMAZON_PI = "amazon_pi"
     FLIPKART_APPLIANCES = "flipkart_appliances"
     FLIPKART_KITCHEN = "flipkart_kitchen"
+    FLIPKART_APPLIANCES_ATP = "flipkart_appliances_atp"
 
 
 FILE_TYPE_META: dict[str, dict] = {
@@ -76,6 +77,11 @@ FILE_TYPE_META: dict[str, dict] = {
         "label": "Flipkart Kitchen Sales",
         "description": "Flipkart Kitchen daily sales report. Columns: order_date_key, fsn, units, gmv. Accepts .csv or .xlsx.",
         "target_tables": ["daily_sales"],
+    },
+    UploadFileType.FLIPKART_APPLIANCES_ATP: {
+        "label": "Flipkart Appliances ATP Inventory",
+        "description": "Flipkart Appliances ATP (Available to Promise) inventory dump. Columns: FC, ATP, product_detail_fsn, geo_dim_zone. ATP is aggregated across all FCs per FSN.",
+        "target_tables": ["inventory_snapshots"],
     },
 }
 

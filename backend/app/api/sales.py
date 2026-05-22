@@ -861,7 +861,38 @@ def portal_daily_sales(
                 float(r.portal_stock) if r.portal_stock is not None else None
             )
 
-    # 5d. Latest Blinkit backend_stock + frontend_stock from inventory snapshots.
+    # 5d. Latest Flipkart portal_stock from inventory snapshots (ATP dump).
+    flipkart_stock_map: dict[int, float | None] = {}
+    flipkart_portal = db.query(Portal).filter(func.lower(Portal.name) == "flipkart").first()
+    if flipkart_portal and product_ids:
+        fk_latest_sq = (
+            db.query(
+                InventorySnapshot.product_id,
+                func.max(InventorySnapshot.snapshot_date).label("max_date"),
+            )
+            .filter(
+                InventorySnapshot.portal_id == flipkart_portal.id,
+                InventorySnapshot.product_id.in_(product_ids),
+            )
+            .group_by(InventorySnapshot.product_id)
+            .subquery()
+        )
+        fk_inv_rows = (
+            db.query(InventorySnapshot.product_id, InventorySnapshot.portal_stock)
+            .join(
+                fk_latest_sq,
+                (InventorySnapshot.product_id == fk_latest_sq.c.product_id)
+                & (InventorySnapshot.snapshot_date == fk_latest_sq.c.max_date),
+            )
+            .filter(InventorySnapshot.portal_id == flipkart_portal.id)
+            .all()
+        )
+        for r in fk_inv_rows:
+            flipkart_stock_map[r.product_id] = (
+                float(r.portal_stock) if r.portal_stock is not None else None
+            )
+
+    # 5e. Latest Blinkit backend_stock + frontend_stock from inventory snapshots.
     blinkit_backend_map: dict[int, float | None] = {}
     blinkit_frontend_map: dict[int, float | None] = {}
     blinkit_portal = db.query(Portal).filter(func.lower(Portal.name) == "blinkit").first()
@@ -952,6 +983,7 @@ def portal_daily_sales(
                 open_po=open_po_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
                 zepto_stock=zepto_stock_map.get(pid),
+                flipkart_stock=flipkart_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),
                 frontend_qty=blinkit_frontend_map.get(pid),
                 daily_units={d: agg["daily"].get(d) for d in dates},
@@ -980,6 +1012,7 @@ def portal_daily_sales(
                 amazon_stock=amazon_stock_map.get(pid),
                 swiggy_stock=swiggy_stock_map.get(pid),
                 zepto_stock=zepto_stock_map.get(pid),
+                flipkart_stock=flipkart_stock_map.get(pid),
                 backend_qty=blinkit_backend_map.get(pid),
                 frontend_qty=blinkit_frontend_map.get(pid),
                 daily_units={d: None for d in dates},

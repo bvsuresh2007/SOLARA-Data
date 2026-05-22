@@ -510,13 +510,17 @@ def parse_amazon_pi(content: bytes, filename: str) -> list[dict]:
                     )
                 except (ValueError, TypeError, KeyError):
                     continue
+                # Support both old (orderamt/orderquantity) and new (netsales/netunits) columns
+                revenue = _f(row.get("netsales")) or _f(row.get("grosssales")) or _f(row.get("orderamt", 0))
+                qty = _f(row.get("netunits")) or _f(row.get("grossunits")) or _f(row.get("orderquantity", 0))
+                city = str(row.get("city", "") or row.get("statename", "") or "").strip()
                 rows.append({
                     "portal": "amazon",
                     "sale_date": sale_date,
                     "portal_product_id": asin,
-                    "city": str(row.get("statename", "") or "").strip(),
-                    "revenue": _f(row.get("orderamt", 0)),
-                    "quantity_sold": _f(row.get("orderquantity", 0)),
+                    "city": city,
+                    "revenue": revenue,
+                    "quantity_sold": qty,
                     "order_count": 1,
                     "discount_amount": 0.0,
                 })
@@ -795,6 +799,51 @@ def parse_flipkart_kitchen(content: bytes, filename: str) -> list[dict]:
         os.unlink(path)
 
 
+def parse_flipkart_appliances_atp(content: bytes, filename: str) -> list[dict]:
+    """
+    Flipkart Appliances ATP (Available to Promise) inventory dump.
+
+    Expected columns: FC, ATP, Super_Category, product_detail_fsn,
+    product_detail_product_title, geo_dim_zone,
+    product_categorization_dim_vertical, brand.
+
+    ATP is aggregated (summed) across all FCs per FSN to produce one
+    inventory snapshot row per product.  snapshot_date = today (the dump
+    has no date column — it reflects current stock).
+    """
+    from datetime import date as _date
+
+    suffix = os.path.splitext(filename)[1] or ".csv"
+    path = _write_temp(content, suffix)
+    try:
+        df = _clean(_read_file(path))
+        # Normalise column names — the CSV may have mixed case
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        _require_columns(df, ["fc", "atp", "product_detail_fsn"], "flipkart_appliances_atp")
+
+        # Aggregate ATP across all FCs per FSN
+        atp_by_fsn: dict[str, float] = {}
+        for row in df.to_dict("records"):
+            fsn = str(row.get("product_detail_fsn", "")).strip()
+            if not fsn or fsn in ("nan", ""):
+                continue
+            atp = _f(row.get("atp", 0))
+            atp_by_fsn[fsn] = atp_by_fsn.get(fsn, 0) + atp
+
+        today = _date.today()
+        rows = []
+        for fsn, total_atp in atp_by_fsn.items():
+            rows.append({
+                "portal": "flipkart",
+                "snapshot_date": today,
+                "portal_product_id": fsn,
+                "portal_stock": total_atp,
+            })
+        return rows
+    finally:
+        os.unlink(path)
+
+
 # =============================================================================
 # Registry
 # =============================================================================
@@ -812,6 +861,7 @@ PARSER_REGISTRY: dict[str, Any] = {
     "master_excel": parse_master_excel,
     "flipkart_appliances": parse_flipkart_appliances,
     "flipkart_kitchen": parse_flipkart_kitchen,
+    "flipkart_appliances_atp": parse_flipkart_appliances_atp,
 }
 
 
