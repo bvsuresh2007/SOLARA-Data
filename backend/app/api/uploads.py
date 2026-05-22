@@ -82,6 +82,7 @@ _INVENTORY_TYPES = {
     UploadFileType.SWIGGY_INVENTORY,
     UploadFileType.ZEPTO_INVENTORY,
     UploadFileType.FLIPKART_APPLIANCES_ATP,
+    UploadFileType.FLIPKART_KITCHEN_ATP,
 }
 
 

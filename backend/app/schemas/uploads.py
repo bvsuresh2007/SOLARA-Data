@@ -20,6 +20,7 @@ class UploadFileType(str, Enum):
     FLIPKART_APPLIANCES = "flipkart_appliances"
     FLIPKART_KITCHEN = "flipkart_kitchen"
     FLIPKART_APPLIANCES_ATP = "flipkart_appliances_atp"
+    FLIPKART_KITCHEN_ATP = "flipkart_kitchen_atp"
 
 
 FILE_TYPE_META: dict[str, dict] = {
@@ -81,6 +82,11 @@ FILE_TYPE_META: dict[str, dict] = {
     UploadFileType.FLIPKART_APPLIANCES_ATP: {
         "label": "Flipkart Appliances ATP Inventory",
         "description": "Flipkart Appliances ATP (Available to Promise) inventory dump. Columns: FC, ATP, product_detail_fsn, geo_dim_zone. ATP is aggregated across all FCs per FSN.",
+        "target_tables": ["inventory_snapshots"],
+    },
+    UploadFileType.FLIPKART_KITCHEN_ATP: {
+        "label": "Flipkart Kitchen ATP Inventory",
+        "description": "Flipkart Kitchen ATP inventory dump. Columns: brand, fsn, Zone, inventory_item_warehouse_id, inventory_item_atp. ATP is aggregated across all warehouses per FSN.",
         "target_tables": ["inventory_snapshots"],
     },
 }

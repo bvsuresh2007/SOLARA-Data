@@ -844,6 +844,47 @@ def parse_flipkart_appliances_atp(content: bytes, filename: str) -> list[dict]:
         os.unlink(path)
 
 
+def parse_flipkart_kitchen_atp(content: bytes, filename: str) -> list[dict]:
+    """
+    Flipkart Kitchen ATP (Available to Promise) inventory dump.
+
+    Expected columns: brand, fsn, Alpha, Zone, inventory_item_warehouse_id,
+    inventory_item_atp, Vendor_Name.
+
+    ATP is aggregated (summed) across all warehouses per FSN to produce one
+    inventory snapshot row per product.  snapshot_date = today.
+    """
+    from datetime import date as _date
+
+    suffix = os.path.splitext(filename)[1] or ".csv"
+    path = _write_temp(content, suffix)
+    try:
+        df = _clean(_read_file(path))
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        _require_columns(df, ["fsn", "inventory_item_atp"], "flipkart_kitchen_atp")
+
+        atp_by_fsn: dict[str, float] = {}
+        for row in df.to_dict("records"):
+            fsn = str(row.get("fsn", "")).strip()
+            if not fsn or fsn in ("nan", ""):
+                continue
+            atp = _f(row.get("inventory_item_atp", 0))
+            atp_by_fsn[fsn] = atp_by_fsn.get(fsn, 0) + atp
+
+        today = _date.today()
+        rows = []
+        for fsn, total_atp in atp_by_fsn.items():
+            rows.append({
+                "portal": "flipkart",
+                "snapshot_date": today,
+                "portal_product_id": fsn,
+                "portal_stock": total_atp,
+            })
+        return rows
+    finally:
+        os.unlink(path)
+
+
 # =============================================================================
 # Registry
 # =============================================================================
@@ -862,6 +903,7 @@ PARSER_REGISTRY: dict[str, Any] = {
     "flipkart_appliances": parse_flipkart_appliances,
     "flipkart_kitchen": parse_flipkart_kitchen,
     "flipkart_appliances_atp": parse_flipkart_appliances_atp,
+    "flipkart_kitchen_atp": parse_flipkart_kitchen_atp,
 }
 
 
