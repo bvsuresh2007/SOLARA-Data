@@ -373,6 +373,8 @@ class ZeptoScraper(BaseScraper):
         except ImportError:
             from profile_sync import download_session_file, upload_session_file
 
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 

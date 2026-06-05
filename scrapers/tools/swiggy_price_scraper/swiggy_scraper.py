@@ -19,17 +19,9 @@ from playwright.sync_api import sync_playwright, BrowserContext, Response
 
 
 # ── Stealth ───────────────────────────────────────────────────────────────────
-_STEALTH = """
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-    Object.defineProperty(navigator, 'languages', {get: () => ['en-IN','en-US','en']});
-    window.chrome = {runtime: {}};
-    const origQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = p =>
-        p.name === 'notifications'
-            ? Promise.resolve({state: Notification.permission})
-            : origQuery(p);
-"""
+# Keep stealth MINIMAL — Swiggy detects the permissions.query override and
+# serves "Something went wrong" when it's present.
+_STEALTH = "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
 
 # ── Pincode → coordinates ─────────────────────────────────────────────────────
 PINCODE_COORDS = {
@@ -102,6 +94,7 @@ class SwiggyInstamartScraper:
         self.proxy = proxy
         self._pw = None
         self._browser = None
+        self._warmed_up = False  # visit homepage once to get proper session cookies
         coords = PINCODE_COORDS.get(pincode, PINCODE_COORDS[_DEFAULT_PINCODE])
         self._lat = coords["lat"]
         self._lng = coords["lng"]
@@ -116,7 +109,43 @@ class SwiggyInstamartScraper:
             args=["--disable-blink-features=AutomationControlled"],
         )
 
+    def _warmup_session(self):
+        """Create a single persistent browser context, visit the Swiggy Instamart
+        homepage to establish a real session. All product scrapes reuse this
+        context/page so Swiggy anti-bot sees continuous browsing.
+
+        IMPORTANT: Do NOT set location cookies or localStorage init scripts —
+        Swiggy's anti-bot detects manipulated location data and serves
+        "Something went wrong". Let Swiggy resolve location from IP instead.
+        """
+        try:
+            proxy_cfg = {"server": self.proxy} if self.proxy else None
+            self._ctx = self._browser.new_context(
+                user_agent=self._UA,
+                viewport={"width": 1920, "height": 1080},
+                locale="en-IN",
+                timezone_id="Asia/Kolkata",
+                **({"proxy": proxy_cfg} if proxy_cfg else {}),
+            )
+            self._page = self._ctx.new_page()
+            self._page.add_init_script(_STEALTH)
+            self._page.set_default_timeout(30_000)
+            self._page.goto("https://www.swiggy.com/instamart", wait_until="domcontentloaded", timeout=30_000)
+            self._page.wait_for_timeout(3_000)
+            self._warmed_up = True
+            print("  [Swiggy] Session warmed up")
+        except Exception as exc:
+            print(f"  [Swiggy] Warmup failed (will continue anyway): {exc}")
+            self._ctx = None
+            self._page = None
+            self._warmed_up = True
+
     def close(self):
+        try:
+            if hasattr(self, "_ctx") and self._ctx:
+                self._ctx.close()
+        except Exception:
+            pass
         try:
             self._browser.close()
         except Exception:
@@ -126,6 +155,8 @@ class SwiggyInstamartScraper:
         except Exception:
             pass
         self._pw = self._browser = None
+        self._ctx = None
+        self._page = None
 
     # ── Utility helpers ───────────────────────────────────────────────────────
 
@@ -363,6 +394,18 @@ class SwiggyInstamartScraper:
                 // 10. og:image
                 out.og_image = document.querySelector('meta[property="og:image"]')?.content || '';
 
+                // 11. DOM price elements via data-testid (Swiggy renders price/MRP here)
+                // Returns elements like ['1 Piece11992499−ADD1+', '...', '1199', '2499']
+                // where individual price elements appear as pure numbers
+                out.dom_prices = [];
+                for (const el of document.querySelectorAll('[data-testid*="price"],[data-testid*="Price"]')) {
+                    const txt = el.textContent.trim().replace(/[₹,\s]/g, '');
+                    const asNum = parseFloat(txt);
+                    if (!isNaN(asNum) && asNum >= 1 && asNum < 200000 && /^\d+(\.\d{1,2})?$/.test(txt)) {
+                        out.dom_prices.push(asNum);
+                    }
+                }
+
                 return out;
             }""")
         except Exception as e:
@@ -432,7 +475,20 @@ class SwiggyInstamartScraper:
                 print("  [Source: h1]")
                 found_name = True
 
-        # Set price/MRP from proximity/strikethrough data
+        # Set price/MRP from DOM price elements (most reliable for current Swiggy UI)
+        # data-testid*="price" elements return individual numeric values like [1199, 2499]
+        dom_prices = sorted(set(data.get("dom_prices") or []))
+        if result.name and dom_prices:
+            if not result.price_value:
+                result.price_value = dom_prices[0]
+                result.price = self._fmt(dom_prices[0])
+            if not result.mrp_value and len(dom_prices) > 1:
+                mrp_candidates = [v for v in dom_prices if v > result.price_value]
+                if mrp_candidates:
+                    result.mrp_value = mrp_candidates[0]
+                    result.mrp = self._fmt(mrp_candidates[0])
+
+        # Set price/MRP from proximity/strikethrough data (fallback)
         strikethrough = data.get("strikethrough_prices") or []
         if result.name and not result.price:
             prices = data.get("nearby_prices") or data.get("all_prices") or []
@@ -482,12 +538,8 @@ class SwiggyInstamartScraper:
     def scrape(self, url: str) -> SwiggyProductData:
         """
         Scrape a Swiggy Instamart product page.
-
-        Args:
-            url: Full Swiggy Instamart product URL
-
-        Returns:
-            SwiggyProductData with all available fields populated
+        Reuses a single persistent browser context (warmed up via homepage visit)
+        so Swiggy anti-bot treats it as continuous human browsing.
         """
         result = SwiggyProductData(url=url)
         result.product_id = self._extract_product_id(url)
@@ -495,39 +547,19 @@ class SwiggyInstamartScraper:
         if not self._browser:
             self._launch()
 
-        captured: list[dict] = []
-        proxy_cfg = {"server": self.proxy} if self.proxy else None
+        # Warm up: visit homepage once in a shared context/page
+        if not self._warmed_up:
+            self._warmup_session()
 
-        ctx: BrowserContext = self._browser.new_context(
-            user_agent=self._UA,
-            viewport={"width": 1920, "height": 1080},
-            locale="en-IN",
-            timezone_id="Asia/Kolkata",
-            **({"proxy": proxy_cfg} if proxy_cfg else {}),
-        )
+        # Fall back to isolated context if warmup failed
+        if not self._page:
+            return self._scrape_isolated(url, result)
+
+        captured: list[dict] = []
+        page = self._page
 
         try:
-            page = ctx.new_page()
-            page.set_default_timeout(30_000)
-            page.add_init_script(_STEALTH)
-
-            # Inject location before page JS runs (localStorage)
-            loc_json = json.dumps({"lat": self._lat, "lng": self._lng, "address": self._area})
-            page.add_init_script(f"""
-                try {{
-                    localStorage.setItem('userLocation', '{loc_json}');
-                    localStorage.setItem('swiggyLat', '{self._lat}');
-                    localStorage.setItem('swiggyLng', '{self._lng}');
-                }} catch(e) {{}}
-            """)
-
-            # Set location cookies (Playwright context.add_cookies works before navigation)
-            ctx.add_cookies([
-                {"name": "userLocation", "value": loc_json,
-                 "domain": ".swiggy.com", "path": "/"},
-            ])
-
-            # Response interception: capture product API responses
+            # Attach response listener for this scrape (remove after)
             def on_response(resp: Response):
                 if "json" not in resp.headers.get("content-type", ""):
                     return
@@ -547,10 +579,15 @@ class SwiggyInstamartScraper:
 
             page.on("response", on_response)
 
-            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_timeout(3_000)
-            page.evaluate("window.scrollTo(0, 400)")
-            page.wait_for_timeout(1_500)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                page.wait_for_timeout(3_000)
+                page.evaluate("window.scrollTo(0, 400)")
+                page.wait_for_timeout(1_500)
+            finally:
+                # Always remove listener — even on TimeoutError — to avoid
+                # accumulating dead listeners on the shared page across scrapes.
+                page.remove_listener("response", on_response)
 
             if self.debug:
                 fname = f"debug_swiggy_{result.product_id or 'page'}.html"
@@ -564,7 +601,6 @@ class SwiggyInstamartScraper:
                     print("  [Source: API response]")
 
             # Strategy 2: JS-based extraction (__NEXT_DATA__, JSON-LD, proximity pricing)
-            # Also run if name found but MRP missing (to pick up plain-number prices from DOM)
             if not result.name or not result.mrp_value:
                 self._extract_via_js(page, result)
 
@@ -583,9 +619,68 @@ class SwiggyInstamartScraper:
 
         except Exception as e:
             result.error = str(e)
+
+        return result
+
+    def _scrape_isolated(self, url: str, result: SwiggyProductData) -> SwiggyProductData:
+        """Fallback: scrape in a fresh isolated context (legacy behaviour)."""
+        captured: list[dict] = []
+        proxy_cfg = {"server": self.proxy} if self.proxy else None
+        loc_json = json.dumps({"lat": self._lat, "lng": self._lng, "address": self._area})
+        ctx: BrowserContext = self._browser.new_context(
+            user_agent=self._UA,
+            viewport={"width": 1920, "height": 1080},
+            locale="en-IN",
+            timezone_id="Asia/Kolkata",
+            **({"proxy": proxy_cfg} if proxy_cfg else {}),
+        )
+        try:
+            page = ctx.new_page()
+            page.set_default_timeout(30_000)
+            page.add_init_script(_STEALTH)
+            page.add_init_script(f"""
+                try {{
+                    localStorage.setItem('userLocation', '{loc_json}');
+                    localStorage.setItem('swiggyLat', '{self._lat}');
+                    localStorage.setItem('swiggyLng', '{self._lng}');
+                }} catch(e) {{}}
+            """)
+            ctx.add_cookies([{"name": "userLocation", "value": loc_json, "domain": ".swiggy.com", "path": "/"}])
+
+            def on_response(resp: Response):
+                if "json" not in resp.headers.get("content-type", ""):
+                    return
+                u = resp.url
+                if not any(k in u for k in ["instamart", "item-detail", "item_detail", "product", "catalog"]):
+                    return
+                try:
+                    body = resp.json()
+                    prod = self._find_product_in_json(body)
+                    if prod:
+                        captured.append(prod)
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            page.wait_for_timeout(3_000)
+            page.evaluate("window.scrollTo(0, 400)")
+            page.wait_for_timeout(1_500)
+
+            if captured and self._populate_from_dict(captured[0], result):
+                print("  [Source: API response]")
+            if not result.name or not result.mrp_value:
+                self._extract_via_js(page, result)
+            if not result.name and not result.price:
+                body_text = page.locator("body").text_content(timeout=5_000) or ""
+                if any(p in body_text.lower() for p in ["too many requests", "something went wrong", "access denied"]):
+                    result.error = "Rate limited or access denied"
+                else:
+                    result.error = "Could not extract product data"
+        except Exception as e:
+            result.error = str(e)
         finally:
             ctx.close()
-
         return result
 
     def scrape_multiple(self, urls: list[str], delay: float = 25.0) -> list[SwiggyProductData]:

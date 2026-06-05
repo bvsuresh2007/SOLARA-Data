@@ -581,6 +581,8 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
 
     def run(self, report_date: date = None) -> dict:
         """Full scraping cycle. Returns status dict."""
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
         if report_date is None:
             report_date = date.today()
 

@@ -10,7 +10,8 @@ import logging
 from datetime import date
 from typing import Any
 
-from shared.constants import normalise_city
+from shared.constants import normalise_city, CITY_REGION_MAP
+from shared.pincode_lookup import pincode_lookup, normalise_city_name
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +47,47 @@ class DataTransformer:
             self._portal_cache[name] = self._portal_cache.get(canonical)
         return self._portal_cache.get(canonical)
 
-    def _get_or_create_city(self, city_name: str) -> int | None:
-        canonical = normalise_city(city_name)
+    def _get_or_create_city(self, city_name: str, pincode: str = None) -> int | None:
+        """
+        Resolve city name to city_id.  If a pincode is supplied we use it to
+        derive a canonical city + state, which avoids duplicate entries from
+        free-text city names (e.g. Shopify shipping addresses).
+        """
+        # 1. If pincode is given, try pincode lookup first
+        pin_city = pin_state = pin_region = None
+        if pincode:
+            pin_city, pin_state, pin_region = pincode_lookup(pincode)
+
+        # 2. Determine canonical city name
+        if pin_city:
+            canonical = normalise_city(pin_city) or pin_city
+        else:
+            canonical = normalise_city(city_name)
+
         if not canonical:
             return None
+
+        # 3. Look up / create city in DB
         if canonical not in self._city_cache:
             from backend.app.models.metadata import City
             city = self.db.query(City).filter_by(name=canonical).first()
             if not city:
-                city = City(name=canonical)
+                region = pin_region or CITY_REGION_MAP.get(canonical)
+                city = City(name=canonical, state=pin_state, region=region)
                 self.db.add(city)
                 self.db.flush()
+                logger.info("Created city: %s (state=%s, region=%s)", canonical, pin_state, region)
+            else:
+                # Backfill state if we have it and it's missing in DB
+                updated = False
+                if pin_state and not city.state:
+                    city.state = pin_state
+                    updated = True
+                if pin_region and not city.region:
+                    city.region = pin_region
+                    updated = True
+                if updated:
+                    self.db.flush()
             self._city_cache[canonical] = city.id
         return self._city_cache[canonical]
 
@@ -106,7 +137,7 @@ class DataTransformer:
         Like transform_sales_rows() but resolves product via sku_code directly
         (products.sku_code) instead of product_portal_mapping.
 
-        Used for EasyEcom, which uses SOL-XXXX internal SKU codes — no
+        Used for EasyEcom and Shopify, which use SOL-XXXX internal SKU codes — no
         product_portal_mapping entries are needed for the target portals.
         """
         out = []
@@ -114,9 +145,9 @@ class DataTransformer:
             portal_id = self._get_portal_id(row.get("portal", ""))
             if not portal_id:
                 continue
-            city_id = self._get_or_create_city(row.get("city"))
+            city_id = self._get_or_create_city(row.get("city"), pincode=row.get("pincode"))
             if city_id is None:
-                logger.warning("Skipping row — unknown city: %r", row.get("city"))
+                logger.warning("Skipping row — unknown city: %r (pincode=%r)", row.get("city"), row.get("pincode"))
                 continue
             product_id = self._get_product_id_by_sku(row.get("portal_product_id", ""))
             if not product_id:
@@ -141,9 +172,9 @@ class DataTransformer:
             portal_id = self._get_portal_id(row.get("portal", ""))
             if not portal_id:
                 continue
-            city_id = self._get_or_create_city(row.get("city"))
+            city_id = self._get_or_create_city(row.get("city"), pincode=row.get("pincode"))
             if city_id is None:
-                logger.warning("Skipping row — unknown city: %r", row.get("city"))
+                logger.warning("Skipping row — unknown city: %r (pincode=%r)", row.get("city"), row.get("pincode"))
                 continue
             product_id = self._get_product_id(portal_id, row.get("portal_product_id", ""))
             if not product_id:

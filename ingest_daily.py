@@ -191,6 +191,68 @@ def ingest_amazon_sp_api(report_date):
         db.close()
 
 
+def ingest_amazon_inventory(report_date):
+    """Ingest Amazon SP-API inventory CSV (FC stock + Open PO) into inventory_snapshots."""
+    import pandas as pd
+    from backend.app.models.sales import ProductPortalMapping
+
+    csv_path = Path(f"data/raw/amazon_sp_api/amazon_inventory_{report_date}.csv")
+    if not csv_path.exists():
+        print(f"  [amazon_inventory] File not found: {csv_path}")
+        return
+
+    df = pd.read_csv(csv_path, dtype=str).fillna("")
+    db = SessionLocal()
+
+    try:
+        amazon_portal = db.query(Portal).filter(Portal.name.ilike("%amazon%")).filter(~Portal.name.ilike("%pi%")).first()
+        if not amazon_portal:
+            print("  [amazon_inventory] Amazon portal not found in DB")
+            return
+
+        mappings = db.query(ProductPortalMapping).filter(
+            ProductPortalMapping.portal_id == amazon_portal.id
+        ).all()
+        asin_to_product = {str(m.portal_sku).strip(): m.product_id for m in mappings if m.portal_sku}
+
+        inv_count = 0
+        for _, row in df.iterrows():
+            asin = str(row.get("asin", "")).strip()
+            soh = int(float(row.get("sellable_on_hand", 0) or 0))
+            open_po = int(float(row.get("open_po_qty", 0) or 0))
+            if soh <= 0 and open_po <= 0:
+                continue
+            product_id = asin_to_product.get(asin)
+            if not product_id:
+                continue
+            values = {
+                "portal_id": amazon_portal.id,
+                "product_id": product_id,
+                "snapshot_date": report_date,
+            }
+            set_clause = {}
+            if soh > 0:
+                values["amazon_fc_stock"] = soh
+                set_clause["amazon_fc_stock"] = insert(InventorySnapshot).excluded.amazon_fc_stock
+            if open_po > 0:
+                values["open_po"] = open_po
+                set_clause["open_po"] = insert(InventorySnapshot).excluded.open_po
+            db.execute(insert(InventorySnapshot).values(**values).on_conflict_do_update(
+                index_elements=["portal_id", "product_id", "snapshot_date"],
+                set_=set_clause,
+            ))
+            inv_count += 1
+        db.commit()
+        print(f"  [amazon_inventory] {inv_count} ASINs with FC stock/open PO for {report_date}")
+
+    except Exception as e:
+        db.rollback()
+        print(f"  [amazon_inventory] ERROR: {e}")
+        import traceback; traceback.print_exc()
+    finally:
+        db.close()
+
+
 def ingest_amazon_pi(report_date):
     parser = get_parser("amazon_pi")
     db = SessionLocal()
@@ -228,28 +290,9 @@ def ingest_amazon_pi(report_date):
                   "revenue": insert(CityDailySales).excluded.revenue}))
     db.commit()
 
-    daily_agg = defaultdict(lambda: {"units_sold": 0, "revenue": 0.0})
-    for r in city_rows:
-        k = (r["portal_id"], r["product_id"], r["sale_date"])
-        daily_agg[k]["units_sold"] += r["units_sold"]
-        daily_agg[k]["revenue"]    += r["revenue"]
-
-    daily_rows = [
-        {"portal_id": pid, "product_id": prod, "sale_date": dt,
-         "units_sold": v["units_sold"], "revenue": v["revenue"],
-         "asp": round(v["revenue"] / v["units_sold"], 2) if v["units_sold"] > 0 else None,
-         "data_source": "portal_csv"}
-        for (pid, prod, dt), v in daily_agg.items()
-    ]
-
-    for i in range(0, len(daily_rows), BATCH):
-        db.execute(insert(DailySales).values(daily_rows[i:i+BATCH]).on_conflict_do_update(
-            index_elements=["portal_id", "product_id", "sale_date"],
-            set_={"units_sold": insert(DailySales).excluded.units_sold,
-                  "revenue": insert(DailySales).excluded.revenue,
-                  "asp": insert(DailySales).excluded.asp}))
-    db.commit()
-    print(f"  [amazon_pi] city={len(city_rows)}, daily={len(daily_rows)}")
+    # NOTE: Amazon PI only writes city_daily_sales (city/state level data).
+    # Amazon daily_sales is handled by the hourly SP-API real-time sync.
+    print(f"  [amazon_pi] city={len(city_rows)} (daily_sales handled by SP-API hourly sync)")
     db.close()
 
 

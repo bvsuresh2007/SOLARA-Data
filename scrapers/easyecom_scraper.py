@@ -58,6 +58,7 @@ def _profile_dir() -> Path:
 
 # --- URLs ---
 LOGIN_URL = "https://app.easyecom.io/V2/account/auth/login"
+DASHBOARD_URL = "https://app.easyecom.io/V2/Dashboards/dashboard"
 SALES_URL = "https://app.easyecom.io/V2/sales_dashboard.php"
 
 # --- Timing ---
@@ -208,7 +209,42 @@ class EasyecomBaseScraper:
                     raise
 
     def _try_login(self, attempt: int = 1) -> None:
-        """Single login attempt — navigate, click Google, wait for redirect."""
+        """Single login attempt — navigate, click Google, wait for redirect.
+
+        Optimization: try the dashboard URL FIRST. If the existing PHP session
+        cookies (PHPSESSID/laravel_session/XSRF-TOKEN) are still valid,
+        EasyEcom keeps us on the dashboard and we skip Google OAuth entirely.
+        This avoids re-triggering Google's "device protection" challenge that
+        invalidates the OAuth session every 2-3 days.
+        """
+        if attempt == 1:
+            self._log.info("[EasyEcom] Trying dashboard with existing PHP session first...")
+            try:
+                self._page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=20_000)
+                self._page.wait_for_timeout(3000)
+                if (self._page.url.startswith("https://app.easyecom.io")
+                        and "/account/auth/" not in self._page.url):
+                    # Dashboard loaded — also verify sales page works
+                    self._log.info("[EasyEcom] Dashboard OK. Verifying sales_dashboard.php session...")
+                    try:
+                        self._page.goto(SALES_URL, wait_until="networkidle", timeout=20_000)
+                        self._page.wait_for_timeout(3000)
+                        body_text = self._page.inner_text("body") if self._page else ""
+                        if "Please login first" in body_text:
+                            self._log.info("[EasyEcom] Sales page rejected session — falling back to OAuth")
+                        else:
+                            self._log.info("[EasyEcom] PHP session valid for both dashboard + sales — skipped OAuth")
+                            # STAY on sales page — don't navigate away, session is fragile
+                            self._sales_page_ready = True
+                            return
+                    except Exception as e:
+                        self._log.info("[EasyEcom] Sales page probe failed (%s) — falling back to OAuth", e)
+                else:
+                    self._log.info("[EasyEcom] PHP session expired (URL: %s) — falling back to OAuth",
+                                   self._page.url)
+            except Exception as e:
+                self._log.info("[EasyEcom] Dashboard probe failed (%s) — falling back to OAuth", e)
+
         self._log.info("[EasyEcom] Navigating to login page (attempt %d)", attempt)
         self._page.goto(LOGIN_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(2000)
@@ -237,14 +273,14 @@ class EasyecomBaseScraper:
         except Exception:
             current = self._page.url
             if "multiple-signin" in current or "accountchooser" in current:
-                self._log.info("[EasyEcom] Google account chooser detected — selecting automation@solara.in")
-                # Try clicking the automation@solara.in account by data-email or data-identifier
+                _goog_email = os.getenv("EASYCOM_EMAIL", "suresh.bommisetti@solara.in")
+                self._log.info("[EasyEcom] Google account chooser detected — selecting %s", _goog_email)
                 clicked = False
                 for selector in [
-                    '[data-email="automation@solara.in"]',
-                    '[data-identifier="automation@solara.in"]',
-                    'li:has-text("automation@solara.in")',
-                    'div[data-authuser]:has-text("automation@solara.in")',
+                    f'[data-email="{_goog_email}"]',
+                    f'[data-identifier="{_goog_email}"]',
+                    f'li:has-text("{_goog_email}")',
+                    f'div[data-authuser]:has-text("{_goog_email}")',
                 ]:
                     try:
                         el = self._page.locator(selector).first
@@ -256,9 +292,8 @@ class EasyecomBaseScraper:
                     except Exception:
                         pass
                 if not clicked:
-                    # Fallback: find any element with the email text and click it
                     try:
-                        self._page.get_by_text("automation@solara.in").first.click(timeout=10_000)
+                        self._page.get_by_text(_goog_email).first.click(timeout=10_000)
                         self._log.info("[EasyEcom] Clicked account via get_by_text")
                         clicked = True
                     except Exception as e:
@@ -296,8 +331,12 @@ class EasyecomScraper(EasyecomBaseScraper):
     # ------------------------------------------------------------------
 
     def _go_to_sales_page(self) -> None:
-        self._log.info("[EasyEcom] Navigating to sales_dashboard.php")
-        self._page.goto(SALES_URL, wait_until="networkidle")
+        if getattr(self, '_sales_page_ready', False):
+            self._log.info("[EasyEcom] Already on sales page (verified during login) — skipping navigation")
+            self._sales_page_ready = False  # reset flag
+        else:
+            self._log.info("[EasyEcom] Navigating to sales_dashboard.php")
+            self._page.goto(SALES_URL, wait_until="networkidle")
         # Wait for Angular to finish rendering + any async modals to appear
         self._page.wait_for_timeout(4000)
         self._dismiss_popups()
@@ -828,6 +867,8 @@ class EasyecomScraper(EasyecomBaseScraper):
 
     def run(self, report_date: date = None) -> dict:
         """Full scraping cycle. Returns status dict."""
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 

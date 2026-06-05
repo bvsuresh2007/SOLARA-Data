@@ -273,6 +273,7 @@ class ShopifyParser:
                 "sale_date": _parse_iso(row.get("Created at", row.get("Paid at"))),
                 "portal_product_id": str(row.get("Lineitem sku", "")).strip(),
                 "city": str(row.get("Billing City", row.get("Shipping City", ""))).strip(),
+                "pincode": str(row.get("Pincode", "")).strip(),
                 "l1_category": "",
                 "l2_category": "",
                 "l3_category": "",
