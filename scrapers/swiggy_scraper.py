@@ -1250,48 +1250,86 @@ class SwiggyScraper:
         date_str = report_date.strftime("%Y-%m-%d")
         output_path = self.out_dir / f"swiggy_soh_{date_str}.csv"
 
+        def _bulk_download_visible() -> bool:
+            """True if a visible exact 'Bulk Download' control is present."""
+            try:
+                loc = self._page.get_by_text("Bulk Download", exact=True)
+                for i in range(loc.count()):
+                    if loc.nth(i).is_visible():
+                        return True
+            except Exception:
+                pass
+            return False
+
+        # Swiggy's Instamart SPA (mid-2026): a hard goto to the /instamart/for-supply
+        # SOH deep-link does NOT hydrate the SOH view. You must enter the vendor app
+        # shell by clicking the "For Supply" tab (lands on /im-vendor/po-dashboard),
+        # then click the "Stock On Hand" sidebar item to reach /im-vendor/stock-on-hand
+        # where the "Bulk Download" control lives. Nav items are <div>s, so match by text.
         self._log.info("[Swiggy] Navigating to Stock On Hand page: %s", SOH_URL)
         self._page.goto(SOH_URL, wait_until="domcontentloaded")
-        self._page.wait_for_timeout(5000)
+        self._page.wait_for_timeout(6000)
 
-        # Ensure "For Supply" tab is active — direct URL navigation doesn't always activate it
-        try:
-            for_supply_tab = self._page.get_by_text("For Supply", exact=True)
-            if for_supply_tab.count() > 0:
-                for_supply_tab.first.click()
-                self._log.info("[Swiggy] Clicked 'For Supply' tab")
-                self._page.wait_for_timeout(3000)
-        except Exception:
-            pass  # already active, continue
+        # Enter the For-Supply vendor app shell (retry — sidebar can be slow to render)
+        for fs_attempt in range(1, 4):
+            try:
+                for_supply_tab = self._page.get_by_text("For Supply", exact=True)
+                if for_supply_tab.count() > 0:
+                    for_supply_tab.first.click()
+                    self._log.info("[Swiggy] Clicked 'For Supply' tab (attempt %d)", fs_attempt)
+                    self._page.wait_for_timeout(6000)
+            except Exception:
+                pass  # tab may already be active
 
-        # Navigate to Stock On Hand in left sidebar if not already there
-        try:
+            # Click the sidebar "Stock On Hand" item — iterate visible exact matches
+            # until we actually land on the SOH view (URL flips / Bulk Download appears).
             soh_link = self._page.get_by_text("Stock On Hand", exact=True)
-            if soh_link.count() > 0:
-                soh_link.first.click()
-                self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link")
-                self._page.wait_for_timeout(4000)
-        except Exception:
-            pass
+            clicked_soh = False
+            for i in range(soh_link.count()):
+                try:
+                    el = soh_link.nth(i)
+                    if not el.is_visible():
+                        continue
+                    el.click()
+                    self._page.wait_for_timeout(4000)
+                    if "stock-on-hand" in self._page.url or _bulk_download_visible():
+                        self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link (match %d) → %s",
+                                       i, self._page.url)
+                        clicked_soh = True
+                        break
+                except Exception:
+                    continue
+
+            if clicked_soh or _bulk_download_visible():
+                break
+            self._log.warning("[Swiggy] SOH view not ready (attempt %d) — retrying navigation", fs_attempt)
+            self._page.goto(SOH_URL, wait_until="domcontentloaded")
+            self._page.wait_for_timeout(6000)
 
         self._shot("swiggy_soh_before_bulk_download")
 
-        # Click 'Bulk Download' button — try multiple selectors
+        # Click the visible 'Bulk Download' control (nav items are <div>s)
         try:
             bulk_btn = None
-            for selector in [
-                "text=Bulk Download",
-                "button:has-text('Bulk Download')",
-                "a:has-text('Bulk Download')",
-                "[class*='bulk']:has-text('Download')",
-            ]:
-                try:
-                    el = self._page.locator(selector).first
-                    el.wait_for(state="visible", timeout=8_000)
-                    bulk_btn = el
+            bd = self._page.get_by_text("Bulk Download", exact=True)
+            for i in range(bd.count()):
+                if bd.nth(i).is_visible():
+                    bulk_btn = bd.nth(i)
                     break
-                except Exception:
-                    continue
+            if bulk_btn is None:
+                # Fallback selectors (button/anchor variants)
+                for selector in [
+                    "button:has-text('Bulk Download')",
+                    "a:has-text('Bulk Download')",
+                    "[class*='bulk' i]:has-text('Download')",
+                ]:
+                    try:
+                        el = self._page.locator(selector).first
+                        el.wait_for(state="visible", timeout=5_000)
+                        bulk_btn = el
+                        break
+                    except Exception:
+                        continue
 
             if bulk_btn is None:
                 raise Exception("Bulk Download button not found with any selector")
