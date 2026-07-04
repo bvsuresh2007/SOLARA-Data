@@ -131,23 +131,30 @@ def main_available(url, h, skus: set[str]) -> dict[str, int]:
     return out
 
 
-def shopify_variant_map(token, skus: list[str]) -> dict[str, dict]:
-    """Resolve {sku: {inventory_item_id, variant_id, tracked}} via GraphQL (batched)."""
+def shopify_variant_map(token, skus: list[str]) -> dict[str, list[dict]]:
+    """Resolve {sku: [{inventory_item_id, variant_id, tracked}, ...]} via GraphQL.
+
+    A combo SKU is frequently cross-listed as a variant on several Shopify
+    product pages (e.g. the same combo appears under the Kadai, Tawa and
+    Paniyaram products, all sharing one SKU). We must return EVERY matching
+    variant so the sync pushes the buildable count to all of them. If we only
+    took the first, the hourly stock sync would zero the extras (a combo is a
+    non-stock item -> 0) and they would strand at 0 on the storefront.
+    """
     gql = f"{SHOP}/admin/api/{API}/graphql.json"
     gh = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     out = {}
     for sku in skus:
-        q = {"query": '{ productVariants(first:5, query:"sku:%s"){edges{node{sku legacyResourceId inventoryItem{legacyResourceId tracked}}}} }' % sku}
+        q = {"query": '{ productVariants(first:50, query:"sku:%s"){edges{node{sku legacyResourceId inventoryItem{legacyResourceId tracked}}}} }' % sku}
         r = requests.post(gql, headers=gh, json=q, timeout=30)
         for e in r.json().get("data", {}).get("productVariants", {}).get("edges", []):
             n = e["node"]
             if n["sku"] == sku:
-                out[sku] = {
+                out.setdefault(sku, []).append({
                     "variant_id": n["legacyResourceId"],
                     "inventory_item_id": n["inventoryItem"]["legacyResourceId"],
                     "tracked": n["inventoryItem"].get("tracked"),
-                }
-                break
+                })
     return out
 
 
@@ -181,39 +188,46 @@ def sync(dry_run: bool = False):
     for combo, children in bundles.items():
         buildable = min(int(avail.get(c, 0) // q) for c, q in children)
         target = max(buildable - buffer, 0)
-        v = vmap.get(combo)
-        if not v:
+        variants = vmap.get(combo)
+        if not variants:
             results.append((combo, buildable, target, "not-on-shopify"))
             continue
         if dry_run:
-            results.append((combo, buildable, target, "dry-run"))
-            logger.info("[dry] %s buildable=%d target=%d", combo, buildable, target)
+            results.append((combo, buildable, target, f"dry-run ({len(variants)}v)"))
+            logger.info("[dry] %s buildable=%d target=%d variants=%d", combo, buildable, target, len(variants))
             continue
-        iid = int(v["inventory_item_id"])
-        if not v.get("tracked"):
-            requests.post(
-                f"{SHOP}/admin/api/{API}/graphql.json",
+        # Push to EVERY variant that shares this combo SKU (cross-listings),
+        # otherwise the hourly stock sync strands the extras at 0.
+        ok = 0
+        n = len(variants)
+        for v in variants:
+            iid = int(v["inventory_item_id"])
+            if not v.get("tracked"):
+                requests.post(
+                    f"{SHOP}/admin/api/{API}/graphql.json",
+                    headers=sh,
+                    json={"query": 'mutation{ inventoryItemUpdate(id:"gid://shopify/InventoryItem/%s", input:{tracked:true}){inventoryItem{id}}}' % iid},
+                    timeout=30,
+                )
+            # policy -> deny (stop overselling between runs)
+            requests.put(
+                f"{SHOP}/admin/api/{API}/variants/{v['variant_id']}.json",
                 headers=sh,
-                json={"query": 'mutation{ inventoryItemUpdate(id:"gid://shopify/InventoryItem/%s", input:{tracked:true}){inventoryItem{id}}}' % iid},
+                json={"variant": {"id": int(v["variant_id"]), "inventory_policy": "deny"}},
                 timeout=30,
             )
-        # policy -> deny (stop overselling between runs)
-        requests.put(
-            f"{SHOP}/admin/api/{API}/variants/{v['variant_id']}.json",
-            headers=sh,
-            json={"variant": {"id": int(v["variant_id"]), "inventory_policy": "deny"}},
-            timeout=30,
-        )
-        rs = requests.post(
-            f"{SHOP}/admin/api/{API}/inventory_levels/set.json",
-            headers=sh,
-            json={"location_id": LOCATION_ID, "inventory_item_id": iid, "available": target},
-            timeout=30,
-        )
-        ok = rs.status_code in (200, 201)
-        synced += 1 if ok else 0
-        results.append((combo, buildable, target, "OK" if ok else f"FAIL{rs.status_code}"))
-        logger.info("%s buildable=%d -> pushed=%d %s", combo, buildable, target, "OK" if ok else f"FAIL{rs.status_code}")
+            rs = requests.post(
+                f"{SHOP}/admin/api/{API}/inventory_levels/set.json",
+                headers=sh,
+                json={"location_id": LOCATION_ID, "inventory_item_id": iid, "available": target},
+                timeout=30,
+            )
+            if rs.status_code in (200, 201):
+                ok += 1
+        status = "OK" if ok == n else f"PARTIAL{ok}/{n}"
+        synced += 1 if ok == n else 0
+        results.append((combo, buildable, target, status if n == 1 else f"{status} ({n}v)"))
+        logger.info("%s buildable=%d -> pushed=%d to %d/%d variants %s", combo, buildable, target, ok, n, status)
 
     on_shop = [r for r in results if r[3] not in ("not-on-shopify",)]
     logger.info("=== Combo inventory sync: %d/%d pushed (buffer=%d) ===", synced, len(on_shop), buffer)
