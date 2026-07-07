@@ -1126,29 +1126,49 @@ class SwiggyScraper:
         self._log.info("[Swiggy] Attempting download...")
         self._shot("before_download_click")
 
-        # Strategy 1: expect_download wrapping locator.click()
-        # The download-icon div (imads__Ri7gC) is the clickable area.
-        for selector in [
-            '[data-testid="download-icon"]',
-            '[class*="Ri7gC"]',
-        ]:
+        # Strategy 1: persistent download handler + fresh nav + click retries.
+        # Why not a plain expect_download: after Phase 2's repeated reloads the
+        # Instamart SPA can enter a state where clicking the download-icon never
+        # fires a browser 'download' event, so expect_download times out (this
+        # recurred across multiple days). A fresh goto to the sales page resets the
+        # SPA to a clean state where the click reliably downloads; we register a
+        # persistent download listener and retry the click WITHOUT reloading
+        # (reloading blanks the Available Reports list and defeats any retry). The
+        # newest report — our just-generated one — is the first download-icon.
+        downloads = []
+        _dl_handler = lambda d: downloads.append(d)
+        self._page.on("download", _dl_handler)
+        try:
             try:
-                loc = self._page.locator(selector).first
-                if not loc.is_visible(timeout=2_000):
-                    continue
-                self._log.info("[Swiggy] Clicking download via locator: %s", selector)
+                self._page.goto(SALES_URL, wait_until="domcontentloaded")
+                self._page.wait_for_timeout(6_000)
+            except Exception:
+                pass
+            icons = self._page.locator('[data-testid="download-icon"]')
+            for attempt in range(1, 5):
+                downloads.clear()
                 try:
-                    with self._page.expect_download(timeout=30_000) as dl_info:
-                        loc.click(force=True)
-                    dl = dl_info.value
-                    suggested = dl.suggested_filename or ""
-                    if suggested.lower().endswith(".csv"):
-                        output_path = output_path.with_suffix(".csv")
-                    dl.save_as(str(output_path))
-                    self._log.info("[Swiggy] Downloaded (expect_download): %s", output_path)
-                    return output_path
+                    ic = icons.first
+                    ic.scroll_into_view_if_needed(timeout=5_000)
+                    self._log.info("[Swiggy] Download click attempt %d/4", attempt)
+                    ic.click(force=True)
                 except Exception as e:
-                    self._log.warning("[Swiggy] expect_download failed (%s): %s", selector, e)
+                    self._log.warning("[Swiggy] download click error: %s", e)
+                for _ in range(35):  # up to ~35s for the download event to fire
+                    if downloads:
+                        dl = downloads[0]
+                        suggested = dl.suggested_filename or ""
+                        if suggested.lower().endswith(".csv"):
+                            output_path = output_path.with_suffix(".csv")
+                        dl.save_as(str(output_path))
+                        self._log.info("[Swiggy] Downloaded (download event): %s", output_path)
+                        return output_path
+                    self._page.wait_for_timeout(1_000)
+                self._log.warning("[Swiggy] No download on attempt %d/4; retrying (no reload)", attempt)
+                self._page.wait_for_timeout(2_000)
+        finally:
+            try:
+                self._page.remove_listener("download", _dl_handler)
             except Exception:
                 pass
 
@@ -1293,7 +1313,7 @@ class SwiggyScraper:
                     el.click()
                     self._page.wait_for_timeout(4000)
                     if "stock-on-hand" in self._page.url or _bulk_download_visible():
-                        self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link (match %d) → %s",
+                        self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link (match %d) -> %s",
                                        i, self._page.url)
                         clicked_soh = True
                         break
