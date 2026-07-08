@@ -42,9 +42,14 @@ except ImportError:
     except Exception:
         _upload_to_drive = None
 
-# Force UTF-8 output to avoid Windows cp1252 encoding errors (skip on Linux CI)
+# Force UTF-8 output to avoid Windows cp1252 encoding errors (skip on Linux CI).
+# Guarded: in background/detached mode stdout may be closed, and accessing
+# .buffer raises ValueError — tolerate it rather than crash the import.
 if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    except (ValueError, AttributeError):
+        pass
 
 # --- Paths ---
 _HERE = Path(__file__).resolve().parent

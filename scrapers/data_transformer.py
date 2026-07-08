@@ -35,6 +35,27 @@ class DataTransformer:
         self._warehouse_cache: dict[tuple, int] = {}
         self._product_cache: dict[tuple, int] = {}  # (portal_id, portal_product_id) → product_id
         self._sku_cache: dict[str, int] = {}         # sku_code → product_id (direct lookup)
+        # normalise_city_name(name) → city_id, built lazily.  Lets us resolve
+        # casing/alias variants (PUNE, Pune, pune, BANGALORE/Bengaluru) to the
+        # one existing canonical city instead of creating a duplicate row.
+        self._city_norm_index: dict[str, int] | None = None
+
+    def _norm_city_key(self, name: str) -> str:
+        try:
+            return normalise_city_name(name)
+        except Exception:
+            return (name or "").strip().lower()
+
+    def _ensure_city_index(self) -> None:
+        if self._city_norm_index is not None:
+            return
+        from backend.app.models.metadata import City
+        self._city_norm_index = {}
+        # Lowest id wins as canonical when several rows share a normalised key.
+        for c in self.db.query(City).order_by(City.id).all():
+            key = self._norm_city_key(c.name)
+            if key and key not in self._city_norm_index:
+                self._city_norm_index[key] = c.id
 
     def _get_portal_id(self, name: str) -> int | None:
         canonical = PORTAL_ALIASES.get(name, name)
@@ -70,13 +91,26 @@ class DataTransformer:
         # 3. Look up / create city in DB
         if canonical not in self._city_cache:
             from backend.app.models.metadata import City
-            city = self.db.query(City).filter_by(name=canonical).first()
+            self._ensure_city_index()
+            norm_key = self._norm_city_key(canonical)
+
+            # Resolve via normalised index (handles casing + aliases), then fall
+            # back to an exact-name match for safety.
+            city = None
+            existing_id = self._city_norm_index.get(norm_key) if norm_key else None
+            if existing_id is not None:
+                city = self.db.get(City, existing_id)
+            if city is None:
+                city = self.db.query(City).filter_by(name=canonical).first()
+
             if not city:
                 region = pin_region or CITY_REGION_MAP.get(canonical)
                 city = City(name=canonical, state=pin_state, region=region)
                 self.db.add(city)
                 self.db.flush()
                 logger.info("Created city: %s (state=%s, region=%s)", canonical, pin_state, region)
+                if norm_key:
+                    self._city_norm_index[norm_key] = city.id
             else:
                 # Backfill state if we have it and it's missing in DB
                 updated = False
