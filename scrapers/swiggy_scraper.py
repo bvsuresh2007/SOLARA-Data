@@ -1126,31 +1126,35 @@ class SwiggyScraper:
         self._log.info("[Swiggy] Attempting download...")
         self._shot("before_download_click")
 
-        # Strategy 1: persistent download handler + fresh nav + click retries.
-        # Why not a plain expect_download: after Phase 2's repeated reloads the
-        # Instamart SPA can enter a state where clicking the download-icon never
-        # fires a browser 'download' event, so expect_download times out (this
-        # recurred across multiple days). A fresh goto to the sales page resets the
-        # SPA to a clean state where the click reliably downloads; we register a
-        # persistent download listener and retry the click WITHOUT reloading
-        # (reloading blanks the Available Reports list and defeats any retry). The
-        # newest report — our just-generated one — is the first download-icon.
-        downloads = []
-        _dl_handler = lambda d: downloads.append(d)
-        self._page.on("download", _dl_handler)
+        # Strategy 1: download from a BRAND-NEW page in the same browser context.
+        #
+        # After the generate->poll sequence (date-picker interaction, a JS-dispatched
+        # "Generate Report" click, then many page.reload()s) the Instamart SPA on the
+        # working page stops firing browser 'download' events when the download-icon
+        # is clicked — expect_download and even a persistent download listener both
+        # time out, and the icon detaches after the first click. Navigating the same
+        # page back to SALES_URL does NOT recover it.
+        #
+        # A fresh page in the same context (same cookies/session, no re-login) gets a
+        # clean SPA instance where the click reliably downloads. This mirrors the
+        # manual fresh-session workaround that succeeded on every attempt (Jul 5-7).
+        # Retries never reload — a reload blanks the Available Reports list. The
+        # newest report (our just-generated one) is the first download-icon.
+        dl_page = None
         try:
-            try:
-                self._page.goto(SALES_URL, wait_until="domcontentloaded")
-                self._page.wait_for_timeout(6_000)
-            except Exception:
-                pass
-            icons = self._page.locator('[data-testid="download-icon"]')
+            dl_page = self._ctx.new_page()
+            downloads = []
+            dl_page.on("download", lambda d: downloads.append(d))
+            dl_page.goto(SALES_URL, wait_until="domcontentloaded")
+            dl_page.wait_for_timeout(7_000)
+            icons = dl_page.locator('[data-testid="download-icon"]')
+            self._log.info("[Swiggy] Fresh page ready: %d download-icon(s)", icons.count())
             for attempt in range(1, 5):
                 downloads.clear()
                 try:
                     ic = icons.first
                     ic.scroll_into_view_if_needed(timeout=5_000)
-                    self._log.info("[Swiggy] Download click attempt %d/4", attempt)
+                    self._log.info("[Swiggy] Download click attempt %d/4 (fresh page)", attempt)
                     ic.click(force=True)
                 except Exception as e:
                     self._log.warning("[Swiggy] download click error: %s", e)
@@ -1161,14 +1165,17 @@ class SwiggyScraper:
                         if suggested.lower().endswith(".csv"):
                             output_path = output_path.with_suffix(".csv")
                         dl.save_as(str(output_path))
-                        self._log.info("[Swiggy] Downloaded (download event): %s", output_path)
+                        self._log.info("[Swiggy] Downloaded (fresh page): %s", output_path)
                         return output_path
-                    self._page.wait_for_timeout(1_000)
+                    dl_page.wait_for_timeout(1_000)
                 self._log.warning("[Swiggy] No download on attempt %d/4; retrying (no reload)", attempt)
-                self._page.wait_for_timeout(2_000)
+                dl_page.wait_for_timeout(2_000)
+        except Exception as e:
+            self._log.warning("[Swiggy] fresh-page download failed: %s", e)
         finally:
             try:
-                self._page.remove_listener("download", _dl_handler)
+                if dl_page is not None:
+                    dl_page.close()
             except Exception:
                 pass
 
