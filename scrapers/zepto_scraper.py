@@ -60,6 +60,14 @@ class ZeptoScraper(BaseScraper):
 
     SESSION_FILE = Path(__file__).resolve().parent / "sessions" / "zepto_session.json"
 
+    # Zepto sessions go stale within ~24h yet still pass the URL-based validity
+    # check in login() (the reports page loads, no /login redirect) while failing
+    # the actual "Request Report" action. That produced a daily first-run timeout
+    # that only a forced-fresh OTP login recovered. So always log in fresh: skip the
+    # Drive session download and start the browser with no saved session.
+    # OTP is auto-fetched from Gmail, so this is reliable and self-contained.
+    FORCE_FRESH_LOGIN = True
+
     def _init_browser(self):
         # Reset asyncio event loop so retries don't hit "Sync API inside asyncio loop"
         import asyncio
@@ -378,7 +386,13 @@ class ZeptoScraper(BaseScraper):
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 
-        download_session_file("zepto")
+        if getattr(self, "FORCE_FRESH_LOGIN", False):
+            # Don't pull the stale session from Drive; unlink any local copy so
+            # _init_browser() starts clean and login() goes straight to a fresh OTP.
+            self.SESSION_FILE.unlink(missing_ok=True)
+            logger.info("[Zepto] FORCE_FRESH_LOGIN — skipping Drive session download; will OTP fresh")
+        else:
+            download_session_file("zepto")
 
         result = {
             "portal": self.portal_name,
