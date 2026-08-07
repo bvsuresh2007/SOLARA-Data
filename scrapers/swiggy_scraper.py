@@ -92,6 +92,14 @@ class SwiggyScraper:
 
     portal_name = "swiggy"
 
+    # The persistent-profile session frequently passes the URL-based _is_logged_in()
+    # check (no /login redirect) yet the sales SPA never hydrates "Generate Report",
+    # so the FIRST run failed every single day (Jul 30-Aug 6, 7 days straight) and only
+    # a fresh-OTP retry recovered it. Always start from a clean session: clear cookies +
+    # storage so the portal forces the login page, then do a fresh OTP login. OTP is
+    # auto-fetched from Gmail, so this stays fully autonomous.
+    FORCE_FRESH_LOGIN = True
+
     def __init__(self, headless: bool = True, raw_data_path: str = None):
         self.headless      = headless
         self.raw_data_path = Path(raw_data_path or os.getenv("RAW_DATA_PATH", "./data/raw"))
@@ -412,6 +420,26 @@ class SwiggyScraper:
         needed if the session is still valid. Falls back to full re-auth
         (OTP via Gmail) if the session has expired.
         """
+        if getattr(self, "FORCE_FRESH_LOGIN", False):
+            # Clear the stale session so _re_auth() lands on the login page and does a
+            # real OTP login (otherwise the stale cookie passes _is_logged_in() and the
+            # sales page never hydrates Generate Report -> first-run failure).
+            self._log.info("[Swiggy] FORCE_FRESH_LOGIN — clearing session for fresh OTP login")
+            try:
+                self._page.goto(SALES_URL, wait_until="domcontentloaded")
+                self._page.wait_for_timeout(1500)
+                self._ctx.clear_cookies()
+                try:
+                    self._page.evaluate(
+                        "() => { try { localStorage.clear(); sessionStorage.clear(); } catch(e){} }"
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                self._log.warning("[Swiggy] force-fresh session clear failed: %s", e)
+            self._re_auth()
+            return
+
         self._log.info("[Swiggy] Navigating to %s", SALES_URL)
         self._page.goto(SALES_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(3000)
