@@ -29,7 +29,6 @@ logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 # Anchor token.json to the project root (two levels up from scrapers/)
