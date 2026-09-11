@@ -100,7 +100,22 @@ def sync(report_date: date | str | None = None):
 
     # Slow path: create new query from scratch
     logger.info("Creating new Data Kiosk query (slow path ~15-30 min)")
-    result = scraper.pull_inventory(report_date)
+    try:
+        result = scraper.pull_inventory(report_date)
+    except Exception as e:
+        # A 429 QuotaExceeded or a wake-from-sleep DNS failure must not crash the
+        # whole sync (it would abort before cleanup and bubble up unhandled).
+        # Return a structured error so the caller/backfill records the miss and
+        # moves on; the date self-heals on a later pull.
+        logger.error("Inventory slow-path pull failed for %s: %s", report_date, e)
+        return {
+            "portal": "amazon_sp_api",
+            "date": report_date,
+            "type": "inventory",
+            "file": None,
+            "status": "error",
+            "error": str(e),
+        }
 
     if result["status"] != "success":
         logger.error("Inventory pull failed: %s", result)
