@@ -140,6 +140,21 @@ def ingest_amazon_sp_api(report_date):
                 "data_source": "sp_api",
             })
 
+        # Collapse rows that share a product_id (>1 ASIN -> same product), otherwise the
+        # batch upsert raises CardinalityViolation (same (portal,product,date) twice in one
+        # INSERT) and the whole amazon day fails to land. Sum units/revenue, recompute asp.
+        agg = {}
+        for r in daily_rows:
+            key = (r["portal_id"], r["product_id"], r["sale_date"])
+            if key in agg:
+                agg[key]["units_sold"] += r["units_sold"]
+                agg[key]["revenue"] += r["revenue"]
+            else:
+                agg[key] = dict(r)
+        daily_rows = list(agg.values())
+        for r in daily_rows:
+            r["asp"] = round(r["revenue"] / r["units_sold"], 2) if r["units_sold"] > 0 else None
+
         for i in range(0, len(daily_rows), BATCH):
             db.execute(insert(DailySales).values(daily_rows[i:i + BATCH]).on_conflict_do_update(
                 index_elements=["portal_id", "product_id", "sale_date"],
