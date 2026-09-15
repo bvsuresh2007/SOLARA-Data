@@ -47,6 +47,27 @@ function tickLabel(dateStr: string, g: Granularity): string {
   return format(dt, "d MMM");
 }
 
+function fmtNum(v: number): string {
+  return new Intl.NumberFormat("en-IN").format(Math.round(v));
+}
+
+function TrendTooltip({ active, payload, label, gran }: {
+  active?: boolean;
+  payload?: { payload: SalesTrend }[];
+  label?: string;
+  gran: Granularity;
+}) {
+  if (!active || !payload || !payload.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div style={{ ...TOOLTIP_STYLE, padding: "8px 10px" }}>
+      <div style={{ color: "#a1a1aa", marginBottom: 4 }}>{tickLabel(label ?? "", gran)}</div>
+      <div style={{ color: "#f97316" }}>Revenue: {fmtRevenue(d.total_revenue)}</div>
+      <div style={{ color: "#e4e4e7", marginTop: 2 }}>Units: {fmtNum(d.total_quantity)}</div>
+    </div>
+  );
+}
+
 const GRANULARITIES: { key: Granularity; label: string }[] = [
   { key: "day",   label: "Day" },
   { key: "week",  label: "Week" },
@@ -106,11 +127,8 @@ export function RevenueTrend({ data }: Props) {
               width={65}
             />
             <Tooltip
-              contentStyle={TOOLTIP_STYLE}
-              labelStyle={{ color: "#a1a1aa", marginBottom: 4 }}
-              itemStyle={{ color: "#f97316" }}
-              formatter={(v: number) => [fmtRevenue(v), "Revenue"]}
-              labelFormatter={(v) => tickLabel(v, gran)}
+              content={<TrendTooltip gran={gran} />}
+              cursor={{ stroke: "#3f3f46", strokeWidth: 1 }}
             />
             <Area
               type="monotone"
