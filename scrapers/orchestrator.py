@@ -23,8 +23,9 @@ load_dotenv()
 from scrapers.swiggy_scraper             import SwiggyScraper
 from scrapers.blinkit_scraper            import BlinkitScraper
 from scrapers.zepto_scraper              import ZeptoScraper
-from scrapers.easyecom_scraper           import EasyecomScraper
-from scrapers.easyecom_inventory_scraper import EasyecomInventoryScraper
+# EasyEcom scrapers intentionally NOT imported/run — removed from the
+# dailyrun 2026-09-15 (user directive). WH Stock is authoritative from
+# Atlas (atlas_wh_stock_sync); EasyEcom sales was an empty mini-report.
 from scrapers.amazon_pi_scraper          import AmazonPIScraper
 from scrapers.excel_parser               import get_parser
 from scrapers.data_transformer           import DataTransformer
@@ -40,9 +41,10 @@ SCRAPERS = [
     SwiggyScraper,
     BlinkitScraper,
     ZeptoScraper,
-    EasyecomScraper,           # sales: Shopify, Vaaree, Offline, Meesho, Nykaa Fashion, CRED
-    EasyecomInventoryScraper,  # inventory for same portals
     AmazonPIScraper,           # Amazon PI sales data
+    # EasyEcom (sales + inventory) intentionally excluded 2026-09-15 (user
+    # directive): WH Stock is authoritative from Atlas; EasyEcom sales was
+    # an empty/immaterial mini-report.
 ]
 
 
