@@ -72,7 +72,8 @@ def _profile_dir() -> Path:
 # Swiggy migrated from partner.swiggy.com → partner.instamart.in
 LOGIN_URL = "https://partner.instamart.in/"
 SALES_URL = os.environ.get("SWIGGY_LINK", "https://partner.instamart.in/instamart/sales")
-SOH_URL   = "https://partner.instamart.in/instamart/for-supply/inventory/stock-on-hand"
+SOH_URL   = os.environ.get("SWIGGY_SOH_URL",
+                           "https://partner.instamart.in/im-vendor/stock-on-hand")
 DOWNLOADS_URL = "https://partner.instamart.in/instamart/downloads"
 
 # Both old and new domains are accepted (migration may be in-progress)
@@ -1270,186 +1271,131 @@ class SwiggyScraper:
 
     def _download_soh_report(self, report_date: date) -> "Path | None":
         """
-        Click 'Bulk Download' on the Stock On Hand page, then navigate to Downloads
-        and download the latest Stock On Hand report.
+        Download the Stock-On-Hand report from the /im-vendor supply portal.
+
+        Swiggy migrated the vendor portal to the /im-vendor/ namespace (Sep 2026):
+        SOH_URL = /im-vendor/stock-on-hand (the old /instamart/for-supply/... 404s).
+        Flow:
+          1. goto SOH_URL (loads the SOH table).
+          2. click 'Bulk Download' -> enqueues an ASYNC report (toast: "Downloads
+             are in progress. You will be able to download them from downloads").
+          3. go to /im-vendor/downloads, poll (using 'Refresh List') until a
+             'Stock On Hand' row shows a ready 'Download' action (not "Waiting for
+             Files to be ready"), then download THAT row. Never a 'Purchase Orders'
+             row.
+        A page-wide floating-ui overlay (div[data-floating-ui-portal]) intercepts
+        clicks, so strip empty overlay portals and use force / JS-dispatch clicks.
         Saves as swiggy_soh_YYYY-MM-DD.csv.
         """
         date_str = report_date.strftime("%Y-%m-%d")
         output_path = self.out_dir / f"swiggy_soh_{date_str}.csv"
+        DOWNLOADS_PAGE = "https://partner.instamart.in/im-vendor/downloads"
 
-        def _bulk_download_visible() -> bool:
-            """True if a visible exact 'Bulk Download' control is present."""
+        def _kill_overlays():
             try:
-                loc = self._page.get_by_text("Bulk Download", exact=True)
-                for i in range(loc.count()):
-                    if loc.nth(i).is_visible():
-                        return True
+                self._page.evaluate(
+                    "() => document.querySelectorAll('[data-floating-ui-portal]')"
+                    ".forEach(e => { if ((e.innerText || '').trim().length < 3) e.remove(); })"
+                )
             except Exception:
                 pass
+
+        def _robust_click(locator) -> bool:
+            _kill_overlays()
+            for how in ("normal", "force", "js"):
+                try:
+                    if how == "normal":
+                        locator.click(timeout=6_000)
+                    elif how == "force":
+                        locator.click(force=True, timeout=6_000)
+                    else:
+                        locator.evaluate("el => el.click()")
+                    return True
+                except Exception:
+                    _kill_overlays()
             return False
 
-        # Swiggy's Instamart SPA (mid-2026): a hard goto to the /instamart/for-supply
-        # SOH deep-link does NOT hydrate the SOH view. You must enter the vendor app
-        # shell by clicking the "For Supply" tab (lands on /im-vendor/po-dashboard),
-        # then click the "Stock On Hand" sidebar item to reach /im-vendor/stock-on-hand
-        # where the "Bulk Download" control lives. Nav items are <div>s, so match by text.
+        def _first_visible(locator):
+            try:
+                n = locator.count()
+            except Exception:
+                return None
+            for i in range(n):
+                try:
+                    if locator.nth(i).is_visible():
+                        return locator.nth(i)
+                except Exception:
+                    continue
+            return None
+
+        # 1. Load the SOH view and request a fresh report via Bulk Download.
         self._log.info("[Swiggy] Navigating to Stock On Hand page: %s", SOH_URL)
         self._page.goto(SOH_URL, wait_until="domcontentloaded")
         self._page.wait_for_timeout(6000)
-
-        # Enter the For-Supply vendor app shell (retry — sidebar can be slow to render)
-        for fs_attempt in range(1, 4):
-            try:
-                for_supply_tab = self._page.get_by_text("For Supply", exact=True)
-                if for_supply_tab.count() > 0:
-                    for_supply_tab.first.click()
-                    self._log.info("[Swiggy] Clicked 'For Supply' tab (attempt %d)", fs_attempt)
-                    self._page.wait_for_timeout(6000)
-            except Exception:
-                pass  # tab may already be active
-
-            # Click the sidebar "Stock On Hand" item — iterate visible exact matches
-            # until we actually land on the SOH view (URL flips / Bulk Download appears).
-            soh_link = self._page.get_by_text("Stock On Hand", exact=True)
-            clicked_soh = False
-            for i in range(soh_link.count()):
-                try:
-                    el = soh_link.nth(i)
-                    if not el.is_visible():
-                        continue
-                    el.click()
-                    self._page.wait_for_timeout(4000)
-                    if "stock-on-hand" in self._page.url or _bulk_download_visible():
-                        self._log.info("[Swiggy] Clicked 'Stock On Hand' sidebar link (match %d) -> %s",
-                                       i, self._page.url)
-                        clicked_soh = True
-                        break
-                except Exception:
-                    continue
-
-            if clicked_soh or _bulk_download_visible():
-                break
-            self._log.warning("[Swiggy] SOH view not ready (attempt %d) — retrying navigation", fs_attempt)
-            self._page.goto(SOH_URL, wait_until="domcontentloaded")
-            self._page.wait_for_timeout(6000)
-
+        _kill_overlays()
         self._shot("swiggy_soh_before_bulk_download")
 
-        # Click the visible 'Bulk Download' control (nav items are <div>s)
-        try:
-            bulk_btn = None
-            bd = self._page.get_by_text("Bulk Download", exact=True)
-            for i in range(bd.count()):
-                if bd.nth(i).is_visible():
-                    bulk_btn = bd.nth(i)
-                    break
-            if bulk_btn is None:
-                # Fallback selectors (button/anchor variants)
-                for selector in [
-                    "button:has-text('Bulk Download')",
-                    "a:has-text('Bulk Download')",
-                    "[class*='bulk' i]:has-text('Download')",
-                ]:
-                    try:
-                        el = self._page.locator(selector).first
-                        el.wait_for(state="visible", timeout=5_000)
-                        bulk_btn = el
-                        break
-                    except Exception:
-                        continue
-
-            if bulk_btn is None:
-                raise Exception("Bulk Download button not found with any selector")
-
-            bulk_btn.click()
-            self._log.info("[Swiggy] Clicked 'Bulk Download' — report enqueued")
-            self._page.wait_for_timeout(2000)
-        except Exception as e:
-            self._log.error("[Swiggy] Could not click Bulk Download: %s", e)
+        bulk = _first_visible(self._page.get_by_text("Bulk Download", exact=True))
+        if bulk is None or not _robust_click(bulk):
+            self._log.error("[Swiggy] Could not click 'Bulk Download' on SOH page")
             self._shot("swiggy_soh_no_bulk_btn")
             return None
+        self._log.info("[Swiggy] Clicked 'Bulk Download' \u2014 SOH report requested (async)")
+        self._page.wait_for_timeout(3000)
 
-        # Click 'Downloads' sidebar link while For Supply sidebar is still visible
-        # Direct URL navigation 404s — must use the sidebar nav
-        self._log.info("[Swiggy] Clicking 'Downloads' sidebar link")
-        self._shot("swiggy_before_downloads_click")
-        clicked_downloads = False
-        for sel in [
-            "text=Downloads",
-            "[class*='nav'] >> text=Downloads",
-            "[class*='sidebar'] >> text=Downloads",
-            "[class*='menu'] >> text=Downloads",
-            "div >> text=Downloads",
-        ]:
-            try:
-                el = self._page.locator(sel).first
-                if el.count() > 0:
-                    el.click(timeout=5_000)
-                    clicked_downloads = True
-                    self._log.info("[Swiggy] Clicked Downloads via selector: %s", sel)
-                    break
-            except Exception:
-                continue
-        if not clicked_downloads:
-            try:
-                self._page.get_by_text("Downloads", exact=True).first.click(timeout=5_000)
-                clicked_downloads = True
-                self._log.info("[Swiggy] Clicked Downloads via get_by_text")
-            except Exception as e:
-                self._log.warning("[Swiggy] Could not click Downloads sidebar: %s", e)
-
-        self._page.wait_for_timeout(4000)
-        self._shot("swiggy_downloads_page")
-
-        # Poll for the latest ready Stock On Hand report (up to ~2 min)
-        MAX_POLLS = 12
+        # 2. Poll the Downloads page for a ready Stock-On-Hand report.
+        MAX_POLLS = 15   # ~5 min
         for attempt in range(MAX_POLLS):
-            try:
-                self._page.wait_for_selector("text=Stock On Hand", timeout=10_000)
-            except Exception:
-                self._log.warning("[Swiggy] 'Stock On Hand' row not visible on Downloads page yet (attempt %d)", attempt + 1)
-                self._page.reload(wait_until="domcontentloaded")
-                self._page.wait_for_timeout(5000)
-                continue
+            self._page.goto(DOWNLOADS_PAGE, wait_until="domcontentloaded")
+            self._page.wait_for_timeout(4000)
+            _kill_overlays()
+            refresh = _first_visible(self._page.get_by_text("Refresh List", exact=True))
+            if refresh is not None:
+                _robust_click(refresh)
+                self._page.wait_for_timeout(3000)
+                _kill_overlays()
 
-            # Find the Download button in the first Stock On Hand row
-            rows = self._page.locator("tr, [class*='row'], [class*='Row']").all()
-            download_btn = None
-            for row in rows:
-                if "Stock On Hand" in (row.inner_text() or ""):
-                    # Look for a Download button inside this row
-                    btn = row.locator("button:has-text('Download'), a:has-text('Download')").first
-                    if btn.count() > 0:
-                        download_btn = btn
+            # Newest-first: pick the first row that is a READY Stock-On-Hand report.
+            rows = self._page.locator("tr, [class*='row' i]")
+            target = None
+            try:
+                nrows = rows.count()
+            except Exception:
+                nrows = 0
+            for i in range(nrows):
+                try:
+                    txt = (rows.nth(i).inner_text() or "").lower()
+                except Exception:
+                    continue
+                if ("stock on hand" in txt and "download" in txt
+                        and "waiting" not in txt):
+                    dl = _first_visible(rows.nth(i).get_by_text("Download", exact=True))
+                    if dl is not None:
+                        target = dl
                         break
 
-            # Fallback: first Download button on page after Stock On Hand heading
-            if download_btn is None:
-                soh_heading = self._page.locator("text=Stock On Hand").first
-                if soh_heading.count() > 0:
-                    # Get the nearest sibling/parent download button
-                    download_btn = self._page.locator("button:has-text('Download'), a:has-text('Download')").first
-
-            if download_btn and download_btn.count() > 0:
-                self._log.info("[Swiggy] Found Download button — clicking")
+            if target is not None:
+                self._log.info("[Swiggy] Ready Stock-On-Hand report found \u2014 downloading")
                 try:
+                    _kill_overlays()
                     with self._page.expect_download(timeout=60_000) as dl_info:
-                        download_btn.click()
+                        if not _robust_click(target):
+                            raise Exception("download click failed")
                     dl = dl_info.value
                     dl.save_as(str(output_path))
-                    self._log.info("[Swiggy] SOH download complete: %s (%d bytes)", output_path, output_path.stat().st_size)
+                    self._log.info("[Swiggy] SOH download complete: %s (%d bytes)",
+                                   output_path, output_path.stat().st_size)
                     return output_path
                 except Exception as e:
                     self._log.error("[Swiggy] SOH download click failed: %s", e)
                     self._shot("swiggy_soh_download_failed")
                     return None
 
-            self._log.info("[Swiggy] Download not ready yet, waiting 10s (attempt %d/%d)…", attempt + 1, MAX_POLLS)
-            self._page.wait_for_timeout(10_000)
-            self._page.reload(wait_until="domcontentloaded")
-            self._page.wait_for_timeout(3000)
+            self._log.info("[Swiggy] SOH report not ready yet (attempt %d/%d) \u2014 waiting",
+                           attempt + 1, MAX_POLLS)
+            self._page.wait_for_timeout(18_000)
 
-        self._log.error("[Swiggy] SOH report did not become available after %d polls", MAX_POLLS)
+        self._log.error("[Swiggy] SOH report did not become ready after %d polls", MAX_POLLS)
         self._shot("swiggy_soh_timeout")
         return None
 
