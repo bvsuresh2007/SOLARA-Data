@@ -518,11 +518,20 @@ class EasyecomInventoryScraper(EasyecomBaseScraper):
         # --- DB upsert ---
         db = SessionLocal()
         try:
-            # Get EasyEcom portal_id
-            portal = db.query(Portal).filter_by(name="easyecom").first()
+            # Write to a DEDICATED, inactive 'easyecom_inventory' portal. Do NOT
+            # write to the 'easyecom' portal: the dashboard's WH-Stock column reads
+            # solara_stock on 'easyecom', which is OWNED by atlas_wh_stock_sync
+            # (Atlas Main-Warehouse actual_qty is the authoritative on-hand figure).
+            # Writing EasyEcom's old_quantity there clobbered the correct Atlas
+            # values (SKUs showed 0/wrong despite physical stock). EasyEcom's
+            # numbers are kept here for reference only.
+            portal = db.query(Portal).filter_by(name="easyecom_inventory").first()
             if not portal:
-                self._log.warning("[EasyEcom-Inv] 'easyecom' portal not found in DB — skipping upsert")
-                return 0
+                portal = Portal(name="easyecom_inventory",
+                                display_name="EasyEcom Inventory", is_active=False)
+                db.add(portal)
+                db.commit()
+                self._log.info("[EasyEcom-Inv] Created 'easyecom_inventory' portal (inactive)")
             portal_id = portal.id
 
             # Build {sku_code → product_id} map
