@@ -1343,8 +1343,56 @@ class SwiggyScraper:
         self._log.info("[Swiggy] Clicked 'Bulk Download' \u2014 SOH report requested (async)")
         self._page.wait_for_timeout(3000)
 
-        # 2. Poll the Downloads page for a ready Stock-On-Hand report.
-        MAX_POLLS = 15   # ~5 min
+        # 2. Poll the Downloads page for a FRESH (today-dated) Stock-On-Hand report.
+        #    Bulk Download enqueues a NEW report stamped with today's Requested Date;
+        #    we must wait for THAT one, not grab an older already-ready report (doing
+        #    so froze the SOH snapshot at an old date). Fall back to the most recent
+        #    ready report only if today's does not generate within the budget.
+        from datetime import date as _date
+        _today = _date.today()
+        today_label = f"{_today.day:02d} {_today.strftime('%b')} {_today.year}".lower()  # e.g. "20 sep 2026"
+
+        def _find_ready_soh(require_today: bool):
+            """Download control of the first ready Stock-On-Hand row (newest-first);
+            if require_today, only rows whose Requested Date is today's date."""
+            rows = self._page.locator("tr, [class*='row' i]")
+            try:
+                n = rows.count()
+            except Exception:
+                n = 0
+            for i in range(n):
+                try:
+                    txt = (rows.nth(i).inner_text() or "").lower()
+                except Exception:
+                    continue
+                if ("stock on hand" not in txt or "download" not in txt
+                        or "waiting" in txt):
+                    continue
+                if require_today and today_label not in txt:
+                    continue
+                dl = _first_visible(rows.nth(i).get_by_text("Download", exact=True))
+                if dl is not None:
+                    return dl
+            return None
+
+        def _do_download(target) -> "Path | None":
+            self._log.info("[Swiggy] Downloading Stock-On-Hand report")
+            try:
+                _kill_overlays()
+                with self._page.expect_download(timeout=60_000) as dl_info:
+                    if not _robust_click(target):
+                        raise Exception("download click failed")
+                dl = dl_info.value
+                dl.save_as(str(output_path))
+                self._log.info("[Swiggy] SOH download complete: %s (%d bytes)",
+                               output_path, output_path.stat().st_size)
+                return output_path
+            except Exception as e:
+                self._log.error("[Swiggy] SOH download click failed: %s", e)
+                self._shot("swiggy_soh_download_failed")
+                return None
+
+        MAX_POLLS = 20   # ~7 min - allow time for a fresh report to generate
         for attempt in range(MAX_POLLS):
             self._page.goto(DOWNLOADS_PAGE, wait_until="domcontentloaded")
             self._page.wait_for_timeout(4000)
@@ -1355,47 +1403,25 @@ class SwiggyScraper:
                 self._page.wait_for_timeout(3000)
                 _kill_overlays()
 
-            # Newest-first: pick the first row that is a READY Stock-On-Hand report.
-            rows = self._page.locator("tr, [class*='row' i]")
-            target = None
-            try:
-                nrows = rows.count()
-            except Exception:
-                nrows = 0
-            for i in range(nrows):
-                try:
-                    txt = (rows.nth(i).inner_text() or "").lower()
-                except Exception:
-                    continue
-                if ("stock on hand" in txt and "download" in txt
-                        and "waiting" not in txt):
-                    dl = _first_visible(rows.nth(i).get_by_text("Download", exact=True))
-                    if dl is not None:
-                        target = dl
-                        break
+            fresh = _find_ready_soh(require_today=True)
+            if fresh is not None:
+                self._log.info("[Swiggy] Fresh (%s) Stock-On-Hand report ready", today_label)
+                return _do_download(fresh)
 
-            if target is not None:
-                self._log.info("[Swiggy] Ready Stock-On-Hand report found \u2014 downloading")
-                try:
-                    _kill_overlays()
-                    with self._page.expect_download(timeout=60_000) as dl_info:
-                        if not _robust_click(target):
-                            raise Exception("download click failed")
-                    dl = dl_info.value
-                    dl.save_as(str(output_path))
-                    self._log.info("[Swiggy] SOH download complete: %s (%d bytes)",
-                                   output_path, output_path.stat().st_size)
-                    return output_path
-                except Exception as e:
-                    self._log.error("[Swiggy] SOH download click failed: %s", e)
-                    self._shot("swiggy_soh_download_failed")
-                    return None
-
-            self._log.info("[Swiggy] SOH report not ready yet (attempt %d/%d) \u2014 waiting",
+            self._log.info("[Swiggy] Today's SOH report not ready yet (attempt %d/%d) - waiting",
                            attempt + 1, MAX_POLLS)
             self._page.wait_for_timeout(18_000)
 
-        self._log.error("[Swiggy] SOH report did not become ready after %d polls", MAX_POLLS)
+        # Budget exhausted - fall back to the most recent ready report (may be stale).
+        self._log.warning("[Swiggy] Today's SOH report not ready after %d polls; falling back "
+                          "to the most recent available report (may be stale)", MAX_POLLS)
+        self._page.goto(DOWNLOADS_PAGE, wait_until="domcontentloaded")
+        self._page.wait_for_timeout(4000)
+        _kill_overlays()
+        stale = _find_ready_soh(require_today=False)
+        if stale is not None:
+            return _do_download(stale)
+        self._log.error("[Swiggy] No Stock-On-Hand report available at all")
         self._shot("swiggy_soh_timeout")
         return None
 
