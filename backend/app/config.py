@@ -26,6 +26,22 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_secret_key: str = "change-me-in-production"
 
+    # External API access — comma-separated API keys that grant programmatic
+    # (server-to-server) access to /api, e.g. the autonomous runner.
+    # EMPTY = auth disabled (open), so local/dev keeps working unchanged.
+    dashboard_api_keys: str = Field(default="", alias="DASHBOARD_API_KEYS")
+
+    # Browser origins allowed to call /api without a key (the dashboard UI) and
+    # used for CORS. Comma-separated.
+    allowed_origins: str = Field(
+        default=(
+            "http://localhost:3000,"
+            "http://localhost:3131,"
+            "https://solara-frontend-891651347357.asia-south1.run.app"
+        ),
+        alias="ALLOWED_ORIGINS",
+    )
+
     # Data paths
     raw_data_path: str = "./data/raw"
     processed_data_path: str = "./data/processed"
@@ -44,6 +60,13 @@ class Settings(BaseSettings):
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    def api_key_set(self) -> set[str]:
+        """Configured external API keys (empty set = auth disabled)."""
+        return {k.strip() for k in self.dashboard_api_keys.split(",") if k.strip()}
+
+    def allowed_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
     model_config = {
         "env_file": _ENV_FILE,
