@@ -61,9 +61,31 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
+    def api_key_map(self) -> dict[str, str]:
+        """External API keys mapped to an owner label.
+
+        Each comma-separated entry is either ``label:key`` (per-person, so a key
+        is attributable and individually revocable) or a bare ``key`` (labelled
+        "unnamed"). Keys are colon-free (url-safe tokens), so splitting on the
+        first ``:`` is unambiguous. Empty = auth disabled.
+        """
+        out: dict[str, str] = {}
+        for raw in self.dashboard_api_keys.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                label, key = entry.split(":", 1)
+                label, key = label.strip() or "unnamed", key.strip()
+            else:
+                label, key = "unnamed", entry
+            if key:
+                out[key] = label
+        return out
+
     def api_key_set(self) -> set[str]:
         """Configured external API keys (empty set = auth disabled)."""
-        return {k.strip() for k in self.dashboard_api_keys.split(",") if k.strip()}
+        return set(self.api_key_map())
 
     def allowed_origin_list(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]

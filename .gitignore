@@ -95,3 +95,6 @@ frontend/next-env.d.ts
 gitignore.txt
 frontend/package-lock.json
 frontend/package-lock.json
+
+# Generated per-person API keys (never commit)
+api-keys-out/

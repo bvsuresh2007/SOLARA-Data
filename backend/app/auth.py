@@ -2,9 +2,11 @@
 
 Model
 -----
-- Programmatic consumers (e.g. the autonomous runner) authenticate with a key
-  sent as ``X-API-Key: <key>`` or ``Authorization: Bearer <key>``, matched
-  against the allowlist in ``DASHBOARD_API_KEYS``.
+- Programmatic consumers (team members, tools, the autonomous runner)
+  authenticate with a key sent as ``X-API-Key: <key>`` or
+  ``Authorization: Bearer <key>``, matched against the allowlist in
+  ``DASHBOARD_API_KEYS``. Entries are per-person ``label:key`` so each call is
+  attributable to an owner (logged) and a key can be revoked individually.
 - The existing browser dashboard calls /api directly with no key; it is let
   through when its request carries one of the trusted browser ``Origin`` values
   (the same set used for CORS), so the UI keeps working.
@@ -45,12 +47,14 @@ async def require_api_key(request: Request) -> None:
     if request.method == "OPTIONS":
         return
 
-    keys = settings.api_key_set()
-    if not keys:
+    key_map = settings.api_key_map()
+    if not key_map:
         return  # auth disabled (no keys configured)
 
     provided = _provided_key(request)
-    if provided and provided in keys:
+    if provided and provided in key_map:
+        logger.info("API access by key owner '%s' — %s %s",
+                    key_map[provided], request.method, request.url.path)
         return
 
     origin = request.headers.get("origin", "")
