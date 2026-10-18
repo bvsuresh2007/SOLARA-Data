@@ -40,6 +40,7 @@ class SalesSummary(BaseModel):
     total_discount: Optional[float] = None      # not yet in DB schema
     record_count: int
     active_skus: int = 0
+    data_as_of: Optional[str] = None            # ISO timestamp of latest imported_at
 
 
 class SalesByDimension(BaseModel):
@@ -88,6 +89,7 @@ class PortalDailyRow(BaseModel):
     open_po: Optional[float] = None        # Amazon open PO quantity (from SP-API sourcingView)
     swiggy_stock: Optional[float] = None   # Swiggy portal_stock (from SOH report)
     zepto_stock: Optional[float] = None    # Zepto portal_stock (from Vendor Inventory_F)
+    flipkart_stock: Optional[float] = None  # Flipkart ATP inventory (from ATP dump)
     backend_qty: Optional[float] = None    # Blinkit backend inventory (from SOH report)
     frontend_qty: Optional[float] = None   # Blinkit frontend inventory (from SOH report)
     daily_units: Dict[str, Optional[int]]   # "2026-02-01" → units (None = no sale)

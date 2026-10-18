@@ -183,6 +183,7 @@ function SalesContent() {
         <KpiStrip
           summary={summary}
           prevSummary={prevSummary}
+          prevRange={prevPeriod}
           topByRevenue={topByRevenue ? { name: topByRevenue.dimension_name, value: topByRevenue.total_revenue } : null}
           topByUnits={topByUnits ? { name: topByUnits.dimension_name, value: topByUnits.total_quantity } : null}
         />

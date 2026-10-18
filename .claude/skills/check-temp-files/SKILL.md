@@ -1,65 +1,104 @@
 ---
 name: check-temp-files
-description: Scan unstaged and untracked files for temporary file patterns (copies, backups, scratch files, temp test files) before they accidentally get committed.
+description: Child of /commit (Step 1 — pre-flight). Also works standalone. Scans unstaged/untracked files for temp/backup patterns, flags .env* files as Critical, and flags temp/backup junk at root. Always asks before acting — never assumes. Does NOT handle moving project files to subdirectories (that is doc-consolidate's job).
 ---
 
-**Scope**: Checks **unstaged and untracked files only** — files NOT yet added to git. Catches temporary files BEFORE they enter the repository.
+**Scope:** Unstaged and untracked files only.
+
+**Ownership:**
+- This skill: temp files, backup copies, scratch files, draft files, `.env*` credential files — anywhere in the project.
+- `doc-consolidate`: moving legitimate source files to correct subdirectories.
+
+**Rule: ask before any action. Never delete or gitignore without confirmation.**
 
 ---
 
-## Step 1: Check Git Status
+## Step 1: Get Status
 
-- Run `git status` to see all current changes.
-- Focus ONLY on:
-  - **Unstaged files** (modified but not yet staged with `git add`)
-  - **Untracked files** (new files not yet added to git)
-- Do NOT check files already staged or committed.
+```bash
+git status
+```
 
-## Step 2: Analyze Files for Temporary Patterns
+Focus on unstaged (modified, not staged) and untracked files only.
 
-For each unstaged/untracked file, check for:
+---
 
-### Copy Files
-- Names containing ` - Copy`, `_copy`, `.copy`, `(copy)`, `Copy of`
+## Step 2: Flag Credential Files (Critical)
 
-### Backup Files
-- Extensions `.bak`, `.backup`
-- Names containing `_backup`, `_bak`, `backup_`
+Flag any `.env*` file that is unstaged or untracked — **regardless of `.gitignore`**:
+- `.env`, `.env.local`, `.env.production`, `.env.staging`, `.env.development`, any `.env.*`
 
-### Temporary Test Files
-- Files with "test" in the name that are NOT in a proper test directory
-- Valid test directories: `tests/`, `test/`, `__tests__/`, `backend/tests/`
-- Flag test files outside these directories
+> "🔴 CRITICAL: `.env.local` is untracked. May contain credentials — verify it is gitignored."
 
-### Temporary Documents
-- `.md` or `.txt` files outside `docs/` whose names contain: `temp`, `tmp`, `scratch`, `draft`, `wip`, `note`, `todo`
+Always warn even if gitignored; credentials must never be committed.
 
-### Scratch/Temp Files
-- Names containing: `scratch`, `temp_`, `_temp`, `tmp_`, `_tmp`, `draft`, `wip`
+---
 
-### Files in Temporary Directories
-- Files in directories named: `tmp/`, `temp/`, `scratch/`, `drafts/`, `wip/`, `.tmp/`
+## Step 3: Scan for Temp/Backup Patterns
 
-## Step 3: Categorize Findings
+Flag each unstaged/untracked file matching:
 
-Group by type: Copy Files, Backup Files, Temporary Test Files, Temporary Documents, Scratch/Temp Files, Files in Temp Directories.
+**Copy:** names with ` - Copy`, `_copy`, `.copy`, `(copy)`, `Copy of`
 
-For each file: full path, type, reason it's flagged, git status (unstaged/untracked).
+**Backup:** extensions `.bak`, `.backup`; names with `_backup`, `_bak`, `backup_`; pattern `*.backup.*`
 
-## Step 4: Recommendations
+**Temp/scratch:** names with `scratch`, `temp_`, `_temp`, `tmp_`, `_tmp`, `draft`, `wip`
 
-For each file found:
-- **Untracked files**: suggest `rm <file>` (or `del <file>` on Windows) or add to `.gitignore`
-- **Unstaged files**: suggest `git restore <file>` to discard, or `rm <file>` if not needed
+**Temp directories:** any file inside `tmp/`, `temp/`, `scratch/`, `drafts/`, `wip/`, `.tmp/`
 
-## Step 5: Display Results
+**Stray tests:** "test" in the name but NOT in `tests/`, `test/`, `__tests__/`, or `backend/tests/`
 
-- Use ⚠️ for issues, ✅ for clean
-- Group by category
-- Show actionable recommendations
+**Stray docs:** `.md` or `.txt` outside `docs/` with names containing `temp`, `tmp`, `scratch`, `draft`, `wip`, `note`, `todo` — except `README.md` and `CLAUDE.md`
+
+---
+
+## Step 4: Root Scan
+
+Flag at root if matching temp/backup patterns:
+- `*.bak`, `*.backup`, `*.tmp`
+- Names with ` - Copy`, `_copy`, `(copy)`, `Copy of`
+- Pattern `*.backup.*`
+- Names with `scratch_`, `draft_`, `wip_`, `_temp`, `temp_`
+
+**Do NOT flag:** `README.md`, `CLAUDE.md`, `docker-compose*.yml`, `.env.example`, `requirements.txt`, `.gitignore`, `.gitattributes`, `alembic.ini`, `pyproject.toml`, `setup.cfg`, `Makefile`, config dirs, project subdirectories, `.py` scripts.
+
+---
+
+## Step 5: Skip Gitignored Files (except `.env*`)
+
+```bash
+git check-ignore -v <file>
+```
+
+If gitignored → skip (won't be committed). Exception: always report `.env*` regardless.
+
+---
+
+## Step 6: Report and Decide
+
+Group by: **🔴 Credential Files** | **⚠️ Temp / Copy / Backup** | **⚠️ Root Junk**
+
+Per file: show path, type, git status, options:
+- **Untracked** → delete (`rm` / `Remove-Item`) / add to `.gitignore` / keep
+- **Unstaged** → `git restore <file>` / delete / keep
+
+> "`force_shopify_d2c.backup.py` looks like a backup. Delete, add `*.backup.*` to `.gitignore`, or keep?"
+
+No action without explicit user instruction.
+
+---
+
+## Step 7: Results
+
+- 🔴 credential, ⚠️ temp/backup, ✅ clean
+- All clear: "✅ No temp, backup, or credential files found."
+- **As child of `/commit`:** stop the chain if anything is flagged and unresolved.
+
+---
 
 ## Notes
 
-- Files in `docs/` are generally OK even if the name contains "temp".
-- Files in proper test directories should NOT be flagged.
-- If no temporary files found, report ✅ with a clean status message.
+- Files in `docs/` are not flagged even if names contain "temp".
+- Files in proper test directories are not flagged.
+- `.env.example` is safe — keys without values, meant to be committed.
+- Moving source files to correct subdirectories is `doc-consolidate`'s job.

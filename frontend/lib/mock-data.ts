@@ -34,6 +34,7 @@ export const MOCK_SALES_SUMMARY: SalesSummary = {
   total_discount:    13_32_00_000,
   record_count:      78_540,
   active_skus:       142,
+  data_as_of:        null,
 };
 
 // ── Sales by Portal ──────────────────────────────────────
@@ -147,6 +148,7 @@ export const MOCK_PORTAL_DAILY: PortalDailyResponse = {
     open_po: null,
     swiggy_stock: null,
     zepto_stock: null,
+    flipkart_stock: null,
     backend_qty: null,
     frontend_qty: null,
     daily_units: Object.fromEntries(

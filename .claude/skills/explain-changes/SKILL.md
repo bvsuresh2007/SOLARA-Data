@@ -1,88 +1,115 @@
 ---
 name: explain-changes
-description: Explain code changes in plain language with real-world analogies. Choose between uncommitted changes, staged changes, or specific files. Useful for understanding what was built and why.
+description: Explain code changes in plain language with real-world analogies. Pass an optional argument (all/staged/uncommitted) to skip the menu. Detects when there are no changes. Reads manifest.md for project context. Includes project-specific concepts in the glossary.
 ---
 
-**Purpose**: Understand code changes in simple terms with real-world analogies — no jargon.
+**Purpose**: Explain changes in simple terms — no jargon, project-context analogies.
 
 ---
 
-## Step 1: Ask What to Review
+## Step 0: Orientation
 
-Present options:
-1. **Uncommitted changes** — modified files not yet committed
-2. **Staged changes** — files added with `git add` but not committed
-3. **Specific files or folders** — user specifies paths
-4. **All changes** — uncommitted + staged combined
+Read `docs/manifest.md` if it exists — knowing `scrapers/zepto_scraper.py` is a Zepto scraper (not a generic script) makes explanations accurate.
 
-Wait for the user's choice before proceeding.
+---
+
+## Step 1: Determine Scope
+
+| Argument | Action |
+|----------|--------|
+| `all` or empty | Explain uncommitted + staged combined |
+| `uncommitted` | Unstaged modified + untracked only |
+| `staged` | Files added with `git add` but not committed |
+| A file/folder path | That path only |
+
+Route by table. Never show a menu.
+
+---
 
 ## Step 2: Get the Changes
 
-Based on choice:
 - **Uncommitted**: `git diff` + `git ls-files --others --exclude-standard`
 - **Staged**: `git diff --cached`
-- **Specific files**: `git diff <path>` or read directly if untracked
+- **Path**: `git diff <path>` or read directly if untracked
 - **All**: combine both
 
-## Step 3: Read and Understand Each File
+**No changes found:**
+> "No uncommitted changes. Did you want to explain:
+> - The last commit? `git show --stat HEAD`
+> - A specific branch? Tell me the name."
 
-- Read the full content (or changed sections)
-- Understand what the file does and why it changed
-- Note the language and the file's role (scraper, importer, API route, frontend page, etc.)
+Stop.
 
-## Step 4: Explain Each Change Simply
+---
 
-For each change:
+## Step 3: Read Each File
+
+- ≤ 300 lines: read fully.
+- > 300 lines: read changed sections + surrounding function context.
+- Identify role via `docs/manifest.md`.
+
+---
+
+## Step 4: Explain Each Change
 
 ### What Changed?
-- Simple description: "We added a function that imports Zepto sales data from Excel"
-- Before/After: show what was there and what's there now
+Plain description. Before/After: show old and new.
 
 ### Why Did It Change?
-- The problem it solves or the feature it enables
+The problem solved or feature enabled.
 
 ### How Does It Work?
-- Break the code into plain-language steps
-- No jargon — explain any technical term you use
+Plain-language steps. Explain technical terms.
 
-**Analogies to use for this project:**
-- A **scraper** is like a robot that opens a website, reads the numbers on screen, and writes them down
-- An **upsert** is like filling in a form: if it's a new entry, add it; if it already exists, update it
-- An **Excel importer** reads a spreadsheet row by row and enters the data into a database
-- An **API endpoint** is a window: the frontend asks a question, the backend answers through it
-- A **Playwright script** remote-controls a browser — it clicks, types, and reads pages automatically
-- A **portal scraper** logs into a platform's seller dashboard and copies the sales report
-- A **foreign key** is like a reference number — "this sale belongs to product #42"
-- A **migration** is a script that updates the database structure (like renovating a room)
+**Project analogies:**
+- **Scraper** — robot that opens a website, reads numbers, writes them down
+- **Upsert** — add if new, update if already exists
+- **Excel importer** — reads a spreadsheet row by row, enters data into the DB
+- **API endpoint** — frontend asks a question; backend answers through it
+- **Playwright script** — remote-controls a browser: clicks, types, reads pages
+- **Portal scraper** — logs into a seller dashboard (Swiggy, Blinkit, etc.) and copies the report
+- **Foreign key** — reference number: "this sale belongs to product #42"
+- **Migration** — updates DB structure (like renovating a room before moving in)
 
-## Step 5: Teach Programming Concepts Used
+---
 
-For each concept that appears in the changes:
+## Step 5: Teach Concepts Used
+
+Only explain concepts that actually appeared — skip unused rows.
 
 | Concept | Simple explanation |
 |---------|-------------------|
 | Function | A recipe — give it inputs, it produces an output |
-| Variable | A labeled box that holds a value |
-| Loop | Doing something repeatedly — like checking every row in a spreadsheet |
-| If/else | Making a decision — "if X is true, do this, otherwise do that" |
+| Variable | A labeled box holding a value |
+| Loop | Repeating something — like checking every row in a spreadsheet |
+| If/else | A decision — "if X, do this; otherwise do that" |
 | Dict/Map | A lookup table — like a phone book |
-| Upsert | Insert if new, update if already exists |
-| Async/await | Start a task and wait for it — like ordering food then waiting for delivery |
-| ORM model | A Python class that represents a database table |
-| Schema | The shape of data — what columns a table has and their types |
-| Index | A shortcut that makes database lookups faster — like a book index |
+| Upsert | Insert if new, update if exists |
+| Async/await | Start a task and wait — like ordering food then waiting |
+| ORM model | A Python class representing a DB table |
+| Schema | The shape of data — columns and their types |
+| Index | A DB shortcut for faster lookups — like a book index |
+| Portal scraper | Logs into a platform (Zepto, Blinkit, etc.) and downloads sales data |
+| Orchestrator | Scheduler that runs all scrapers in sequence |
+| Session auth | Saves logged-in browser state so scraper skips re-login |
+| Alembic migration | Numbered script that updates DB structure in a controlled, reversible way |
+| Pydantic schema | Python class that validates data shape going into/out of the API |
+| BaseScraper | Shared parent class all scrapers inherit — retries, logging, Playwright setup |
+| Playwright session | Real browser instance controlled by code — for JS-heavy sites |
+
+---
 
 ## Step 6: Summary Report
 
-1. **Overview**: files changed, lines added/removed, one-sentence summary
-2. **File-by-file breakdown**: what changed, why, how it works, concepts used
-3. **Concepts learned**: unique list with simple explanations
+1. **Overview**: files changed, one-sentence summary
+2. **File-by-file**: what changed, why, how it works, concepts used
+3. **Concepts learned**: only those that appeared, with simple explanations
 4. **Closing**: "Ask me about any concept and I'll explain it further!"
+
+---
 
 ## Notes
 
-- Always use simple, everyday language
-- Use analogies from the project context (scrapers, sales data, portals, Excel imports)
-- Break everything into small steps
-- Be encouraging — provide concrete examples from the actual code, not generic ones
+- Simple, everyday language only.
+- Use actual code examples, not generic ones.
+- Only explain concepts that appeared — skip unused table rows.
