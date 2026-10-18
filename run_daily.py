@@ -38,6 +38,7 @@ load_dotenv(".env", override=True)
 
 _args = sys.argv[1:]
 CHECK = "--check" in _args
+PORTAL = _args[_args.index("--portal") + 1] if "--portal" in _args else None  # self-dispatch subprocess
 _dates = [a for a in _args if not a.startswith("--")]
 D = date.fromisoformat(_dates[0]) if _dates else (date.today() - timedelta(days=1))
 FC_DATE = date.today() - timedelta(days=2)  # Data Kiosk lags ~34h
@@ -154,6 +155,43 @@ def _fc():
     return str(r.get("status")) if isinstance(r, dict) else "OK"
 
 
+def _run_portal(name):
+    """Run one browser scraper's scrape+ingest IN THIS process (subprocess mode)."""
+    if name == "amazon_pi":
+        return _amazon_pi()
+    cfg = {
+        "blinkit": ("scrapers.blinkit_scraper", "BlinkitScraper", "ingest_blinkit_soh"),
+        "swiggy": ("scrapers.swiggy_scraper", "SwiggyScraper", "ingest_swiggy_soh"),
+        "zepto": ("scrapers.zepto_scraper", "ZeptoScraper", "ingest_zepto_soh"),
+    }[name]
+    cls = getattr(importlib.import_module(cfg[0]), cfg[1])
+    return _qcomm(name, cls, cfg[2])()
+
+
+def _subprocess_portal(name):
+    """Orchestrator side: run one browser scraper in a FRESH process, so its
+    stdout-close (from the Google-Drive profile upload) can't break other steps.
+    The scrapers' own DB writes commit regardless; this just isolates them."""
+    import subprocess
+    r = subprocess.run([sys.executable, str(Path(__file__).resolve()), D.isoformat(), "--portal", name],
+                       cwd=os.getcwd(), capture_output=True, text=True, timeout=1500)
+    for line in ((r.stdout or "") + (r.stderr or "")).splitlines():
+        if line.startswith("PORTAL_RESULT:"):
+            return line.split("::", 1)[1].strip()
+    return f"subprocess rc={r.returncode} (no result line)"
+
+
+if PORTAL:  # subprocess mode: run just this one browser scraper, then exit
+    log.info("=== SUBPROCESS portal=%s target=%s ===", PORTAL, D)
+    try:
+        _res = _run_portal(PORTAL)
+    except Exception as e:
+        _res = f"ERR {e}"
+        log.exception("portal %s failed", PORTAL)
+    _say(f"PORTAL_RESULT: {PORTAL} :: {_res}")
+    sys.exit(0)
+
+
 if CHECK:
     _say(f"DAILY RUN plan - target {D}, FC target {FC_DATE}")
     for m in ("scrapers.amazon_sp_api_scraper", "scrapers.hourly_shopify_sync",
@@ -167,16 +205,15 @@ if CHECK:
             _say(f"  import FAIL: {m} :: {e}")
 
 log.info("######## DAILY RUN target=%s FC=%s ########", D, FC_DATE)
+# API-only steps run in-process (they don't touch the Drive profile upload that
+# closes stdout). Browser scrapers run in their own subprocess for isolation.
 step("amazon_sales", _amazon_sales)
 step("shopify", _shopify)
-from scrapers.blinkit_scraper import BlinkitScraper
-from scrapers.swiggy_scraper import SwiggyScraper
-from scrapers.zepto_scraper import ZeptoScraper
-step("blinkit", _qcomm("blinkit", BlinkitScraper, "ingest_blinkit_soh"))
-step("swiggy", _qcomm("swiggy", SwiggyScraper, "ingest_swiggy_soh"))
-step("zepto", _qcomm("zepto", ZeptoScraper, "ingest_zepto_soh"))
+step("blinkit", lambda: _subprocess_portal("blinkit"))
+step("swiggy", lambda: _subprocess_portal("swiggy"))
+step("zepto", lambda: _subprocess_portal("zepto"))
 step("atlas_wh", _atlas)
-step("amazon_pi", _amazon_pi)
+step("amazon_pi", lambda: _subprocess_portal("amazon_pi"))
 step("datakiosk_fc", _fc)
 
 summary = " | ".join(f"{k}={v}" for k, v in results.items())
