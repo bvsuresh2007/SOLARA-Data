@@ -149,10 +149,37 @@ def _amazon_pi():
     return "OK"
 
 
+def _latest_held_fc():
+    """Latest FC snapshot_date already in the DB — lets _fc() skip re-pulling a
+    date we already hold (window-aware catch-up, quota-safe). None if unknown."""
+    try:
+        import psycopg2
+        dsn = os.environ.get("DATABASE_URL") or os.environ.get("DB_URL")
+        conn = psycopg2.connect(dsn)
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(snapshot_date) FROM inventory_snapshots "
+                    "WHERE amazon_fc_stock IS NOT NULL AND amazon_fc_stock > 0")
+        v = cur.fetchone()[0]
+        conn.close()
+        return v
+    except Exception:
+        return None
+
+
 def _fc():
-    from scrapers.amazon_inventory_sync import sync
-    r = sync(FC_DATE)
-    return str(r.get("status")) if isinstance(r, dict) else "OK"
+    # Window-aware: Amazon publishes FC ~today-3, but we target today-2, so a plain
+    # pull FATALs most days. sync_latest_available() instead pulls the newest date
+    # Amazon actually has (that we don't already hold) — no spurious daily error.
+    from scrapers.amazon_inventory_sync import sync_latest_available
+    r = sync_latest_available(FC_DATE, _latest_held_fc())
+    if not isinstance(r, dict):
+        return "OK"
+    st = r.get("status")
+    if st == "success":
+        return f"OK {r.get('date')} {r.get('with_stock', '?')}w/stock {r.get('asins', '?')}ASINs"
+    if st == "uptodate":
+        return f"uptodate (newest {r.get('newest_available')} already held)"
+    return str(st)
 
 
 def _run_portal(name):
