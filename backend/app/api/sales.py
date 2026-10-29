@@ -544,8 +544,13 @@ def latest_sale_date(
     to real data instead of the calendar date.
     """
     included = _included_portal_ids(db)
+    # Ignore any future-dated rows (e.g. a mis-parsed portal CSV) so a stray
+    # date months ahead can't anchor the dashboard's presets to the future.
+    # +1 day buffer keeps legitimate same-day data safe under UTC/IST skew.
+    max_valid = date.today() + _dt.timedelta(days=1)
     q = db.query(func.max(DailySales.sale_date)).filter(
         DailySales.portal_id.in_(included),
+        DailySales.sale_date <= max_valid,
     )
     if portal_id:
         q = q.filter(DailySales.portal_id == portal_id)
