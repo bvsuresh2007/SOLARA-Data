@@ -18,6 +18,7 @@ Usage:
 
 import json
 import logging
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -133,6 +134,91 @@ def sync(report_date: date | str | None = None):
     _cleanup_state_file()
     logger.info("=== Inventory sync complete for %s ===", report_date)
     return result
+
+
+def _window_from_error_doc(scraper, error_doc_id):
+    """Download a FATAL query's error document and return its available dates, sorted.
+
+    Data Kiosk FATALs an unpublished date with a message like:
+      "Daily Inventory metrics are only available on the following dates: [20261023, ...]"
+    We extract those YYYYMMDD tokens so we can pull the newest date that IS available.
+    """
+    try:
+        txt = scraper._download_document(error_doc_id)
+    except Exception as e:
+        logger.warning("Could not read FC error-doc %s: %s", error_doc_id, e)
+        return []
+    return sorted({date(int(x[:4]), int(x[4:6]), int(x[6:8]))
+                   for x in re.findall(r"\d{8}", txt)})
+
+
+def sync_latest_available(target_date=None, held_latest=None):
+    """FC sync that tolerates Amazon's publish lag.
+
+    Try ``target_date``; if Amazon hasn't published it yet (FATAL), read the
+    error document's available-date window and pull the NEWEST available date we
+    don't already hold. This turns the near-daily spurious ``datakiosk_fc=error``
+    (caused by targeting today-2, which is usually 1 day ahead of what Amazon has
+    materialised) into a reliable catch-up.
+
+    held_latest: the latest FC snapshot_date already in the DB (date|str|None).
+    When the newest available date is <= held_latest, nothing is pulled (status
+    "uptodate") so we never waste a createQuery re-fetching a date we already have.
+    """
+    if target_date is None:
+        target_date = date.today() - timedelta(days=2)
+    if isinstance(target_date, str):
+        target_date = date.fromisoformat(target_date)
+    if isinstance(held_latest, str):
+        held_latest = date.fromisoformat(held_latest)
+
+    from scrapers.amazon_sp_api_scraper import AmazonSPAPIScraper
+    scraper = AmazonSPAPIScraper()
+
+    # 1. Fast path: poll the pre-created query (quota-free GET). DONE -> ingest target.
+    #    FATAL -> capture the error doc so we can read the available window.
+    error_doc_id = None
+    precreated_id = _load_precreated_query(target_date)
+    if precreated_id:
+        logger.info("Window-aware FC: polling pre-created query %s for %s",
+                    precreated_id, target_date)
+        try:
+            data = scraper._poll_query(precreated_id, max_polls=4, interval=10)
+            doc_id = data.get("dataDocumentId")
+            if doc_id:
+                rows = scraper._parse_datakiosk_response(scraper._download_document(doc_id))
+                _cleanup_state_file()
+                return _save_and_ingest(scraper, rows, target_date)
+            logger.warning("Pre-created query %s DONE but no dataDocumentId", precreated_id)
+        except RuntimeError as e:  # FATAL / CANCELLED -> grab errorDocumentId
+            m = re.search(r"error_doc=(\S+)", str(e))
+            error_doc_id = m.group(1).rstrip(",") if m else None
+            logger.info("Pre-created query for %s FATAL; error_doc=%s", target_date, error_doc_id)
+        except TimeoutError:
+            logger.info("Pre-created query for %s not ready; will try a fresh pull", target_date)
+
+    # 2. Window-aware catch-up: target not published -> pull newest available date.
+    if error_doc_id:
+        window = _window_from_error_doc(scraper, error_doc_id)
+        newest = window[-1] if window else None
+        logger.info("FC available window=%s newest=%s held=%s",
+                    [d.isoformat() for d in window], newest, held_latest)
+        if newest is None:
+            return {"portal": "amazon_sp_api", "date": target_date, "type": "inventory",
+                    "status": "error", "error": "FATAL with no readable date window"}
+        if held_latest and newest <= held_latest:
+            logger.info("Newest available %s already held (%s) — nothing to catch up",
+                        newest, held_latest)
+            return {"portal": "amazon_sp_api", "date": newest, "type": "inventory",
+                    "status": "uptodate", "newest_available": newest.isoformat(),
+                    "held": held_latest.isoformat()}
+        if newest != target_date:
+            logger.info("Target %s not published; pulling newest available %s",
+                        target_date, newest)
+            return sync(newest)
+
+    # 3. No pre-created query (or unreadable window) -> original behaviour.
+    return sync(target_date)
 
 
 def _save_and_ingest(scraper, rows, report_date):
