@@ -449,7 +449,12 @@ def sales_by_category(
 
     rows = (
         q.group_by(ProductCategory.l1_name)
-        .having(func.sum(DailySales.revenue) > 0)
+        # Filter on the SAME expression this endpoint reports. Filtering on raw
+        # DailySales.revenue dropped every Flipkart category: Flipkart ingests
+        # units only, so its raw revenue is 0 on every row, while the figure
+        # actually returned here is BAU (bau_asp x units). Category Share came
+        # back empty for Flipkart while Revenue Share showed Rs 2.55 Cr.
+        .having(func.sum(bau_rev) > 0)
         .order_by(text("total_revenue DESC NULLS LAST"))
         .all()
     )
