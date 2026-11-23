@@ -100,6 +100,8 @@ class BaseScraper(abc.ABC):
         Full scraping cycle with retry. Returns:
         {"portal": str, "date": date, "file": Path | None, "status": str, "error": str | None}
         """
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 

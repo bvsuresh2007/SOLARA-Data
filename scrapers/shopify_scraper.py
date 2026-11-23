@@ -141,9 +141,10 @@ class ShopifyScraper:
                 continue
 
             shipping = sum(float(s.get("price", 0)) for s in order.get("shipping_lines", []))
-            city = (
-                order.get("shipping_address") or order.get("billing_address") or {}
-            ).get("city", "")
+            addr = order.get("shipping_address") or order.get("billing_address") or {}
+            city = addr.get("city", "")
+            pincode = addr.get("zip", "")
+            province = addr.get("province", "")  # state from Shopify
 
             for item in order.get("line_items", []):
                 sku = item.get("sku", "")
@@ -168,6 +169,8 @@ class ShopifyScraper:
                     "Taxes": float(order.get("total_tax", 0)),
                     "Shipping": shipping,
                     "Billing City": city,
+                    "Pincode": pincode,
+                    "Province": province,
                     "Financial Status": financial_status,
                 })
         return rows

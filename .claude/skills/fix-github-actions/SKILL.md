@@ -1,6 +1,6 @@
 ---
 name: fix-github-actions
-description: Fetch a failed GitHub Actions run by ID, diagnose the root cause, and apply fixes to the workflow file.
+description: Fetch a failed GitHub Actions run by ID, diagnose root cause against known patterns (including Docker Compose and Node.js), apply fixes, validate YAML with actual parser, and suggest /commit + gh run rerun. Guards against missing workflows directory.
 argument-hint: <run-id>
 ---
 
@@ -8,110 +8,185 @@ argument-hint: <run-id>
 
 ---
 
-## Step 1: Parse and Validate Input
+## Step 1: Validate Input
 
-- Extract the run ID from `$ARGUMENTS`
-- Validate it is a numeric ID
-- If missing: "Please provide a run ID. Usage: `/fix-github-actions <RUN_ID>`"
+- Extract run ID from `$ARGUMENTS`. Validate: numeric.
+- Missing → stop: "Provide a run ID: `/fix-github-actions <RUN_ID>`"
 
-## Step 2: Fetch Run Details
+---
+
+## Step 2: Check Workflows Directory
+
+```bash
+# Linux/Mac
+ls .github/workflows/ 2>/dev/null || echo "NOT FOUND"
+
+# Windows
+Get-ChildItem .github\workflows\ 2>$null
+```
+
+Absent or empty → stop:
+> "No workflows in `.github/workflows/`. Nothing to fix. Want help setting one up?"
+
+---
+
+## Step 3: Fetch Run Details
 
 ```bash
 gh run view $ARGUMENTS
 gh run view $ARGUMENTS --log-failed
-ls .github/workflows/
 ```
 
-Extract:
-- Workflow name and file path
-- Run status and conclusion
-- Failed job/step names
-- Error messages from logs
+Extract: workflow name + file path, run status, failed job/step name, full error output.
 
-## Step 3: Identify Failure Pattern
+---
 
-Match error output against common patterns:
+## Step 4: Identify Failure Pattern
 
-### Python Import / Dependency Error
+### Python Dependency Error
 - **Error**: `ModuleNotFoundError`, `ImportError`, `No module named`
-- **Fix**: Ensure `pip install -r requirements.txt` step exists before the failing step
+- **Fix**: Add `pip install -r requirements.txt` before the failing step
 
-### Missing Environment Variable / Secret
-- **Error**: `KeyError`, `os.environ[`, `secret not found`
-- **Fix**: Document the missing variable — user must add it in GitHub repo Settings → Secrets
+### Missing Secret / Env Var
+- **Error**: `KeyError`, `os.environ[`, `secret not found`, `Required environment variable`
+- **Fix**: Tell user to add it in GitHub Settings → Secrets
 
 ### Playwright Browser Missing
-- **Error**: `Executable doesn't exist`, `playwright install`, `chromium`
-- **Fix**: Add `playwright install chromium` step before the failing step
+- **Error**: `Executable doesn't exist`, `playwright install`, `chromium`, `browserType.launch`
+- **Fix**: Add `playwright install chromium` and `playwright install-deps chromium || true`
 
 ### Python Version Mismatch
-- **Error**: `SyntaxError`, `requires Python 3.x`
-- **Fix**: Update `python-version` in the `setup-python` step to `'3.12'`
+- **Error**: `SyntaxError`, `requires Python 3.x`, `python3.x: command not found`
+- **Fix**: Update `python-version` in `setup-python` to `'3.12'`
 
 ### PostgreSQL Connection Failure
-- **Error**: `could not connect to server`, `FATAL: role does not exist`, `Connection refused`
-- **Fix**: Ensure a `postgres` service is configured and `DATABASE_URL` is set as a secret
+- **Error**: `could not connect to server`, `FATAL: role does not exist`, `ECONNREFUSED 5432`
+- **Fix**: Add a `postgres` service under `services:`, set `DATABASE_URL` as a secret
 
-### Lint / Formatting Failure
-- **Error**: `flake8`, `black`, `eslint`, `tsc` errors
-- **Fix**: Run linter locally and fix flagged lines, or update lint config
+### Docker Compose Failure
+- **Error**: `docker-compose: command not found`, `service failed to start`, `health check failed`, `container exited`, `port is already allocated`
+- **Fix**:
+  - Missing command: use `docker compose` (v2) or install `docker-compose` (v1)
+  - Service failed: add `depends_on: condition: service_healthy`
+  - Port conflict: use dynamic port mapping
+
+### Node.js / npm Failure
+- **Error**: `npm ERR!`, `Cannot find module`, `next: command not found`, `npm WARN EBADENGINE`
+- **Fix**:
+  - Missing setup: add `actions/setup-node@v4` with `node-version`
+  - Missing install: add `npm ci` before `npm run build`
+  - Wrong version: update `node-version` to `'20'` or `'18'`
+
+### Lint / Format Failure
+- **Error**: `flake8`, `black`, `eslint`, `tsc --noEmit`
+- **Fix**: Fix flagged lines locally or update lint config
 
 ### Timeout
 - **Error**: `exceeded the maximum execution time`
-- **Fix**: Add/increase `timeout-minutes` on the job
+- **Fix**: Add/increase `timeout-minutes` on the failing job
 
-## Step 4: Read the Workflow File
+### Unknown Pattern
+- Show the full raw error output.
+- Ask: "I don't recognize this pattern. Describe what you think is wrong or paste more context."
+- Wait for input before attempting a fix.
 
-- Find the workflow file under `.github/workflows/`
-- Read its full content
-- Understand the current steps, services, and environment
+---
 
-## Step 5: Apply Fixes
+## Step 5: Read the Workflow File
 
-Modify the YAML to fix the identified issue. Common additions:
+Read the full workflow file from Step 3. **Do not duplicate existing steps.**
+
+---
+
+## Step 6: Apply Fixes
+
+Common additions:
 
 ```yaml
-# Install Python dependencies
+# Python dependencies
 - name: Install dependencies
   run: pip install -r requirements.txt
 
-# Install Playwright browsers
+# Playwright browsers
 - name: Install Playwright browsers
   run: |
     playwright install chromium
     playwright install-deps chromium || true
 
-# Set up Python
+# Python setup
 - name: Set up Python
   uses: actions/setup-python@v5
   with:
     python-version: '3.12'
     cache: 'pip'
 
-# Increase timeout
+# Node.js setup
+- name: Set up Node.js
+  uses: actions/setup-node@v4
+  with:
+    node-version: '20'
+    cache: 'npm'
+    cache-dependency-path: frontend/package-lock.json
+
+# Frontend dependencies
+- name: Install frontend dependencies
+  run: cd frontend && npm ci
+
+# PostgreSQL service
+services:
+  postgres:
+    image: postgres:15
+    env:
+      POSTGRES_DB: solara_test
+      POSTGRES_USER: solara
+      POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD }}
+    options: >-
+      --health-cmd pg_isready
+      --health-interval 10s
+      --health-timeout 5s
+      --health-retries 5
+
+# Timeout
 jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 ```
 
-Do NOT duplicate steps that already exist — check before adding.
+Never remove or reorder working steps.
 
-## Step 6: Verify YAML Syntax
+---
 
-- Correct indentation (YAML is space-sensitive)
-- Unique step names
-- All required secrets referenced correctly
+## Step 7: Validate YAML
 
-## Step 7: Display Summary
+Substitute actual filename from Step 3:
+
+```bash
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/FILENAME.yml')); print('YAML valid')"
+```
+
+If Python unavailable:
+```bash
+node -e "require('js-yaml').load(require('fs').readFileSync('.github/workflows/FILENAME.yml','utf8')); console.log('YAML valid')"
+```
+
+On failure: show error, fix, re-validate. Common pitfalls:
+- Indentation: consistent spaces, no tabs
+- Step names must be unique within a job
+- Secrets: `${{ secrets.NAME }}`
+
+---
+
+## Step 8: Summary
 
 ```
-🔍 Analyzing GitHub Actions Run #<RUN_ID>
+🔍 GitHub Actions Fix — Run #<RUN_ID>
 
 📋 Run Details:
-  - Workflow: <name>
-  - File: .github/workflows/<file>.yml
-  - Status: ❌ Failed
+  Workflow: <name>
+  File:     .github/workflows/<file>.yml
+  Status:   ❌ Failed
+  Failed step: <step name>
 
 🔎 Issues Found:
   1. ❌ <description>
@@ -120,15 +195,19 @@ Do NOT duplicate steps that already exist — check before adding.
 🔧 Fixes Applied:
   ✅ <description>
   📝 Updated: .github/workflows/<file>.yml
+  ✅ YAML syntax validated
 
 ✅ Next Steps:
-  1. git diff .github/workflows/<file>.yml
-  2. git commit -m "fix: resolve GitHub Actions failure"
-  3. git push to trigger a new run
+  1. Review:    git diff .github/workflows/<file>.yml
+  2. Commit:    /commit
+  3. Retry:     gh run rerun --failed <RUN_ID>
 ```
+
+---
 
 ## Notes
 
-- Secrets cannot be auto-fixed — note them and tell the user to add them in GitHub Settings → Secrets
-- Playwright scrapers in CI require headless mode and browser installation steps
-- Always preserve existing working steps — do not remove or reorder unless necessary
+- Secrets: provide the exact name; user adds it in GitHub Settings → Secrets.
+- Playwright in CI: needs headless mode + browser install steps.
+- Never remove or reorder working steps.
+- Unknown errors: ask the user first, never guess.

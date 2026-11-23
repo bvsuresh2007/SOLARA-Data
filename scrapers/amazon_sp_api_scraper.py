@@ -54,12 +54,33 @@ class AmazonSPAPIScraper:
         if self._access_token and time.time() < self._token_expiry - 60:
             return self._access_token
 
-        resp = requests.post(LWA_TOKEN_URL, data={
-            "grant_type": "refresh_token",
-            "refresh_token": self._refresh_token,
-            "client_id": self._client_id,
-            "client_secret": self._client_secret,
-        })
+        # Retry on transient network/DNS failures only. This runs on wake-from-
+        # sleep (2 AM precreate, hourly sync) when the NIC/DNS may not be ready
+        # yet and requests raises ConnectionError ("Failed to resolve
+        # api.amazon.com" - 1600+ such crashes observed in the hourly log).
+        # HTTP 4xx/5xx are NOT retried here (raise_for_status handles them).
+        last_err = None
+        resp = None
+        for attempt in range(1, 6):
+            try:
+                resp = requests.post(LWA_TOKEN_URL, data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                }, timeout=30)
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_err = e
+                if attempt < 5:
+                    wait = 10 * (2 ** (attempt - 1))
+                    logger.warning("LWA token network error (attempt %d/5): %s - retrying in %ds",
+                                   attempt, e, wait)
+                    time.sleep(wait)
+                else:
+                    logger.error("LWA token network error (attempt 5/5): %s - giving up", e)
+        if resp is None:
+            raise last_err
         resp.raise_for_status()
         data = resp.json()
         self._access_token = data["access_token"]
@@ -408,6 +429,23 @@ class AmazonSPAPIScraper:
             rows = self._pull_realtime_sales(report_date)
             source = "realtime_report"
         except Exception as rt_err:
+            # Only fall back to Data Kiosk for dates old enough that it has data
+            # (~34h lag). For same-day/recent dates (e.g. the hourly sync, which
+            # always pulls today) Data Kiosk returns empty/FATAL and each attempt
+            # burns a scarce createQuery quota token shared with the 2 AM inventory
+            # precreate - so skip it and return the miss cleanly.
+            if report_date > date.today() - timedelta(days=2):
+                logger.warning("Real-time sales report failed for %s: %s - skipping Data Kiosk "
+                               "fallback (date too recent; not spending createQuery quota)",
+                               report_date, rt_err)
+                return {
+                    "portal": "amazon_sp_api",
+                    "date": report_date,
+                    "file": None,
+                    "status": "error",
+                    "rows": 0,
+                    "error": f"Real-time: {rt_err} (Data Kiosk skipped - date too recent)",
+                }
             logger.warning("Real-time sales report failed: %s — falling back to Data Kiosk", rt_err)
             try:
                 rows = self._pull_datakiosk_sales(report_date)

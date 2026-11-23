@@ -142,27 +142,39 @@ class AmazonPIScraper:
         self._log.info("[AmazonPI] Waiting for login page")
         # Amazon uses #ap_email on the classic form, or a generic input on the
         # new "Sign in or create account" combined flow.
-        try:
-            email_input = self._page.locator(
-                '#ap_email, input[name="loginID"], input[type="email"]'
-            ).first
-            email_input.wait_for(state="visible", timeout=15_000)
-        except Exception:
-            if self._page.url.startswith("https://pi.amazon.in"):
-                return
-            self._shot("email_field_missing")
-            raise RuntimeError(f"[AmazonPI] Login page not found. URL: {self._page.url}")
+        # When email is remembered, Amazon skips straight to the password page.
+        pwd_locator = self._page.locator('#ap_password, input[name="password"]')
+        email_locator = self._page.locator(
+            '#ap_email, input[name="loginID"], input[type="email"]'
+        )
 
-        self._log.info("[AmazonPI] Entering email")
-        email_input.fill(self.email)
-        # Click Continue/Submit — Amazon may show "Continue" or "Sign-In" button
-        self._page.locator(
-            'input[type="submit"], input#continue, span#continue'
-        ).first.click()
+        # Check if password field is already visible (email pre-filled / remembered)
+        try:
+            pwd_locator.first.wait_for(state="visible", timeout=5_000)
+            self._log.info("[AmazonPI] Password-only page (email remembered) — skipping email step")
+        except Exception:
+            # No password field yet — look for email field
+            try:
+                email_input = email_locator.first
+                email_input.wait_for(state="visible", timeout=10_000)
+            except Exception:
+                if self._page.url.startswith("https://pi.amazon.in"):
+                    return
+                self._shot("email_field_missing")
+                raise RuntimeError(f"[AmazonPI] Login page not found. URL: {self._page.url}")
+
+            self._log.info("[AmazonPI] Entering email")
+            email_input.fill(self.email)
+            # Click Continue/Submit — Amazon may show "Continue" or "Sign-In" button
+            self._page.locator(
+                'input[type="submit"], input#continue, span#continue'
+            ).first.click()
+
+            self._log.info("[AmazonPI] Waiting for password field")
+            pwd_locator.first.wait_for(state="visible", timeout=15_000)
 
         self._log.info("[AmazonPI] Entering password")
-        pwd = self._page.locator('#ap_password, input[name="password"]').first
-        pwd.wait_for(state="visible", timeout=15_000)
+        pwd = pwd_locator.first
         pwd.fill(self.password)
         self._page.locator(
             '#signInSubmit, input[type="submit"]'
@@ -993,7 +1005,20 @@ class AmazonPIScraper:
         try:
             self._page.goto("https://pi.amazon.in/download-center", wait_until="domcontentloaded",
                             timeout=20_000)
-            self._page.wait_for_timeout(4000)
+            # Wait for table rows to actually populate with REAL data (>=9 td cells).
+            # The page first renders skeleton/placeholder rows with 1 td then populates
+            # actual rows via async API call. Polling for placeholder rows is not enough.
+            # Inspection 2026-04-28: real data rows have 10 td cells.
+            try:
+                self._page.wait_for_function(
+                    "() => Array.from(document.querySelectorAll('tbody tr'))"
+                    ".some(tr => tr.querySelectorAll('td').length >= 9)",
+                    timeout=30_000,
+                )
+                self._log.info("[AmazonPI] Download Center table populated with real data")
+            except Exception:
+                self._log.warning("[AmazonPI] Table didn't populate with real data within 30s — proceeding anyway")
+            self._page.wait_for_timeout(2000)
         except Exception:
             self._log.info("[AmazonPI] Direct URL timed out — clicking Download Center button on SBG page")
             try:
@@ -1004,6 +1029,13 @@ class AmazonPIScraper:
                 dc_btn.wait_for(state="visible", timeout=15_000)
                 dc_btn.click()
                 self._page.wait_for_timeout(4000)
+                try:
+                    self._page.wait_for_function(
+                        "() => document.querySelectorAll('tbody tr').length > 0",
+                        timeout=15_000,
+                    )
+                except Exception:
+                    pass
             except Exception as e2:
                 self._log.error("[AmazonPI] Could not navigate to Download Center: %s", e2)
 
@@ -1020,13 +1052,46 @@ class AmazonPIScraper:
         our_rows: list = []
         max_polls = 30
         for poll in range(max_polls):
-            # Refresh the table
-            try:
-                refresh_btn = self._page.get_by_text("Refresh", exact=True).first
-                refresh_btn.click()
-                self._page.wait_for_timeout(3000)
-            except Exception:
-                pass
+            # Click the yellow "Refresh" button — Amazon PI's Download Center
+            # serves cached results; clicking Refresh forces an immediate re-query
+            # which makes ready reports appear instantly without waiting 30s.
+            # Try multiple selector strategies (kat-button web component, button
+            # element with text, role=button, then text fallback).
+            # The Refresh button uses Amazon's classic a-button structure
+            # (NOT a <button> or kat-button), wrapped in <div class="refresh-button">.
+            # DOM verified via inspection:
+            #   <div class="refresh-button">
+            #     <span class="a-button a-button-primary">
+            #       <span class="a-button-inner">
+            #         <span class="a-button-text">Refresh</span>
+            refresh_clicked = False
+            for selector_desc, selector in [
+                (".refresh-button", ".refresh-button"),
+                (".refresh-button span.a-button", ".refresh-button span.a-button"),
+                (".refresh-button .a-button-inner", ".refresh-button .a-button-inner"),
+                ("span.a-button:has-text('Refresh')", "span.a-button:has-text('Refresh')"),
+            ]:
+                try:
+                    self._page.locator(selector).first.click(timeout=3000)
+                    refresh_clicked = True
+                    self._log.info("[AmazonPI] Clicked Refresh via: %s", selector_desc)
+                    break
+                except Exception:
+                    continue
+            if refresh_clicked:
+                # After Refresh, the table re-renders skeleton then populates real data.
+                # Wait for real data rows (td>=9) before querying.
+                try:
+                    self._page.wait_for_function(
+                        "() => Array.from(document.querySelectorAll('tbody tr'))"
+                        ".some(tr => tr.querySelectorAll('td').length >= 9)",
+                        timeout=10_000,
+                    )
+                except Exception:
+                    pass
+                self._page.wait_for_timeout(1000)
+            else:
+                self._log.warning("[AmazonPI] Refresh button not clickable this poll")
 
             rows = self._get_download_center_rows()
             self._log.info("[AmazonPI] Download Center: %d rows found", len(rows))
@@ -1092,9 +1157,11 @@ class AmazonPIScraper:
                 break
 
             if poll < max_polls - 1:
-                self._log.info("[AmazonPI] Waiting 30s for reports to complete... (poll %d/%d)", poll + 1, max_polls)
+                # Refresh button makes ready reports appear immediately, so
+                # short sleep is enough — shorter cycles between Refresh clicks.
+                self._log.info("[AmazonPI] Waiting 8s before next Refresh... (poll %d/%d)", poll + 1, max_polls)
                 self._shot(f"dc_poll_{poll}")
-                time.sleep(30)
+                time.sleep(8)
         else:
             self._log.warning("[AmazonPI] Timed out waiting for all reports. Downloading what's ready.")
             # On timeout, download the first ready row per category (prefer newest)
@@ -1127,6 +1194,30 @@ class AmazonPIScraper:
 
             downloaded = False
 
+            def _save_download(dl, dest, method_name):
+                """Save download and verify non-empty. Returns True on success."""
+                fail = dl.failure()
+                if fail:
+                    self._log.warning("[AmazonPI] Download failed (%s) for %s: %s",
+                                      method_name, category_slug, fail)
+                    return False
+                # Check temp file size before save_as
+                tmp_path = dl.path()
+                tmp_size = tmp_path.stat().st_size if tmp_path and Path(tmp_path).exists() else -1
+                self._log.info("[AmazonPI] Temp download: %s (%d bytes) url=%s",
+                               tmp_path, tmp_size, dl.url)
+                dl.save_as(str(dest))
+                size = dest.stat().st_size if dest.exists() else 0
+                if size == 0:
+                    self._log.warning("[AmazonPI] Download 0-byte (%s) for %s — "
+                                      "suggestedFilename=%s tmpSize=%d",
+                                      method_name, category_slug,
+                                      dl.suggested_filename, tmp_size)
+                    return False
+                self._log.info("[AmazonPI] Downloaded (%s): %s (%d bytes)",
+                               method_name, dest, size)
+                return True
+
             # Method 1: click the <a> element by href (when href is known)
             if link_href and not link_href.startswith("javascript"):
                 try:
@@ -1134,10 +1225,9 @@ class AmazonPIScraper:
                     with self._page.expect_download(timeout=60_000) as dl_info:
                         link_el.click()
                     dl = dl_info.value
-                    dl.save_as(str(dest))
-                    downloaded_files.append(dest)
-                    downloaded = True
-                    self._log.info("[AmazonPI] Downloaded (href click): %s", dest)
+                    if _save_download(dl, dest, "href click"):
+                        downloaded_files.append(dest)
+                        downloaded = True
                 except Exception as e:
                     self._log.warning("[AmazonPI] href-click failed for %s: %s", category_slug, e)
 
@@ -1151,10 +1241,9 @@ class AmazonPIScraper:
                     with self._page.expect_download(timeout=60_000) as dl_info:
                         btn_locator.click()
                     dl = dl_info.value
-                    dl.save_as(str(dest))
-                    downloaded_files.append(dest)
-                    downloaded = True
-                    self._log.info("[AmazonPI] Downloaded (row-idx locator click): %s", dest)
+                    if _save_download(dl, dest, "row-idx locator"):
+                        downloaded_files.append(dest)
+                        downloaded = True
                 except Exception as e2:
                     self._log.warning("[AmazonPI] row-idx locator click failed for %s: %s", category_slug, e2)
 
@@ -1164,10 +1253,9 @@ class AmazonPIScraper:
                     with self._page.expect_download(timeout=60_000) as dl_info:
                         self._page.goto(link_href, wait_until="commit")
                     dl = dl_info.value
-                    dl.save_as(str(dest))
-                    downloaded_files.append(dest)
-                    downloaded = True
-                    self._log.info("[AmazonPI] Downloaded (navigate): %s", dest)
+                    if _save_download(dl, dest, "navigate"):
+                        downloaded_files.append(dest)
+                        downloaded = True
                 except Exception as e3:
                     self._log.error("[AmazonPI] All download methods failed for %s: %s", category_slug, e3)
 
@@ -1218,6 +1306,8 @@ class AmazonPIScraper:
 
         Profile sync is a no-op when PROFILE_STORAGE_DRIVE_FOLDER_ID is not set.
         """
+        if isinstance(report_date, str):
+            report_date = date.fromisoformat(report_date)
         if report_date is None:
             report_date = date.today() - timedelta(days=1)
 
