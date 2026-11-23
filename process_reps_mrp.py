@@ -1,6 +1,6 @@
 """Process replacement REP SOs: DN(is_replacement) -> submit(auto-MR) -> AWB with MRP declared value
 (mrp_total, like reship_79_v2 / v6 server script). NO Shopify push. Reads batch file from argv[1]."""
-import sys, json, re, time, datetime, urllib.parse, requests, urllib3
+import sys, os, json, re, time, datetime, urllib.parse, requests, urllib3
 urllib3.disable_warnings(); sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 from complete_awb_lib import S, BASE, G, PICKUP, WH_FULL, CPUSER, CPKEY
 from clickpost_mrp import mrp_value
@@ -65,6 +65,18 @@ def submit_cover(dn):
     d2=G(f'/api/resource/Delivery Note/{dn}')
     if d2.get('docstatus')==1: return True,[],None
     return False,[],e[:120]
+def wait_for_hook_awb(dn,timeout=None,interval=3):
+    """Gopal's v7 Clickpost hook (Delivery Note On Submit) auto-books replacement DNs at MRP.
+    Poll for the AWB it writes so this pipeline does NOT double-book — the duplicate AWBs were
+    the hook's plain-ref booking + our -REP booking on the same DN. Returns (awb,courier) or
+    (None,None) if the hook didn't book within the window (then we fall back to book_mrp)."""
+    timeout=timeout if timeout is not None else int(os.environ.get('REP_HOOK_WAIT','25'))
+    deadline=time.time()+timeout
+    while True:
+        d=G(f'/api/resource/Delivery Note/{dn}') or {}
+        if d.get('awb_number'): return d['awb_number'],d.get('courier_partner')
+        if time.time()>=deadline: return None,None
+        time.sleep(interval)
 def real_courier(awb):
     a=(awb or '').upper()
     if a.startswith('SF'): return 'Shadowfax'
@@ -74,6 +86,8 @@ def real_courier(awb):
     return None
 def book_mrp(dn):
     d=G(f'/api/resource/Delivery Note/{dn}')
+    if d and d.get('awb_number'):
+        return d['awb_number'], d.get('courier_partner'), None  # already booked (e.g. by v7 hook) — never double-book
     addr=G(f'/api/resource/Address/{urllib.parse.quote(d.get("shipping_address_name") or "")}') or {}
     phys=[(i['item_code'],int(i['qty'])) for i in d.get('items',[]) if i['item_code'].startswith('SOL-')]
     if not phys: return None,None,'no-phys-sku'
@@ -134,7 +148,7 @@ for i,so in enumerate(REPS,1):
     r,err=POST('/api/method/erpnext.selling.doctype.sales_order.sales_order.make_delivery_note',{'source_name':so},t=120)
     if not r: print(f'[{i}/{len(REPS)}] RED {so} mapper:{err}'); out.append((so,skus,None,'mapper')); continue
     dn=r if isinstance(r,dict) else r
-    dn['is_replacement']=1; dn['set_posting_time']=1; dn['posting_date']=DATE; dn['posting_time']='14:30:00'
+    dn['is_replacement']=1; dn['set_posting_time']=1; dn['posting_date']=DATE; dn['posting_time']=os.environ.get('REP_POSTING_TIME','14:30:00')
     dn['shipping_address_name']=sd.get('shipping_address_name'); dn['customer_address']=sd.get('customer_address')
     st=''
     if sd.get('shipping_address_name'):
@@ -142,18 +156,27 @@ for i,so in enumerate(REPS,1):
     dn['taxes_and_charges']='GST 18% Intrastate - WTBBPL' if st=='telangana' else 'GST 18% Interstate - WTBBPL'
     dn['taxes']=[]
     dn['company_address']='Win The Buy Box Private Limited-Billing'; dn.pop('company_address_display',None)
-    for it in dn.get('items',[]): it.pop('item_tax_template',None)
+    for it in dn.get('items',[]):
+        it.pop('item_tax_template',None)
+        if os.environ.get('REP_WAREHOUSE'): it['warehouse']=os.environ['REP_WAREHOUSE']  # override source WH (e.g. Main reserved -> Main-B)
     rr,e2=POST('/api/resource/Delivery Note',dn)
     if not rr: print(f'[{i}/{len(REPS)}] RED {so} dn:{e2}'); out.append((so,skus,None,'dn')); continue
     DN=rr['name']
     ok,mrs,serr=submit_cover(DN)
     if not ok: print(f'[{i}/{len(REPS)}] RED {so} {DN} sub:{serr}'); out.append((so,skus,DN,'sub:'+str(serr)[:40])); continue
-    awb,c,mrp=book_mrp(DN)
+    # DEFER to Gopal's v7 Clickpost hook (Delivery Note On Submit auto-books replacement DNs at MRP).
+    # Booking again here was the duplicate-AWB root cause (hook plain-ref + our -REP on the same DN).
+    # Only book ourselves as a fallback if the hook did not produce an AWB within the wait window.
+    hawb,hcour=wait_for_hook_awb(DN)
+    if hawb:
+        awb,c,mrp,src=hawb,hcour,'hook','v7hook'
+    else:
+        awb,c,mrp=book_mrp(DN); src='fallback'
     if awb:
-        print(f'[{i}/{len(REPS)}] OK {so} {DN} '+(('MR['+';'.join(mrs)+'] ') if mrs else '')+str(awb)+' '+str(c)+' declaredMRP='+str(mrp))
+        print(f'[{i}/{len(REPS)}] OK {so} {DN} '+(('MR['+';'.join(mrs)+'] ') if mrs else '')+str(awb)+' '+str(c)+' declaredMRP='+str(mrp)+' via='+src)
         out.append((so,skus,DN,awb,c,mrp))
     else:
-        print(f'[{i}/{len(REPS)}] RED {so} {DN} awb-fail'); out.append((so,skus,DN,'awb-fail'))
+        print(f'[{i}/{len(REPS)}] RED {so} {DN} awb-fail (hook+fallback empty)'); out.append((so,skus,DN,'awb-fail'))
 json.dump(out,open(sys.argv[1].replace('.txt','_results.json'),'w'))
 ok=[x for x in out if len(x)>=5 and x[3] and str(x[3]) not in ('awb-fail',) and not str(x[3]).startswith(('SO','mapper','dn','sub'))]
 print(f'\n=== shipped {sum(1 for x in out if len(x)>=6)}/{len(REPS)} ===')
